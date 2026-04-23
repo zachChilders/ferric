@@ -2,6 +2,7 @@ use ferric_common::Interner;
 use ferric_lexer::lex;
 use ferric_parser::parse;
 use ferric_resolve::resolve;
+use ferric_typecheck::typecheck;
 use std::env;
 use std::fs;
 use std::process;
@@ -133,19 +134,37 @@ fn main() {
         println!();
     }
 
+    // Perform type checking
+    let type_result = typecheck(&parse_result, &resolve_result, &interner);
+
+    println!("🔧 Type Checking Results:");
+    println!("  Node types: {}", type_result.node_types.len());
+    println!("  Errors: {}", type_result.errors.len());
+
+    if !type_result.errors.is_empty() {
+        println!("\n❌ Type Errors:");
+        for err in &type_result.errors {
+            println!("  - {} at position {}", err.description(), err.span().start);
+        }
+        println!();
+    } else {
+        println!("  ✓ Type checking successful!");
+        println!();
+    }
+
     // Summary
     println!("=== Summary ===");
-    if lex_result.errors.is_empty() && parse_result.errors.is_empty() && resolve_result.errors.is_empty() {
+    if lex_result.errors.is_empty() && parse_result.errors.is_empty() && resolve_result.errors.is_empty() && type_result.errors.is_empty() {
         println!("✅ All stages completed successfully!");
         println!("\n📌 Current pipeline:");
         println!("  ✓ Lexer: Tokenizes source code");
         println!("  ✓ Parser: Builds AST with proper precedence");
         println!("  ✓ Name Resolution: Maps variables to definitions");
-        println!("  ⏳ Type Checking: Not yet implemented");
+        println!("  ✓ Type Checking: Verifies type safety (M1 with Unknown escape hatch)");
         println!("  ⏳ VM/Execution: Not yet implemented");
     } else {
         println!("❌ Compilation failed with {} error(s)",
-                 lex_result.errors.len() + parse_result.errors.len() + resolve_result.errors.len());
+                 lex_result.errors.len() + parse_result.errors.len() + resolve_result.errors.len() + type_result.errors.len());
         process::exit(1);
     }
 }

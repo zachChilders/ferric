@@ -1,0 +1,2 @@
+// Test type errors
+let x = 5 + "hello"  // type error: Int + Str

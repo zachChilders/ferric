@@ -1,0 +1,11 @@
+// Test type mismatches
+fn add(x: Int, y: Int) -> Int {
+    x + y
+}
+
+fn get_string() -> Str {
+    "hello"
+}
+
+// Should fail: passing string to function expecting Int
+let result = add(5, get_string())

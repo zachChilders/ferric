@@ -10,6 +10,7 @@ dependencies = [
  "ferric_lexer",
  "ferric_parser",
  "ferric_resolve",
+ "ferric_typecheck",
 ]
 
 [[package]]

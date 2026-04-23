@@ -1,0 +1,6 @@
+// Direct type mismatch test
+fn needs_int(x: Int) -> Int {
+    x
+}
+
+let x: Int = "hello"  // Direct mismatch
