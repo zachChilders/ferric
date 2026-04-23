@@ -1,0 +1,3 @@
+// Test error handling
+let x = 5
+let y = z  // z is undefined

@@ -1,17 +1,7 @@
 //! Output types for each compiler stage.
 
 use std::collections::HashMap;
-use crate::{Token, LexError, ParseError, ResolveError, TypeError, NodeId, DefId, Ty};
-
-// Forward declarations for types that will be defined in stage crates
-// These are placeholders that will be replaced with actual implementations
-
-/// Placeholder for AST Item type (defined in ferric_parser)
-///
-/// This will be defined by the parser crate. We use a unit struct here
-/// to allow ferric_common to compile independently.
-#[derive(Debug, Clone)]
-pub struct Item;
+use crate::{Token, LexError, ParseError, ResolveError, TypeError, NodeId, DefId, Ty, Item};
 
 /// Placeholder for bytecode Chunk type (defined in ferric_vm)
 ///

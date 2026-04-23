@@ -17,3 +17,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+ferric_common = { path = "crates/ferric_common" }
+ferric_lexer = { path = "crates/ferric_lexer" }
+ferric_parser = { path = "crates/ferric_parser" }
+ferric_resolve = { path = "crates/ferric_resolve" }

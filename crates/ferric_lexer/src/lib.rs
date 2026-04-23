@@ -293,6 +293,30 @@ impl<'a> Lexer<'a> {
                     TokenKind::Gt
                 }
             }
+            '&' => {
+                if self.peek() == Some('&') {
+                    self.advance();
+                    TokenKind::AndAnd
+                } else {
+                    // Single & is not supported in M1
+                    let end = self.position;
+                    let span = Span::new(start, end);
+                    self.errors.push(LexError::UnexpectedChar { ch, span });
+                    return self.lex_token();
+                }
+            }
+            '|' => {
+                if self.peek() == Some('|') {
+                    self.advance();
+                    TokenKind::OrOr
+                } else {
+                    // Single | is not supported in M1
+                    let end = self.position;
+                    let span = Span::new(start, end);
+                    self.errors.push(LexError::UnexpectedChar { ch, span });
+                    return self.lex_token();
+                }
+            }
 
             _ => {
                 // Unexpected character

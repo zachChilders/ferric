@@ -14,6 +14,7 @@ pub use tokens::*;
 pub use types::*;
 pub use errors::*;
 pub use results::*;
+pub use ast::*;
 
 mod span;
 mod identifiers;
@@ -22,3 +23,4 @@ mod tokens;
 mod types;
 mod errors;
 mod results;
+mod ast;

@@ -1,0 +1,9 @@
+// Simple script without any function definitions
+// Run with: cargo run examples/simple_script.fe
+
+let x = 10
+let y = 20
+let sum = x + y
+let product = x * y
+
+sum + product
