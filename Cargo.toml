@@ -22,3 +22,5 @@ ferric_lexer = { path = "crates/ferric_lexer" }
 ferric_parser = { path = "crates/ferric_parser" }
 ferric_resolve = { path = "crates/ferric_resolve" }
 ferric_typecheck = { path = "crates/ferric_typecheck" }
+ferric_vm = { path = "crates/ferric_vm" }
+ferric_stdlib = { path = "crates/ferric_stdlib" }

@@ -10,7 +10,9 @@ dependencies = [
  "ferric_lexer",
  "ferric_parser",
  "ferric_resolve",
+ "ferric_stdlib",
  "ferric_typecheck",
+ "ferric_vm",
 ]
 
 [[package]]
@@ -64,4 +66,6 @@ name = "ferric_vm"
 version = "0.1.0"
 dependencies = [
  "ferric_common",
+ "ferric_resolve",
+ "ferric_stdlib",
 ]

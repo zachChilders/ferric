@@ -1,8 +1,10 @@
-use ferric_common::Interner;
+use ferric_common::{Interner, Program};
 use ferric_lexer::lex;
 use ferric_parser::parse;
 use ferric_resolve::resolve;
 use ferric_typecheck::typecheck;
+use ferric_vm::{Executor, TreeWalker};
+use ferric_stdlib::NativeRegistry;
 use std::env;
 use std::fs;
 use std::process;
@@ -152,6 +154,34 @@ fn main() {
         println!();
     }
 
+    // Execute the program if all stages succeeded
+    if lex_result.errors.is_empty() && parse_result.errors.is_empty() && resolve_result.errors.is_empty() && type_result.errors.is_empty() {
+        println!("🚀 VM Execution:");
+
+        // Create the program from the AST
+        let program = Program::new(parse_result.items.clone());
+
+        // Create a native function registry (empty for now)
+        let natives = NativeRegistry::new();
+
+        // Create the VM and execute (Rule 6: use Executor trait, not TreeWalker directly)
+        let mut vm: Box<dyn Executor> = Box::new(TreeWalker::new());
+
+        match vm.run(program, natives) {
+            Ok(result) => {
+                println!("  ✓ Execution successful!");
+                println!("  Result: {:?}", result);
+                println!();
+            }
+            Err(err) => {
+                println!("  ❌ Runtime Error:");
+                println!("  {:?}", err);
+                println!();
+                process::exit(1);
+            }
+        }
+    }
+
     // Summary
     println!("=== Summary ===");
     if lex_result.errors.is_empty() && parse_result.errors.is_empty() && resolve_result.errors.is_empty() && type_result.errors.is_empty() {
@@ -161,7 +191,7 @@ fn main() {
         println!("  ✓ Parser: Builds AST with proper precedence");
         println!("  ✓ Name Resolution: Maps variables to definitions");
         println!("  ✓ Type Checking: Verifies type safety (M1 with Unknown escape hatch)");
-        println!("  ⏳ VM/Execution: Not yet implemented");
+        println!("  ✓ VM/Execution: Tree-walking interpreter");
     } else {
         println!("❌ Compilation failed with {} error(s)",
                  lex_result.errors.len() + parse_result.errors.len() + resolve_result.errors.len() + type_result.errors.len());

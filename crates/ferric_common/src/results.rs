@@ -121,18 +121,18 @@ impl TypeResult {
 
 /// A compiled Ferric program ready for execution.
 ///
-/// Contains all bytecode chunks and identifies the entry point function.
+/// M1: Contains the AST items directly for tree-walking interpretation.
+/// M3: Will be replaced with bytecode chunks for bytecode VM execution.
 #[derive(Debug, Clone)]
 pub struct Program {
-    /// All compiled bytecode chunks (one per function)
-    pub chunks: Vec<Chunk>,
-    /// Index of the entry point function
-    pub entry: u16,
+    /// M1: AST items for tree-walking
+    /// M3: Will become bytecode chunks
+    pub items: Vec<Item>,
 }
 
 impl Program {
-    /// Creates a new Program.
-    pub fn new(chunks: Vec<Chunk>, entry: u16) -> Self {
-        Self { chunks, entry }
+    /// Creates a new Program from AST items (M1).
+    pub fn new(items: Vec<Item>) -> Self {
+        Self { items }
     }
 }

@@ -1,0 +1,12 @@
+// Complex test with variables, functions, and control flow
+fn max(a: Int, b: Int) -> Int {
+    if a > b {
+        a
+    } else {
+        b
+    }
+}
+
+let x = 10
+let y = 20
+max(x, y)
