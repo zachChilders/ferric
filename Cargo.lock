@@ -5,3 +5,56 @@ version = 4
 [[package]]
 name = "ferric"
 version = "0.1.0"
+
+[[package]]
+name = "ferric_common"
+version = "0.1.0"
+
+[[package]]
+name = "ferric_diagnostics"
+version = "0.1.0"
+dependencies = [
+ "ferric_common",
+]
+
+[[package]]
+name = "ferric_lexer"
+version = "0.1.0"
+dependencies = [
+ "ferric_common",
+]
+
+[[package]]
+name = "ferric_parser"
+version = "0.1.0"
+dependencies = [
+ "ferric_common",
+]
+
+[[package]]
+name = "ferric_resolve"
+version = "0.1.0"
+dependencies = [
+ "ferric_common",
+]
+
+[[package]]
+name = "ferric_stdlib"
+version = "0.1.0"
+dependencies = [
+ "ferric_common",
+]
+
+[[package]]
+name = "ferric_typecheck"
+version = "0.1.0"
+dependencies = [
+ "ferric_common",
+]
+
+[[package]]
+name = "ferric_vm"
+version = "0.1.0"
+dependencies = [
+ "ferric_common",
+]

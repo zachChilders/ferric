@@ -1,3 +1,16 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/ferric_common",
+    "crates/ferric_lexer",
+    "crates/ferric_parser",
+    "crates/ferric_resolve",
+    "crates/ferric_typecheck",
+    "crates/ferric_vm",
+    "crates/ferric_diagnostics",
+    "crates/ferric_stdlib",
+]
+
 [package]
 name = "ferric"
 version = "0.1.0"
