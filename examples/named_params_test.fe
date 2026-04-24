@@ -1,0 +1,40 @@
+// Named parameter tests for M2.5
+
+fn add(a: Int, b: Int) -> Int {
+    a + b
+}
+
+fn greet(name: Str, greeting: Str = "Hello") -> Str {
+    greeting + ", " + name + "!"
+}
+
+fn fibonacci(n: Int) -> Int {
+    if n <= 1 {
+        n
+    } else {
+        fibonacci(n: n - 1) + fibonacci(n: n - 2)
+    }
+}
+
+// Named args in definition order
+let r1 = add(a: 3, b: 4)
+println(s: int_to_str(n: r1))
+
+// Named args out of order — resolver canonicalises
+let r2 = add(b: 10, a: 5)
+println(s: int_to_str(n: r2))
+
+// Default parameter omitted
+let r3 = greet(name: "world")
+println(s: r3)
+
+// Default parameter overridden
+let r4 = greet(name: "Ferric", greeting: "Hey")
+println(s: r4)
+
+// Default parameter overridden, out of order
+let r5 = greet(greeting: "Hi", name: "there")
+println(s: r5)
+
+// Fibonacci with named arg
+println(s: int_to_str(n: fibonacci(n: 10)))

@@ -1,14 +1,28 @@
 //! Token types for the lexer.
 
+use serde::{Deserialize, Serialize};
 use crate::{Span, Symbol};
 
 /// A token with its kind and source location.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Token {
     /// The kind of token
     pub kind: TokenKind,
     /// The source location of this token
     pub span: Span,
+}
+
+/// A part of a shell command line at the token level.
+///
+/// The lexer splits a shell line on `@{` / `}` interpolation boundaries and
+/// recursively lexes each interpolated segment into a sub-token stream. The
+/// parser later converts these sub-token streams into `Expr` nodes.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum ShellTokenPart {
+    /// Literal shell text passed through verbatim.
+    Literal(String),
+    /// An `@{...}` interpolation — the inner Ferric token stream.
+    Interpolated(Vec<Token>),
 }
 
 impl Token {
@@ -19,7 +33,7 @@ impl Token {
 }
 
 /// The kind of token, including literals, keywords, operators, and punctuation.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum TokenKind {
     // Literals
     /// Integer literal (e.g., `42`, `-17`)
@@ -54,6 +68,8 @@ pub enum TokenKind {
     Break,
     /// `continue` keyword to skip to next iteration
     Continue,
+    /// `require` keyword for require statements
+    Require,
 
     // Identifiers and operators
     /// Identifier (variable/function name)
@@ -117,6 +133,11 @@ pub enum TokenKind {
     /// `;` semicolon
     Semi,
 
+    /// A shell command line `$ ...` — composite token produced by shell-line
+    /// mode. The parts alternate between literal text and interpolated Ferric
+    /// sub-token-streams (from `@{...}`).
+    ShellLine(Vec<ShellTokenPart>),
+
     /// End of file marker
     Eof,
 }
@@ -140,6 +161,7 @@ impl TokenKind {
             TokenKind::Loop => "keyword 'loop'".to_string(),
             TokenKind::Break => "keyword 'break'".to_string(),
             TokenKind::Continue => "keyword 'continue'".to_string(),
+            TokenKind::Require => "keyword 'require'".to_string(),
             TokenKind::Ident(_) => "identifier".to_string(),
             TokenKind::Plus => "'+'".to_string(),
             TokenKind::Minus => "'-'".to_string(),
@@ -166,6 +188,7 @@ impl TokenKind {
             TokenKind::Colon => "':'".to_string(),
             TokenKind::Arrow => "'->'".to_string(),
             TokenKind::Semi => "';'".to_string(),
+            TokenKind::ShellLine(_) => "shell expression".to_string(),
             TokenKind::Eof => "end of file".to_string(),
         }
     }

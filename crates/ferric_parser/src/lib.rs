@@ -12,8 +12,9 @@
 //! All other implementation details are private.
 
 use ferric_common::{
-    BinOp, Expr, Item, LexResult, Literal, NodeId, ParseError, ParseResult, Stmt, Symbol,
-    Token, TokenKind, TypeAnnotation, UnOp,
+    BinOp, Expr, Item, LexResult, Literal, NamedArg, NodeId, Param, ParseError, ParseResult,
+    RequireMode, RequireStmt, ShellPart, ShellTokenPart, Stmt, Symbol, Token, TokenKind,
+    TypeAnnotation, UnOp,
 };
 
 /// Generates unique NodeIds for AST nodes.
@@ -151,6 +152,7 @@ impl<'a> Parser<'a> {
         match self.peek().kind {
             TokenKind::Fn => self.parse_fn_def(),
             TokenKind::Let => self.parse_script_let(),
+            TokenKind::Require => self.parse_script_require(),
             _ if self.is_expr_start() => self.parse_script_expr(),
             _ => {
                 let token = self.peek().clone();
@@ -162,6 +164,14 @@ impl<'a> Parser<'a> {
                 None
             }
         }
+    }
+
+    /// Parses a top-level require statement (script mode).
+    fn parse_script_require(&mut self) -> Option<Item> {
+        let stmt = self.parse_require_stmt()?;
+        let span = stmt.span();
+        let id = self.node_id_gen.next();
+        Some(Item::Script { stmt, id, span })
     }
 
     /// Parses a top-level let statement (script mode).
@@ -213,9 +223,11 @@ impl<'a> Parser<'a> {
             return None;
         }
 
-        let mut params = Vec::new();
+        let mut params: Vec<Param> = Vec::new();
         if !self.check(&TokenKind::RParen) {
             loop {
+                let param_start = self.peek().span;
+
                 // Parse parameter name
                 let param_name = match &self.peek().kind {
                     TokenKind::Ident(sym) => {
@@ -241,7 +253,26 @@ impl<'a> Parser<'a> {
 
                 // Parse parameter type
                 let param_ty = self.parse_type()?;
-                params.push((param_name, param_ty));
+
+                // Span of type token (last consumed token after parse_type)
+                let ty_end_span = self.tokens[self.current - 1].span;
+
+                // Parse optional default: `= expr`
+                let default = if self.match_token(&TokenKind::Eq) {
+                    Some(Box::new(self.parse_expr()))
+                } else {
+                    None
+                };
+
+                let param_span = param_start.to(
+                    default.as_ref().map(|d| d.span()).unwrap_or(ty_end_span)
+                );
+                params.push(Param {
+                    span: param_span,
+                    name: param_name,
+                    ty: param_ty,
+                    default,
+                });
 
                 // Check for comma or end of params
                 if !self.match_token(&TokenKind::Comma) {
@@ -325,11 +356,33 @@ impl<'a> Parser<'a> {
                 continue;
             }
 
+            // Check if this is a require statement
+            if self.check(&TokenKind::Require) {
+                if let Some(stmt) = self.parse_require_stmt() {
+                    stmts.push(stmt);
+                }
+                continue;
+            }
+
             // Parse what looks like an expression
             if !self.is_expr_start() {
                 // Skip this token and try to continue
                 self.advance();
                 continue;
+            }
+
+            // Check if this might be an assignment (identifier followed by =)
+            if matches!(self.peek().kind, TokenKind::Ident(_)) {
+                // Lookahead to check for '='
+                if self.current + 1 < self.tokens.len()
+                    && matches!(self.tokens[self.current + 1].kind, TokenKind::Eq)
+                {
+                    // Parse as assignment statement
+                    if let Some(stmt) = self.parse_assign_stmt() {
+                        stmts.push(stmt);
+                    }
+                    continue;
+                }
             }
 
             // Parse the expression
@@ -392,15 +445,57 @@ impl<'a> Parser<'a> {
                 | TokenKind::Minus
                 | TokenKind::Bang
                 | TokenKind::If
+                | TokenKind::While
+                | TokenKind::Loop
+                | TokenKind::Break
+                | TokenKind::Continue
                 | TokenKind::Return
+                | TokenKind::OrOr  // closure: || { body }
+                | TokenKind::ShellLine(_)
         )
     }
 
 
-    /// Parses a let statement: `let name: type = expr;`
+    /// Parses an assignment statement: `name = expr;`
+    fn parse_assign_stmt(&mut self) -> Option<Stmt> {
+        let start_span = self.peek().span;
+
+        // Parse target (currently only variables)
+        let target = self.parse_primary();
+
+        // Expect '='
+        if self.expect(TokenKind::Eq, "'='").is_err() {
+            return None;
+        }
+
+        // Parse value expression
+        let value = self.parse_expr();
+
+        // Optional semicolon
+        self.match_token(&TokenKind::Semi);
+
+        let span = start_span.to(value.span());
+        let id = self.node_id_gen.next();
+
+        Some(Stmt::Assign {
+            target,
+            value,
+            id,
+            span,
+        })
+    }
+
+    /// Parses a let statement: `let name: type = expr;` or `let mut name: type = expr;`
     fn parse_let_stmt(&mut self) -> Option<Stmt> {
         let start_span = self.peek().span;
         self.advance(); // consume 'let'
+
+        // Check for 'mut' keyword
+        let mutable = if self.match_token(&TokenKind::Mut) {
+            true
+        } else {
+            false
+        };
 
         // Parse variable name
         let name = match &self.peek().kind {
@@ -443,6 +538,7 @@ impl<'a> Parser<'a> {
 
         Some(Stmt::Let {
             name,
+            mutable,
             ty,
             init,
             id,
@@ -453,10 +549,14 @@ impl<'a> Parser<'a> {
 
     /// Parses an expression.
     fn parse_expr(&mut self) -> Expr {
-        // Handle return and if as special cases
+        // Handle control flow keywords as special cases
         match self.peek().kind {
             TokenKind::Return => self.parse_return_expr(),
             TokenKind::If => self.parse_if_expr(),
+            TokenKind::While => self.parse_while_expr(),
+            TokenKind::Loop => self.parse_loop_expr(),
+            TokenKind::Break => self.parse_break_expr(),
+            TokenKind::Continue => self.parse_continue_expr(),
             _ => self.parse_binary_expr(0),
         }
     }
@@ -555,6 +655,89 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Parses a while loop: `while cond block`
+    fn parse_while_expr(&mut self) -> Expr {
+        let start_span = self.peek().span;
+        self.advance(); // consume 'while'
+
+        // Parse condition
+        let cond = Box::new(self.parse_binary_expr(0));
+
+        // Parse body (must be a block)
+        let body = if self.check(&TokenKind::LBrace) {
+            Box::new(self.parse_block())
+        } else {
+            let token = self.peek().clone();
+            self.errors.push(ParseError::UnexpectedToken {
+                expected: "block for 'while' body".to_string(),
+                found: token.kind,
+                span: token.span,
+            });
+            // Create a dummy block for error recovery
+            let id = self.node_id_gen.next();
+            Box::new(Expr::Block {
+                stmts: vec![],
+                expr: None,
+                id,
+                span: token.span,
+            })
+        };
+
+        let span = start_span.to(body.span());
+        let id = self.node_id_gen.next();
+
+        Expr::While { cond, body, id, span }
+    }
+
+    /// Parses an infinite loop: `loop block`
+    fn parse_loop_expr(&mut self) -> Expr {
+        let start_span = self.peek().span;
+        self.advance(); // consume 'loop'
+
+        // Parse body (must be a block)
+        let body = if self.check(&TokenKind::LBrace) {
+            Box::new(self.parse_block())
+        } else {
+            let token = self.peek().clone();
+            self.errors.push(ParseError::UnexpectedToken {
+                expected: "block for 'loop' body".to_string(),
+                found: token.kind,
+                span: token.span,
+            });
+            // Create a dummy block for error recovery
+            let id = self.node_id_gen.next();
+            Box::new(Expr::Block {
+                stmts: vec![],
+                expr: None,
+                id,
+                span: token.span,
+            })
+        };
+
+        let span = start_span.to(body.span());
+        let id = self.node_id_gen.next();
+
+        Expr::Loop { body, id, span }
+    }
+
+    /// Parses a break expression: `break`
+    fn parse_break_expr(&mut self) -> Expr {
+        let span = self.peek().span;
+        self.advance(); // consume 'break'
+        let id = self.node_id_gen.next();
+
+        Expr::Break { id, span }
+    }
+
+    /// Parses a continue expression: `continue`
+    fn parse_continue_expr(&mut self) -> Expr {
+        let span = self.peek().span;
+        self.advance(); // consume 'continue'
+        let id = self.node_id_gen.next();
+
+        Expr::Continue { id, span }
+    }
+
     /// Parses binary expressions using precedence climbing.
     fn parse_binary_expr(&mut self, min_prec: u8) -> Expr {
         let mut left = self.parse_unary_expr();
@@ -635,17 +818,49 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Returns true if the current position looks like the start of a named arg (ident ':').
+    fn is_named_arg_start(&self) -> bool {
+        matches!(self.peek().kind, TokenKind::Ident(_))
+            && self.current + 1 < self.tokens.len()
+            && matches!(self.tokens[self.current + 1].kind, TokenKind::Colon)
+    }
+
     /// Parses call expressions: `primary ( args )*`
+    ///
+    /// All arguments must be named (`name: value`). Positional args emit
+    /// `ParseError::PositionalArg` and continue parsing for recovery.
     fn parse_call_expr(&mut self) -> Expr {
         let mut expr = self.parse_primary();
 
         loop {
             if self.match_token(&TokenKind::LParen) {
-                let mut args = Vec::new();
+                let mut args: Vec<NamedArg> = Vec::new();
 
                 if !self.check(&TokenKind::RParen) {
                     loop {
-                        args.push(self.parse_expr());
+                        let arg_start = self.peek().span;
+
+                        if self.is_named_arg_start() {
+                            // Named arg: consume `name ':'`
+                            let name = if let TokenKind::Ident(sym) = self.peek().kind {
+                                let sym = sym;
+                                self.advance(); // consume name
+                                self.advance(); // consume ':'
+                                sym
+                            } else {
+                                unreachable!()
+                            };
+                            let value = self.parse_expr();
+                            let span = arg_start.to(value.span());
+                            args.push(NamedArg { span, name, value: Box::new(value) });
+                        } else {
+                            // Positional arg — error and recover
+                            self.errors.push(ParseError::PositionalArg { span: arg_start });
+                            let value = self.parse_expr();
+                            let span = arg_start.to(value.span());
+                            // Use a sentinel name (sym 0) for error recovery
+                            args.push(NamedArg { span, name: Symbol::new(0), value: Box::new(value) });
+                        }
 
                         if !self.match_token(&TokenKind::Comma) {
                             break;
@@ -690,18 +905,10 @@ impl<'a> Parser<'a> {
                     span: token.span,
                 }
             }
-            TokenKind::FloatLit(_f) => {
+            TokenKind::FloatLit(f) => {
                 self.advance();
-                // M1 doesn't support floats in the grammar, but we handle them anyway
-                // For now, treat them as errors
-                self.errors.push(ParseError::UnexpectedToken {
-                    expected: "expression".to_string(),
-                    found: token.kind.clone(),
-                    span: token.span,
-                });
-                // Return a dummy expression
                 Expr::Literal {
-                    value: Literal::Int(0),
+                    value: Literal::Float(f),
                     id,
                     span: token.span,
                 }
@@ -761,6 +968,29 @@ impl<'a> Parser<'a> {
                 expr
             }
             TokenKind::LBrace => self.parse_block(),
+            // Zero-parameter closure: || { body }
+            TokenKind::OrOr => {
+                let start_span = token.span;
+                self.advance(); // consume '||'
+                let body = self.parse_block();
+                let span = start_span.to(body.span());
+                Expr::Closure {
+                    params: vec![],
+                    body: Box::new(body),
+                    id,
+                    span,
+                }
+            }
+            // Shell expression: `$ cmd ...`
+            TokenKind::ShellLine(parts) => {
+                self.advance();
+                let cooked_parts = self.cook_shell_parts(parts);
+                Expr::Shell {
+                    parts: cooked_parts,
+                    id,
+                    span: token.span,
+                }
+            }
             _ => {
                 self.errors.push(ParseError::ExpectedExpression {
                     found: token.kind,
@@ -773,6 +1003,137 @@ impl<'a> Parser<'a> {
                     span: token.span,
                 }
             }
+        }
+    }
+
+    /// Parses a require statement.
+    ///
+    /// Grammar:
+    /// ```text
+    /// require_stmt ::= "require" ("(" "warn" ")")? expr
+    ///                  ("," string_expr)?
+    ///                  ("," "set" ":" closure_expr)?
+    /// ```
+    fn parse_require_stmt(&mut self) -> Option<Stmt> {
+        let start_span = self.peek().span;
+        self.advance(); // consume 'require'
+
+        // Parse optional mode: (warn)
+        let mode = if self.match_token(&TokenKind::LParen) {
+            let mode = match &self.peek().kind {
+                TokenKind::Ident(_) => {
+                    self.advance(); // consume the mode identifier (e.g. "warn")
+                    RequireMode::Warn
+                }
+                _ => {
+                    let tok = self.peek().clone();
+                    self.errors.push(ParseError::InvalidRequireMode { span: tok.span });
+                    // recover: skip to ')'
+                    while !self.check(&TokenKind::RParen) && !self.is_at_end() {
+                        self.advance();
+                    }
+                    RequireMode::Error
+                }
+            };
+            self.expect(TokenKind::RParen, "')'").ok();
+            mode
+        } else {
+            RequireMode::Error
+        };
+
+        // Parse condition expression
+        let expr = Box::new(self.parse_expr());
+
+        // Parse optional message and/or set: closure
+        let mut message: Option<Box<Expr>> = None;
+        let mut set_fn: Option<Box<Expr>> = None;
+
+        // First optional comma-separated part
+        if self.match_token(&TokenKind::Comma) {
+            if self.is_set_label_start() {
+                // "set" ":" closure_expr
+                set_fn = self.parse_set_clause();
+            } else if self.is_expr_start() {
+                // message expression
+                message = Some(Box::new(self.parse_expr()));
+
+                // Second optional comma-separated part (set:)
+                if self.match_token(&TokenKind::Comma) {
+                    if self.is_set_label_start() {
+                        set_fn = self.parse_set_clause();
+                    }
+                }
+            }
+        }
+
+        // Optional trailing semicolon
+        self.match_token(&TokenKind::Semi);
+
+        let end_span = set_fn.as_ref().map(|e| e.span())
+            .or_else(|| message.as_ref().map(|e| e.span()))
+            .unwrap_or(expr.span());
+
+        let span = start_span.to(end_span);
+
+        Some(Stmt::Require(RequireStmt {
+            span,
+            mode,
+            expr,
+            message,
+            set_fn,
+        }))
+    }
+
+    /// Converts lexer-level shell parts (with sub-token streams) into AST shell
+    /// parts (with parsed `Expr` nodes for each interpolation).
+    fn cook_shell_parts(&mut self, parts: Vec<ShellTokenPart>) -> Vec<ShellPart> {
+        let mut out = Vec::with_capacity(parts.len());
+        for part in parts {
+            match part {
+                ShellTokenPart::Literal(s) => out.push(ShellPart::Literal(s)),
+                ShellTokenPart::Interpolated(mut sub_tokens) => {
+                    // The sub-lexer didn't append an EOF; add one so the
+                    // sub-parser can recognise the end of input.
+                    let eof_span = sub_tokens
+                        .last()
+                        .map(|t| ferric_common::Span::new(t.span.end, t.span.end))
+                        .unwrap_or_else(|| ferric_common::Span::new(0, 0));
+                    sub_tokens.push(Token::new(TokenKind::Eof, eof_span));
+                    // Run a fresh sub-parser on the interpolated tokens.
+                    let mut sub_parser = Parser::new(&sub_tokens);
+                    sub_parser.node_id_gen = NodeIdGen { next: self.node_id_gen.next };
+                    let expr = sub_parser.parse_expr();
+                    self.node_id_gen.next = sub_parser.node_id_gen.next;
+                    self.errors.extend(sub_parser.errors);
+                    out.push(ShellPart::Interpolated(Box::new(expr)));
+                }
+            }
+        }
+        out
+    }
+
+    /// Returns true if the current token stream looks like `ident ':'` (a named label start).
+    fn is_set_label_start(&self) -> bool {
+        matches!(self.peek().kind, TokenKind::Ident(_))
+            && self.current + 1 < self.tokens.len()
+            && matches!(self.tokens[self.current + 1].kind, TokenKind::Colon)
+    }
+
+    /// Parses `set ":" closure_expr` and returns the closure expression.
+    fn parse_set_clause(&mut self) -> Option<Box<Expr>> {
+        // consume "set" ident and ":"
+        self.advance(); // ident ("set")
+        self.advance(); // ":"
+        // parse closure expression
+        if self.is_expr_start() {
+            Some(Box::new(self.parse_expr()))
+        } else {
+            let tok = self.peek().clone();
+            self.errors.push(ParseError::ExpectedExpression {
+                found: tok.kind,
+                span: tok.span,
+            });
+            None
         }
     }
 }
@@ -792,6 +1153,17 @@ pub fn parse(lex: &LexResult) -> ParseResult {
     let mut parser = Parser::new(&lex.tokens);
     let items = parser.parse_program();
     ParseResult::new(items, parser.errors)
+}
+
+/// Convenience wrapper that runs `parse` and serialises the result as JSON.
+///
+/// External tools that consume the AST should call `ferric --dump-ast` rather
+/// than depending on this crate directly; this helper exists so that consumers
+/// inside the workspace (e.g. the CLI) can produce the same output without
+/// re-implementing the serialisation step.
+pub fn parse_to_json(lex: &LexResult) -> Result<String, serde_json::Error> {
+    let result = parse(lex);
+    ferric_common::ast_to_json(&result)
 }
 
 #[cfg(test)]
@@ -894,8 +1266,8 @@ mod tests {
             Item::FnDef { name, params, ret_ty, .. } => {
                 assert_eq!(*name, add);
                 assert_eq!(params.len(), 2);
-                assert_eq!(params[0].0, x);
-                assert_eq!(params[1].0, y);
+                assert_eq!(params[0].name, x);
+                assert_eq!(params[1].name, y);
                 assert_eq!(*ret_ty, TypeAnnotation::Named(int_ty));
             }
             Item::Script { .. } => panic!("Expected function definition"),
@@ -1027,8 +1399,10 @@ mod tests {
         let mut interner = Interner::new();
         let foo = interner.intern("foo");
         let bar = interner.intern("bar");
+        let x = interner.intern("x");
+        let y = interner.intern("y");
 
-        // fn foo() { bar(1, 2) }
+        // fn foo() { bar(x: 1, y: 2) }
         let tokens = vec![
             tok(TokenKind::Fn, 0, 2),
             tok(TokenKind::Ident(foo), 3, 6),
@@ -1037,12 +1411,16 @@ mod tests {
             tok(TokenKind::LBrace, 9, 10),
             tok(TokenKind::Ident(bar), 11, 14),
             tok(TokenKind::LParen, 14, 15),
-            tok(TokenKind::IntLit(1), 15, 16),
-            tok(TokenKind::Comma, 16, 17),
-            tok(TokenKind::IntLit(2), 18, 19),
-            tok(TokenKind::RParen, 19, 20),
-            tok(TokenKind::RBrace, 21, 22),
-            tok(TokenKind::Eof, 22, 22),
+            tok(TokenKind::Ident(x), 15, 16),
+            tok(TokenKind::Colon, 16, 17),
+            tok(TokenKind::IntLit(1), 18, 19),
+            tok(TokenKind::Comma, 19, 20),
+            tok(TokenKind::Ident(y), 21, 22),
+            tok(TokenKind::Colon, 22, 23),
+            tok(TokenKind::IntLit(2), 24, 25),
+            tok(TokenKind::RParen, 25, 26),
+            tok(TokenKind::RBrace, 27, 28),
+            tok(TokenKind::Eof, 28, 28),
         ];
 
         let lex = make_lex_result(tokens);
@@ -1056,6 +1434,8 @@ mod tests {
                 Expr::Block { expr: Some(expr), .. } => match expr.as_ref() {
                     Expr::Call { args, .. } => {
                         assert_eq!(args.len(), 2);
+                        assert_eq!(args[0].name, x);
+                        assert_eq!(args[1].name, y);
                     }
                     _ => panic!("Expected call expression"),
                 },
@@ -1063,6 +1443,35 @@ mod tests {
             },
             Item::Script { .. } => panic!("Expected function definition"),
         }
+    }
+
+    #[test]
+    fn test_positional_arg_is_error() {
+        let mut interner = Interner::new();
+        let foo = interner.intern("foo");
+        let bar = interner.intern("bar");
+
+        // fn foo() { bar(1) } — positional arg should emit PositionalArg error
+        let tokens = vec![
+            tok(TokenKind::Fn, 0, 2),
+            tok(TokenKind::Ident(foo), 3, 6),
+            tok(TokenKind::LParen, 6, 7),
+            tok(TokenKind::RParen, 7, 8),
+            tok(TokenKind::LBrace, 9, 10),
+            tok(TokenKind::Ident(bar), 11, 14),
+            tok(TokenKind::LParen, 14, 15),
+            tok(TokenKind::IntLit(1), 15, 16),
+            tok(TokenKind::RParen, 16, 17),
+            tok(TokenKind::RBrace, 18, 19),
+            tok(TokenKind::Eof, 19, 19),
+        ];
+
+        let lex = make_lex_result(tokens);
+        let result = parse(&lex);
+
+        assert_eq!(result.items.len(), 1);
+        assert_eq!(result.errors.len(), 1);
+        assert!(matches!(result.errors[0], ferric_common::ParseError::PositionalArg { .. }));
     }
 
     #[test]

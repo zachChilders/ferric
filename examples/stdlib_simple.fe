@@ -1,3 +1,3 @@
 // Simple test of standard library functions at script level
 
-println("Hello from Ferric!")
+println(s: "Hello from Ferric!")

@@ -1,0 +1,3 @@
+let x = 1
+let bad = $ echo @{x
+let y = 2

@@ -1,10 +1,12 @@
 //! Source location tracking.
 
+use serde::{Deserialize, Serialize};
+
 /// Represents a span of source code with start and end byte positions.
 ///
 /// All error types must carry a Span to enable precise error reporting
 /// and future renderer replacement (Rule 5).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Span {
     /// Starting byte position (inclusive)
     pub start: u32,

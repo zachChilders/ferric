@@ -1,25 +1,21 @@
 // Ferric Test Program
 // This demonstrates script-style execution without needing a main() function
-// Edit this file and run: cargo run examples/test.fe
 
 // Top-level script statements - executed in order
 let x = 5
 let y = 10
 let result = x + y * 2
 
-// This expression will be the final result
-result
-
 // You can also define functions that can be called from the script
-fn add(x: Int, y: Int) -> Int {
-    x + y
+fn add(a: Int, b: Int) -> Int {
+    a + b
 }
 
 fn factorial(n: Int) -> Int {
     if n == 0 {
         1
     } else {
-        n * factorial(n - 1)
+        n * factorial(n: n - 1)
     }
 }
 
@@ -27,14 +23,14 @@ fn fibonacci(n: Int) -> Int {
     if n <= 1 {
         n
     } else {
-        fibonacci(n - 1) + fibonacci(n - 2)
+        fibonacci(n: n - 1) + fibonacci(n: n - 2)
     }
 }
 
 fn complex_expression() -> Int {
-    let a = 1 + 2 * 3;
-    let b = 10 - 5 / 2;
-    let c = a * b;
+    let a = 1 + 2 * 3
+    let b = 10 - 5 / 2
+    let c = a * b
 
     if c > 20 {
         c
@@ -44,8 +40,8 @@ fn complex_expression() -> Int {
 }
 
 fn test_booleans() -> Bool {
-    let x = 5;
-    let y = 10;
+    let x = 5
+    let y = 10
 
     if x < y && y > 0 {
         true
@@ -55,9 +51,9 @@ fn test_booleans() -> Bool {
 }
 
 fn nested_blocks() -> Int {
-    let outer = 5;
+    let outer = 5
     {
-        let inner = 10;
+        let inner = 10
         outer + inner
     }
 }

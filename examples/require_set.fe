@@ -1,0 +1,9 @@
+// set: closure recovers and retries
+let mut x = -1
+require x > 0, "x must be positive", set: || { x = 5 }
+println(s: "x recovered and require passed")
+
+// set with warn: recovery, then warns if still false
+let mut y = -1
+require(warn) y > 0, "y should be positive", set: || { y = -2 }
+println(s: "execution continued after warn+set")

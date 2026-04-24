@@ -61,6 +61,18 @@ impl Renderer {
                     self.span_to_line(*span)
                 )
             }
+            LexError::NestedShellInterp { span } => {
+                format!(
+                    "error at line {}: nested shell interpolation `@{{` is not allowed",
+                    self.span_to_line(*span)
+                )
+            }
+            LexError::UnclosedShellInterp { span } => {
+                format!(
+                    "error at line {}: unclosed shell interpolation: missing `}}`",
+                    self.span_to_line(*span)
+                )
+            }
         }
     }
 
@@ -95,6 +107,18 @@ impl Renderer {
                     found.description()
                 )
             }
+            ParseError::PositionalArg { span } => {
+                format!(
+                    "error at line {}: positional argument not allowed; use named syntax (name: value)",
+                    self.span_to_line(*span)
+                )
+            }
+            ParseError::InvalidRequireMode { span } => {
+                format!(
+                    "error at line {}: invalid require mode; expected 'warn'",
+                    self.span_to_line(*span)
+                )
+            }
         }
     }
 
@@ -120,6 +144,51 @@ impl Renderer {
                     self.span_to_line(*second),
                     name.0,
                     self.span_to_line(*first)
+                )
+            }
+            ResolveError::AssignToImmutable { name, span } => {
+                format!(
+                    "error at line {}: assignment to immutable variable `{}`",
+                    self.span_to_line(*span),
+                    name.0
+                )
+            }
+            ResolveError::BreakOutsideLoop { span } => {
+                format!(
+                    "error at line {}: break outside of loop",
+                    self.span_to_line(*span)
+                )
+            }
+            ResolveError::ContinueOutsideLoop { span } => {
+                format!(
+                    "error at line {}: continue outside of loop",
+                    self.span_to_line(*span)
+                )
+            }
+            ResolveError::ReturnOutsideFn { span } => {
+                format!(
+                    "error at line {}: return outside of function",
+                    self.span_to_line(*span)
+                )
+            }
+            ResolveError::MissingArg { param, call_span } => {
+                format!(
+                    "error at line {}: missing required argument `{}`",
+                    self.span_to_line(*call_span),
+                    param.0
+                )
+            }
+            ResolveError::UnknownArg { name, span } => {
+                format!(
+                    "error at line {}: unknown argument name `{}`",
+                    self.span_to_line(*span),
+                    name.0
+                )
+            }
+            ResolveError::RequireSetArity { span } => {
+                format!(
+                    "error at line {}: require set closure must take zero arguments",
+                    self.span_to_line(*span)
                 )
             }
         }
@@ -154,6 +223,34 @@ impl Renderer {
                     operation,
                     left.description(),
                     right.description()
+                )
+            }
+            TypeError::RequireNonBool { found, span } => {
+                format!(
+                    "error at line {}: require condition must be Bool, found {}",
+                    self.span_to_line(*span),
+                    found.description()
+                )
+            }
+            TypeError::RequireMessageNonStr { found, span } => {
+                format!(
+                    "error at line {}: require message must be Str, found {}",
+                    self.span_to_line(*span),
+                    found.description()
+                )
+            }
+            TypeError::RequireSetType { found, span } => {
+                format!(
+                    "error at line {}: require set closure must be Fn() -> Unit, found {}",
+                    self.span_to_line(*span),
+                    found.description()
+                )
+            }
+            TypeError::ShellInterpType { found, span } => {
+                format!(
+                    "error at line {}: shell interpolation must be Str or Int, found {}",
+                    self.span_to_line(*span),
+                    found.description()
                 )
             }
         }
@@ -236,6 +333,32 @@ impl Renderer {
                     expected,
                     found
                 )
+            }
+            RuntimeError::BreakSignal { span } => {
+                format!(
+                    "error at line {}: unexpected break (internal error)",
+                    self.span_to_line(*span)
+                )
+            }
+            RuntimeError::ContinueSignal { span } => {
+                format!(
+                    "error at line {}: unexpected continue (internal error)",
+                    self.span_to_line(*span)
+                )
+            }
+            RuntimeError::RequireError { span, message } => {
+                if let Some(msg) = message {
+                    format!(
+                        "error at line {}: require failed: {}",
+                        self.span_to_line(*span),
+                        msg
+                    )
+                } else {
+                    format!(
+                        "error at line {}: require condition evaluated to false",
+                        self.span_to_line(*span)
+                    )
+                }
             }
         }
     }

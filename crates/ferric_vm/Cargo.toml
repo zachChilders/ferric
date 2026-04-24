@@ -6,4 +6,3 @@ edition = "2024"
 [dependencies]
 ferric_common = { path = "../ferric_common" }
 ferric_stdlib = { path = "../ferric_stdlib" }
-ferric_resolve = { path = "../ferric_resolve" }

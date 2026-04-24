@@ -1,0 +1,39 @@
+// M2 Comprehensive Test
+// Tests: while, loop, break, continue, let mut, assignment, floats
+
+// Test 1: While loop with mutable counter
+let mut counter = 0
+while counter < 3 {
+    println(s: int_to_str(n: counter))
+    counter = counter + 1
+}
+
+// Test 2: Loop with break
+let mut i = 0
+loop {
+    if i >= 2 {
+        break
+    }
+    println(s: int_to_str(n: i))
+    i = i + 1
+}
+
+// Test 3: Continue in while loop
+let mut j = 0
+while j < 5 {
+    j = j + 1
+    if j == 3 {
+        continue
+    }
+    println(s: int_to_str(n: j))
+}
+
+// Test 4: Float literals and operations
+let x = 1.5
+let y = 2.5
+let sum = x + y
+println(s: float_to_str(n: sum))
+
+// Test 5: Boolean to string
+let flag = true
+println(s: bool_to_str(b: flag))

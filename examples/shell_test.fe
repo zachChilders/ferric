@@ -1,0 +1,25 @@
+// Basic — runs to end of line
+let result = $ echo hello
+
+println(s: shell_stdout(output: result))
+
+let code = shell_exit_code(output: result)
+println(s: int_to_str(n: code))
+
+// @{var} interpolation
+let name = "world"
+let greet = $ echo Hello, @{name}!
+println(s: shell_stdout(output: greet))
+
+// Discard output (just runs)
+$ echo discarded > /dev/null
+
+// Literal `{`, `}`, `$` in shell pass through to the shell verbatim
+let awk_out = $ echo a b c | awk '{print $1}'
+println(s: shell_stdout(output: awk_out))
+
+// Multi-line via \ continuation
+let log = $ echo 1 \
+            2 \
+            3
+println(s: shell_stdout(output: log))

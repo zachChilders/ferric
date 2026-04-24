@@ -3,7 +3,7 @@
 //! Provides native functions and the NativeRegistry for runtime function lookup.
 
 use std::collections::HashMap;
-use ferric_common::Symbol;
+use ferric_common::{ShellOutput, Symbol};
 
 // Re-export Value and RuntimeError from ferric_vm
 // NOTE: This creates a circular dependency issue - we'll need to move Value here
@@ -27,6 +27,7 @@ pub enum NativeValue {
     Bool(bool),
     Str(String),
     Unit,
+    ShellOutput(ShellOutput),
 }
 
 /// Registry of native functions available to the VM.
@@ -34,6 +35,18 @@ pub enum NativeValue {
 /// The VM queries this registry when calling functions by name.
 /// If a function is found here, it's executed as a native function.
 /// Otherwise, the VM looks for a user-defined function in the AST.
+///
+/// ASYNC UPGRADE PATH: When async/await is added (post-M3), the stored fn type
+/// becomes:
+///
+/// ```ignore
+/// Box<dyn Fn(&[NativeValue]) -> Pin<Box<dyn Future<Output = Result<NativeValue, String>> + Send>> + Send + Sync>
+/// ```
+///
+/// This is a breaking change to `NativeRegistry`'s internal type, but the
+/// public stage signature (a `NativeRegistry` passed into `Executor::run`)
+/// does not change. All native function registrations will need updating at
+/// that point. See `ferric_vm/ASYNC_COMPAT.md`.
 #[derive(Clone)]
 pub struct NativeRegistry {
     functions: HashMap<Symbol, NativeFn>,
@@ -93,6 +106,22 @@ fn expect_int(value: &NativeValue) -> Result<i64, String> {
     }
 }
 
+/// Extracts a float from a NativeValue or returns an error.
+fn expect_float(value: &NativeValue) -> Result<f64, String> {
+    match value {
+        NativeValue::Float(f) => Ok(*f),
+        _ => Err(format!("expected float, got {:?}", value)),
+    }
+}
+
+/// Extracts a boolean from a NativeValue or returns an error.
+fn expect_bool(value: &NativeValue) -> Result<bool, String> {
+    match value {
+        NativeValue::Bool(b) => Ok(*b),
+        _ => Err(format!("expected bool, got {:?}", value)),
+    }
+}
+
 // ============================================================================
 // Built-in Functions
 // ============================================================================
@@ -138,11 +167,68 @@ fn builtin_int_to_str(args: &[NativeValue]) -> Result<NativeValue, String> {
     Ok(NativeValue::Str(n.to_string()))
 }
 
+/// Converts a float to its string representation.
+///
+/// # Arguments
+/// * `f: Float` - The float to convert
+///
+/// # Returns
+/// * `Str` - The string representation of the float
+fn builtin_float_to_str(args: &[NativeValue]) -> Result<NativeValue, String> {
+    check_arg_count(args, 1)?;
+    let f = expect_float(&args[0])?;
+    Ok(NativeValue::Str(f.to_string()))
+}
+
+/// Converts a boolean to its string representation.
+///
+/// # Arguments
+/// * `b: Bool` - The boolean to convert
+///
+/// # Returns
+/// * `Str` - The string representation of the boolean ("true" or "false")
+fn builtin_bool_to_str(args: &[NativeValue]) -> Result<NativeValue, String> {
+    check_arg_count(args, 1)?;
+    let b = expect_bool(&args[0])?;
+    Ok(NativeValue::Str(b.to_string()))
+}
+
+/// Converts an integer to a float.
+///
+/// # Arguments
+/// * `n: Int` - The integer to convert
+///
+/// # Returns
+/// * `Float` - The integer value as a float
+fn builtin_int_to_float(args: &[NativeValue]) -> Result<NativeValue, String> {
+    check_arg_count(args, 1)?;
+    let n = expect_int(&args[0])?;
+    Ok(NativeValue::Float(n as f64))
+}
+
+/// Returns the captured stdout of a `ShellOutput`.
+fn builtin_shell_stdout(args: &[NativeValue]) -> Result<NativeValue, String> {
+    check_arg_count(args, 1)?;
+    match &args[0] {
+        NativeValue::ShellOutput(out) => Ok(NativeValue::Str(out.stdout.clone())),
+        other => Err(format!("expected ShellOutput, got {:?}", other)),
+    }
+}
+
+/// Returns the exit code of a `ShellOutput` as an Int.
+fn builtin_shell_exit_code(args: &[NativeValue]) -> Result<NativeValue, String> {
+    check_arg_count(args, 1)?;
+    match &args[0] {
+        NativeValue::ShellOutput(out) => Ok(NativeValue::Int(out.exit_code as i64)),
+        other => Err(format!("expected ShellOutput, got {:?}", other)),
+    }
+}
+
 // ============================================================================
 // Standard Library Registration
 // ============================================================================
 
-/// Registers all M1 standard library functions with the given registry.
+/// Registers all standard library functions with the given registry.
 ///
 /// This function should be called at startup to populate the native function
 /// registry with all built-in functions.
@@ -151,6 +237,7 @@ fn builtin_int_to_str(args: &[NativeValue]) -> Result<NativeValue, String> {
 /// * `registry` - The native function registry to populate
 /// * `interner` - The string interner for creating function name symbols
 pub fn register_stdlib(registry: &mut NativeRegistry, interner: &mut ferric_common::Interner) {
+    // M1 functions
     let println_sym = interner.intern("println");
     registry.register(println_sym, builtin_println);
 
@@ -159,6 +246,23 @@ pub fn register_stdlib(registry: &mut NativeRegistry, interner: &mut ferric_comm
 
     let int_to_str_sym = interner.intern("int_to_str");
     registry.register(int_to_str_sym, builtin_int_to_str);
+
+    // M2 conversion functions
+    let float_to_str_sym = interner.intern("float_to_str");
+    registry.register(float_to_str_sym, builtin_float_to_str);
+
+    let bool_to_str_sym = interner.intern("bool_to_str");
+    registry.register(bool_to_str_sym, builtin_bool_to_str);
+
+    let int_to_float_sym = interner.intern("int_to_float");
+    registry.register(int_to_float_sym, builtin_int_to_float);
+
+    // M2.5: shell output accessors
+    let shell_stdout_sym = interner.intern("shell_stdout");
+    registry.register(shell_stdout_sym, builtin_shell_stdout);
+
+    let shell_exit_code_sym = interner.intern("shell_exit_code");
+    registry.register(shell_exit_code_sym, builtin_shell_exit_code);
 }
 
 // ============================================================================

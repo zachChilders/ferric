@@ -1,0 +1,5 @@
+// warn and set should remain valid identifiers
+let warn = 42
+let set = 99
+println(s: int_to_str(n: warn))
+println(s: int_to_str(n: set))

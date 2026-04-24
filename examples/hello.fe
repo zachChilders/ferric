@@ -2,5 +2,5 @@ fn greet(name: Str) -> Str {
     "Hello, " + name
 }
 
-let message = greet("world")
-println(message)
+let message = greet(name: "world")
+println(s: message)

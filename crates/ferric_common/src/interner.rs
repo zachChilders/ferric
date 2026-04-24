@@ -1,6 +1,7 @@
 //! String interning for efficient identifier management.
 
 use std::collections::HashMap;
+use serde::{Deserialize, Serialize};
 use crate::Symbol;
 
 /// String interner for managing identifiers efficiently.
@@ -8,7 +9,7 @@ use crate::Symbol;
 /// The interner stores each unique string once and returns a Symbol
 /// for fast comparison and lookup. This reduces memory usage and
 /// speeds up identifier comparison throughout the compiler.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Interner {
     /// Maps strings to their Symbol identifiers
     map: HashMap<String, Symbol>,

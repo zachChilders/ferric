@@ -10,7 +10,8 @@
 use std::collections::HashMap;
 use ferric_common::{
     ParseResult, ResolveResult, TypeResult, Item, Expr, Stmt, Literal,
-    BinOp, UnOp, TypeAnnotation, NodeId, DefId, Ty, TypeError, Span, Interner, Symbol,
+    BinOp, UnOp, TypeAnnotation, NodeId, DefId, ShellPart, Ty, TypeError, Span, Interner, Symbol,
+    RequireStmt,
 };
 
 /// Type environment for tracking types of definitions.
@@ -102,7 +103,7 @@ impl<'a> TypeChecker<'a> {
                 // Build function type
                 let param_types: Vec<Ty> = params
                     .iter()
-                    .map(|(_, ty)| self.resolve_type_annotation(ty))
+                    .map(|p| self.resolve_type_annotation(&p.ty))
                     .collect();
                 let ret_type = self.resolve_type_annotation(ret_ty);
 
@@ -133,6 +134,7 @@ impl<'a> TypeChecker<'a> {
                 let type_name = self.interner.resolve(*sym);
                 match type_name {
                     "Int" => Ty::Int,
+                    "Float" => Ty::Float,
                     "Str" => Ty::Str,
                     "Bool" => Ty::Bool,
                     "Unit" => Ty::Unit,
@@ -151,11 +153,11 @@ impl<'a> TypeChecker<'a> {
         match item {
             Item::FnDef { id: _, params, ret_ty, body, .. } => {
                 // Set up parameter types in the environment
-                for (param_name, param_ty) in params.iter() {
-                    let param_type = self.resolve_type_annotation(param_ty);
+                for param in params.iter() {
+                    let param_type = self.resolve_type_annotation(&param.ty);
                     // For M1, use synthetic DefId based on parameter name
-                    let param_def_id = DefId::new(3000000 + param_name.0);
-                    self.env.define_name(*param_name, param_def_id, param_type);
+                    let param_def_id = DefId::new(3000000 + param.name.0);
+                    self.env.define_name(param.name, param_def_id, param_type);
                 }
 
                 // Set current function return type
@@ -180,7 +182,7 @@ impl<'a> TypeChecker<'a> {
     /// Type-checks a statement.
     fn check_stmt(&mut self, stmt: &Stmt) {
         match stmt {
-            Stmt::Let { name, ty, init, id, span } => {
+            Stmt::Let { name, ty, init, id, span, .. } => {
                 // Check the initializer
                 let init_ty = self.check_expr(init);
 
@@ -200,8 +202,56 @@ impl<'a> TypeChecker<'a> {
 
                 self.node_types.insert(*id, expected_ty);
             }
+            Stmt::Assign { target, value, span, .. } => {
+                // Check the value type
+                let value_ty = self.check_expr(value);
+
+                // Check the target and get its type
+                let target_ty = self.check_expr(target);
+
+                // Unify: target and value must have the same type
+                self.unify(&target_ty, &value_ty, *span);
+            }
             Stmt::Expr { expr } => {
                 self.check_expr(expr);
+            }
+            Stmt::Require(req) => {
+                self.check_require(req);
+            }
+        }
+    }
+
+    /// Type-checks a require statement.
+    fn check_require(&mut self, req: &RequireStmt) {
+        // 1. expr must be Bool
+        let expr_ty = self.check_expr(&req.expr);
+        if !expr_ty.is_unknown() && expr_ty != Ty::Bool {
+            self.errors.push(TypeError::RequireNonBool {
+                found: expr_ty,
+                span: req.expr.span(),
+            });
+        }
+
+        // 2. message (if present) must be Str
+        if let Some(msg) = &req.message {
+            let msg_ty = self.check_expr(msg);
+            if !msg_ty.is_unknown() && msg_ty != Ty::Str {
+                self.errors.push(TypeError::RequireMessageNonStr {
+                    found: msg_ty,
+                    span: msg.span(),
+                });
+            }
+        }
+
+        // 3. set_fn (if present) must be Fn() -> Unit
+        if let Some(set_fn) = &req.set_fn {
+            let set_fn_ty = self.check_expr(set_fn);
+            let expected = Ty::Fn { params: vec![], ret: Box::new(Ty::Unit) };
+            if !set_fn_ty.is_unknown() && set_fn_ty != expected {
+                self.errors.push(TypeError::RequireSetType {
+                    found: set_fn_ty,
+                    span: set_fn.span(),
+                });
             }
         }
     }
@@ -212,6 +262,7 @@ impl<'a> TypeChecker<'a> {
             Expr::Literal { value, id, .. } => {
                 let lit_ty = match value {
                     Literal::Int(_) => Ty::Int,
+                    Literal::Float(_) => Ty::Float,
                     Literal::Str(_) => Ty::Str,
                     Literal::Bool(_) => Ty::Bool,
                     Literal::Unit => Ty::Unit,
@@ -259,7 +310,12 @@ impl<'a> TypeChecker<'a> {
 
             Expr::Call { callee, args, id, span } => {
                 let callee_ty = self.check_expr(callee);
-                let arg_types: Vec<Ty> = args.iter().map(|arg| self.check_expr(arg)).collect();
+                // Use canonical args (definition order, defaults inserted) when available
+                let arg_types: Vec<Ty> = if let Some(canon) = self.resolve.canonical_call_args.get(id) {
+                    canon.iter().map(|arg| self.check_expr(&arg.value)).collect()
+                } else {
+                    args.iter().map(|arg| self.check_expr(&arg.value)).collect()
+                };
 
                 let result_ty = match callee_ty {
                     Ty::Fn { params, ret } => {
@@ -341,6 +397,75 @@ impl<'a> TypeChecker<'a> {
                 // Return expressions themselves have type Unit (they don't produce a value)
                 self.node_types.insert(*id, Ty::Unit);
                 Ty::Unit
+            }
+
+            Expr::While { cond, body, id, .. } => {
+                let cond_ty = self.check_expr(cond);
+
+                // Condition should be Bool
+                self.unify(&Ty::Bool, &cond_ty, cond.span());
+
+                // Check body but ignore its type
+                self.check_expr(body);
+
+                // While expressions always have type Unit
+                self.node_types.insert(*id, Ty::Unit);
+                Ty::Unit
+            }
+
+            Expr::Loop { body, id, .. } => {
+                // Check body but ignore its type
+                self.check_expr(body);
+
+                // For M2, loop expressions have type Unit
+                // In a full implementation, this could be Never or the type of break expressions
+                self.node_types.insert(*id, Ty::Unit);
+                Ty::Unit
+            }
+
+            Expr::Break { id, .. } => {
+                // Break has type Unit
+                self.node_types.insert(*id, Ty::Unit);
+                Ty::Unit
+            }
+
+            Expr::Continue { id, .. } => {
+                // Continue has type Unit
+                self.node_types.insert(*id, Ty::Unit);
+                Ty::Unit
+            }
+
+            Expr::Closure { params, body, id, .. } => {
+                // Set up param types in the environment
+                for param in params {
+                    let param_ty = self.resolve_type_annotation(&param.ty);
+                    let param_def_id = DefId::new(4000000 + param.name.0);
+                    self.env.define_name(param.name, param_def_id, param_ty);
+                }
+                let body_ty = self.check_expr(body);
+                let param_tys: Vec<Ty> = params.iter()
+                    .map(|p| self.resolve_type_annotation(&p.ty))
+                    .collect();
+                let closure_ty = Ty::Fn { params: param_tys, ret: Box::new(body_ty) };
+                self.node_types.insert(*id, closure_ty.clone());
+                closure_ty
+            }
+
+            Expr::Shell { parts, id, .. } => {
+                for part in parts {
+                    if let ShellPart::Interpolated(inner) = part {
+                        let inner_ty = self.check_expr(inner);
+                        // Allow Str, Int, or Unknown (escape hatch).
+                        if !inner_ty.is_unknown() && inner_ty != Ty::Str && inner_ty != Ty::Int {
+                            self.errors.push(TypeError::ShellInterpType {
+                                found: inner_ty,
+                                span: inner.span(),
+                            });
+                        }
+                    }
+                }
+                self.node_types.insert(*id, Ty::ShellOutput);
+                Ty::ShellOutput
             }
         };
 
@@ -486,6 +611,7 @@ mod tests {
             HashMap::new(),
             HashMap::new(),
             HashMap::new(),
+            HashMap::new(),
             vec![],
         );
         let interner = Interner::new();
@@ -500,6 +626,7 @@ mod tests {
         let items = vec![];
         let ast = ParseResult::new(items, vec![]);
         let resolve = ResolveResult::new(
+            HashMap::new(),
             HashMap::new(),
             HashMap::new(),
             HashMap::new(),

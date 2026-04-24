@@ -1,10 +1,12 @@
 //! Type system types.
 
+use serde::{Deserialize, Serialize};
+
 /// Ferric type representation.
 ///
 /// This is the M1 baseline type system with an Unknown escape hatch
 /// to allow partial implementation. Unknown will be removed in M3.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Ty {
     /// Integer type
     Int,
@@ -23,6 +25,8 @@ pub enum Ty {
         /// Return type
         ret: Box<Ty>,
     },
+    /// Result of a `$` shell expression (struct with `stdout` and `exit_code`).
+    ShellOutput,
     /// Unknown type - escape hatch for M1, will be removed in M3
     Unknown,
 }
@@ -44,6 +48,7 @@ impl Ty {
                     .join(", ");
                 format!("fn({}) -> {}", params_str, ret.description())
             }
+            Ty::ShellOutput => "ShellOutput".to_string(),
             Ty::Unknown => "?".to_string(),
         }
     }

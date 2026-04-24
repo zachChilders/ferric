@@ -3,10 +3,11 @@
 //! CRITICAL: Every error type MUST carry a Span field (Rule 5).
 //! This enables precise error reporting and future renderer replacement.
 
+use serde::{Deserialize, Serialize};
 use crate::{Span, Symbol, TokenKind, Ty};
 
 /// Errors that can occur during lexing.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum LexError {
     /// An unexpected character was encountered
     UnexpectedChar {
@@ -20,6 +21,14 @@ pub enum LexError {
         /// Location of the unterminated string
         span: Span,
     },
+    /// A shell interpolation `@{...}` contained another `@{` inside it.
+    NestedShellInterp {
+        span: Span,
+    },
+    /// A shell interpolation `@{...}` had no closing `}` before end-of-line.
+    UnclosedShellInterp {
+        span: Span,
+    },
 }
 
 impl LexError {
@@ -28,6 +37,8 @@ impl LexError {
         match self {
             LexError::UnexpectedChar { span, .. } => *span,
             LexError::UnterminatedString { span } => *span,
+            LexError::NestedShellInterp { span } => *span,
+            LexError::UnclosedShellInterp { span } => *span,
         }
     }
 
@@ -40,12 +51,18 @@ impl LexError {
             LexError::UnterminatedString { .. } => {
                 "unterminated string literal".to_string()
             }
+            LexError::NestedShellInterp { .. } => {
+                "nested shell interpolation `@{` is not allowed".to_string()
+            }
+            LexError::UnclosedShellInterp { .. } => {
+                "unclosed shell interpolation: missing `}`".to_string()
+            }
         }
     }
 }
 
 /// Errors that can occur during parsing.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ParseError {
     /// An unexpected token was found
     UnexpectedToken {
@@ -70,6 +87,16 @@ pub enum ParseError {
         /// Location of the error
         span: Span,
     },
+    /// A positional (unnamed) argument was used at a call site
+    PositionalArg {
+        /// Location of the offending argument
+        span: Span,
+    },
+    /// An invalid mode was given inside require(...)
+    InvalidRequireMode {
+        /// Location of the invalid token
+        span: Span,
+    },
 }
 
 impl ParseError {
@@ -79,6 +106,8 @@ impl ParseError {
             ParseError::UnexpectedToken { span, .. } => *span,
             ParseError::ExpectedExpression { span, .. } => *span,
             ParseError::ExpectedStatement { span, .. } => *span,
+            ParseError::PositionalArg { span } => *span,
+            ParseError::InvalidRequireMode { span } => *span,
         }
     }
 
@@ -94,12 +123,18 @@ impl ParseError {
             ParseError::ExpectedStatement { found, .. } => {
                 format!("expected statement, found {}", found.description())
             }
+            ParseError::PositionalArg { .. } => {
+                "positional arguments are not allowed; use named arguments (name: value)".to_string()
+            }
+            ParseError::InvalidRequireMode { .. } => {
+                "invalid require mode; expected 'warn'".to_string()
+            }
         }
     }
 }
 
 /// Errors that can occur during name resolution.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ResolveError {
     /// A variable or function was used but not defined
     UndefinedVariable {
@@ -117,6 +152,47 @@ pub enum ResolveError {
         /// Location of the duplicate definition
         second: Span,
     },
+    /// Assignment to an immutable variable
+    AssignToImmutable {
+        /// The name of the immutable variable
+        name: Symbol,
+        /// Location of the assignment
+        span: Span,
+    },
+    /// Break used outside of a loop
+    BreakOutsideLoop {
+        /// Location of the break
+        span: Span,
+    },
+    /// Continue used outside of a loop
+    ContinueOutsideLoop {
+        /// Location of the continue
+        span: Span,
+    },
+    /// Return used outside of a function
+    ReturnOutsideFn {
+        /// Location of the return
+        span: Span,
+    },
+    /// A required parameter had no corresponding argument at the call site
+    MissingArg {
+        /// The parameter that was not supplied
+        param: Symbol,
+        /// Location of the call
+        call_span: Span,
+    },
+    /// An argument name at a call site does not match any parameter
+    UnknownArg {
+        /// The unrecognised argument name
+        name: Symbol,
+        /// Location of the argument
+        span: Span,
+    },
+    /// The set closure in a require statement must take zero arguments
+    RequireSetArity {
+        /// Location of the closure
+        span: Span,
+    },
 }
 
 impl ResolveError {
@@ -125,6 +201,13 @@ impl ResolveError {
         match self {
             ResolveError::UndefinedVariable { span, .. } => *span,
             ResolveError::DuplicateDefinition { second, .. } => *second,
+            ResolveError::AssignToImmutable { span, .. } => *span,
+            ResolveError::BreakOutsideLoop { span } => *span,
+            ResolveError::ContinueOutsideLoop { span } => *span,
+            ResolveError::ReturnOutsideFn { span } => *span,
+            ResolveError::MissingArg { call_span, .. } => *call_span,
+            ResolveError::UnknownArg { span, .. } => *span,
+            ResolveError::RequireSetArity { span } => *span,
         }
     }
 
@@ -137,12 +220,33 @@ impl ResolveError {
             ResolveError::DuplicateDefinition { .. } => {
                 "duplicate definition".to_string()
             }
+            ResolveError::AssignToImmutable { .. } => {
+                "assignment to immutable variable".to_string()
+            }
+            ResolveError::BreakOutsideLoop { .. } => {
+                "break outside of loop".to_string()
+            }
+            ResolveError::ContinueOutsideLoop { .. } => {
+                "continue outside of loop".to_string()
+            }
+            ResolveError::ReturnOutsideFn { .. } => {
+                "return outside of function".to_string()
+            }
+            ResolveError::MissingArg { .. } => {
+                "missing required argument".to_string()
+            }
+            ResolveError::UnknownArg { .. } => {
+                "unknown argument name".to_string()
+            }
+            ResolveError::RequireSetArity { .. } => {
+                "require set closure must take zero arguments".to_string()
+            }
         }
     }
 }
 
 /// Errors that can occur during type checking.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum TypeError {
     /// A type mismatch occurred
     Mismatch {
@@ -164,6 +268,26 @@ pub enum TypeError {
         /// Location of the error
         span: Span,
     },
+    /// The require condition expression is not Bool
+    RequireNonBool {
+        found: Ty,
+        span: Span,
+    },
+    /// The require message expression is not Str
+    RequireMessageNonStr {
+        found: Ty,
+        span: Span,
+    },
+    /// The require set closure is not Fn() -> Unit
+    RequireSetType {
+        found: Ty,
+        span: Span,
+    },
+    /// A shell interpolation `@{expr}` has a type other than Str or Int.
+    ShellInterpType {
+        found: Ty,
+        span: Span,
+    },
 }
 
 impl TypeError {
@@ -172,6 +296,10 @@ impl TypeError {
         match self {
             TypeError::Mismatch { span, .. } => *span,
             TypeError::IncompatibleTypes { span, .. } => *span,
+            TypeError::RequireNonBool { span, .. } => *span,
+            TypeError::RequireMessageNonStr { span, .. } => *span,
+            TypeError::RequireSetType { span, .. } => *span,
+            TypeError::ShellInterpType { span, .. } => *span,
         }
     }
 
@@ -192,6 +320,18 @@ impl TypeError {
                     left.description(),
                     right.description()
                 )
+            }
+            TypeError::RequireNonBool { found, .. } => {
+                format!("require condition must be Bool, found {}", found.description())
+            }
+            TypeError::RequireMessageNonStr { found, .. } => {
+                format!("require message must be Str, found {}", found.description())
+            }
+            TypeError::RequireSetType { found, .. } => {
+                format!("require set closure must be Fn() -> Unit, found {}", found.description())
+            }
+            TypeError::ShellInterpType { found, .. } => {
+                format!("shell interpolation must be Str or Int, found {}", found.description())
             }
         }
     }

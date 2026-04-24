@@ -1,0 +1,4 @@
+// Warn mode should not halt
+let mut x = -1
+require(warn) x > 0, "x should be positive"
+println(s: "execution continued after warn")

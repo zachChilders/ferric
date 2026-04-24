@@ -7,8 +7,9 @@
 
 use std::collections::HashMap;
 use ferric_common::{
-    Program, ParseResult, ResolveResult, Symbol, Span, DefId,
-    Item, Stmt, Expr, Literal, BinOp, UnOp, Interner,
+    Program, ResolveResult, Symbol, Span, DefId,
+    Item, Stmt, Expr, Literal, BinOp, UnOp, Interner, NamedArg,
+    RequireStmt, RequireMode, ShellOutput, ShellPart,
 };
 use ferric_stdlib::{NativeRegistry, NativeValue, NativeFn};
 
@@ -54,7 +55,7 @@ impl TreeWalker {
             env_stack: Vec::new(),
             symbol_stack: Vec::new(),
             ast_items: Vec::new(),
-            resolve: ResolveResult::new(HashMap::new(), HashMap::new(), HashMap::new(), Vec::new()),
+            resolve: ResolveResult::new(HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), Vec::new()),
             natives: NativeRegistry::new(),
             interner: Interner::new(),
             next_def_id: 0,
@@ -73,10 +74,8 @@ impl Executor for TreeWalker {
         self.natives = natives;
         self.interner = interner.clone();
         self.ast_items = program.items.clone();
-
-        // For M1, we need to also run resolve to get the resolution info
-        // In a full pipeline, this would be passed in separately
-        self.resolve = ferric_resolve::resolve(&ParseResult::new(program.items.clone(), vec![]));
+        // Use the resolve result carried by the Program (includes canonical_call_args)
+        self.resolve = program.resolve;
 
         // Push global scope
         self.push_env();
@@ -99,6 +98,10 @@ impl Executor for TreeWalker {
 ///
 /// Rule 7: Never construct Value directly outside this module.
 /// Use the constructor functions instead (Value::new_int, etc.).
+///
+/// INVARIANT: `Value` must remain `Send`. Do not add variants containing `Rc`,
+/// `RefCell`, raw pointers, or other non-`Send` types. This is required for
+/// the async upgrade path — see `ASYNC_COMPAT.md`.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
     Int(i64),
@@ -108,6 +111,10 @@ pub enum Value {
     Unit,
     /// M1: Functions stored as DefIds, looked up in AST
     Fn(DefId),
+    /// M2.5: Closure value — stores the body expression
+    Closure(Box<Expr>),
+    /// M2.5: Captured shell output (stdout + exit code).
+    ShellOutput(ShellOutput),
 }
 
 impl Value {
@@ -143,6 +150,16 @@ impl Value {
     pub(crate) fn new_fn(def_id: DefId) -> Self {
         Value::Fn(def_id)
     }
+
+    /// Creates a closure value.
+    pub(crate) fn new_closure(body: Expr) -> Self {
+        Value::Closure(Box::new(body))
+    }
+
+    /// Creates a `ShellOutput` value (Rule 7 — only construction path).
+    pub fn new_shell_output(stdout: String, exit_code: i32) -> Self {
+        Value::ShellOutput(ShellOutput { stdout, exit_code })
+    }
 }
 
 /// Runtime errors with source location information.
@@ -159,18 +176,36 @@ pub enum RuntimeError {
     InvalidOperation { op: String, span: Span },
     NotCallable { span: Span },
     WrongArgumentCount { expected: usize, found: usize, span: Span },
+    /// Control flow signals (not actual errors)
+    BreakSignal { span: Span },
+    ContinueSignal { span: Span },
+    /// A require statement with Error mode failed
+    RequireError { span: Span, message: Option<String> },
 }
+
+// Compile-time assertion: `Value` must be `Send` so a future async runtime can
+// carry runtime values across `.await` points. If this fails to compile, a new
+// `Value` variant has introduced a non-`Send` type — fix the variant rather
+// than weakening the bound. See `ASYNC_COMPAT.md`.
+const _: fn() = || {
+    fn check<T: Send>() {}
+    check::<Value>();
+};
+
+// NOTE: The TreeWalker's frame stack is the Rust call stack — `eval_expr`
+// recurses into itself, and a function call pushes a Rust frame. This is
+// intentional for the M2-era tree-walking interpreter, but it cannot be
+// suspended, so it is incompatible with `.await` as-is.
+//
+// The M3 BytecodeVM replaces this wholesale: frames move to a heap-allocated
+// `Vec<Frame>` that can be paused and resumed. That heap stack is the
+// primitive an async executor needs. Do not introduce design here that
+// assumes the call chain is uninterruptible (e.g. Rust-stack-only data) —
+// the M3 replacement will not have that assumption. See `ASYNC_COMPAT.md`.
 
 // ============================================================================
 // Private implementation
 // ============================================================================
-
-/// Control flow for early returns.
-#[derive(Debug, Clone)]
-#[allow(dead_code)]
-enum ControlFlow {
-    Return(Value),
-}
 
 impl TreeWalker {
     /// Pushes a new environment frame.
@@ -225,7 +260,7 @@ impl TreeWalker {
             }
             Item::Script { stmt, .. } => {
                 match stmt {
-                    Stmt::Let { .. } => {
+                    Stmt::Let { .. } | Stmt::Assign { .. } | Stmt::Require(_) => {
                         self.eval_stmt(stmt)?;
                         Ok(Value::Unit)
                     }
@@ -257,11 +292,89 @@ impl TreeWalker {
                 self.define(def_id, value);
                 Ok(())
             }
+            Stmt::Assign { target, value, span, .. } => {
+                // Evaluate the value
+                let val = self.eval_expr(value)?;
+
+                // For M2, we only support simple variable assignment
+                if let Expr::Variable { name, .. } = target {
+                    // Look up the DefId for this variable
+                    for scope in self.symbol_stack.iter().rev() {
+                        if let Some(def_id) = scope.get(name) {
+                            // Update the value in the environment
+                            // Search through env_stack to find and update this DefId
+                            for env in self.env_stack.iter_mut().rev() {
+                                if env.contains_key(def_id) {
+                                    env.insert(*def_id, val);
+                                    return Ok(());
+                                }
+                            }
+                        }
+                    }
+                    // Variable not found - this should have been caught by resolver
+                    return Err(RuntimeError::UndefinedVariable {
+                        name: *name,
+                        span: *span,
+                    });
+                } else {
+                    // For M2, we only support variable assignment
+                    return Err(RuntimeError::InvalidOperation {
+                        op: "assignment to non-variable".to_string(),
+                        span: *span,
+                    });
+                }
+            }
             Stmt::Expr { expr } => {
                 self.eval_expr(expr)?;
                 Ok(())
             }
+            Stmt::Require(req) => {
+                self.eval_require(req)
+            }
         }
+    }
+
+    /// Evaluates a require statement.
+    fn eval_require(&mut self, req: &RequireStmt) -> Result<(), RuntimeError> {
+        // 1. Evaluate condition
+        let mut cond = self.eval_expr(&req.expr)?;
+
+        // 2. If false and set_fn present, call it and retry once
+        if matches!(cond, Value::Bool(false)) {
+            if let Some(set_fn_expr) = &req.set_fn {
+                let closure_val = self.eval_expr(set_fn_expr)?;
+                if let Value::Closure(body) = closure_val {
+                    self.eval_expr(&body)?; // discard return value
+                }
+                // Re-evaluate condition once
+                cond = self.eval_expr(&req.expr)?;
+            }
+        }
+
+        // 3. If still false, apply mode
+        if matches!(cond, Value::Bool(false)) {
+            // Only evaluate message on failure (lazy)
+            let message = if let Some(msg_expr) = &req.message {
+                match self.eval_expr(msg_expr)? {
+                    Value::Str(s) => Some(s),
+                    _ => None,
+                }
+            } else {
+                None
+            };
+
+            match req.mode {
+                RequireMode::Error => {
+                    return Err(RuntimeError::RequireError { span: req.span, message });
+                }
+                RequireMode::Warn => {
+                    let msg_str = message.unwrap_or_else(|| "require condition evaluated to false".to_string());
+                    eprintln!("warning: require failed: {}", msg_str);
+                }
+            }
+        }
+
+        Ok(())
     }
 
     /// Evaluates an expression.
@@ -291,8 +404,11 @@ impl TreeWalker {
                 let val = self.eval_expr(expr)?;
                 self.eval_unop(*op, &val, *span)
             }
-            Expr::Call { callee, args, span, .. } => {
-                self.eval_call(callee, args, *span)
+            Expr::Call { callee, args, span, id } => {
+                // Use canonical args (definition order, defaults inserted) when available
+                let canonical = self.resolve.canonical_call_args.get(id).cloned();
+                let args_ref: &[NamedArg] = canonical.as_deref().unwrap_or(args);
+                self.eval_call(callee, args_ref, *span)
             }
             Expr::If { cond, then_branch, else_branch, span, .. } => {
                 let cond_val = self.eval_expr(cond)?;
@@ -339,13 +455,96 @@ impl TreeWalker {
                 // In a more complete implementation, we'd use Result with ControlFlow
                 Ok(value)
             }
+
+            Expr::While { cond, body, span, .. } => {
+                loop {
+                    // Evaluate condition
+                    let cond_val = self.eval_expr(cond)?;
+
+                    match cond_val {
+                        Value::Bool(true) => {
+                            // Execute body, handling break/continue
+                            match self.eval_expr(body) {
+                                Ok(_) => continue, // Continue to next iteration
+                                Err(RuntimeError::BreakSignal { .. }) => break, // Exit loop
+                                Err(RuntimeError::ContinueSignal { .. }) => continue, // Next iteration
+                                Err(e) => return Err(e), // Propagate other errors
+                            }
+                        }
+                        Value::Bool(false) => break, // Exit loop
+                        _ => return Err(RuntimeError::TypeMismatch {
+                            expected: "Bool".to_string(),
+                            found: self.type_name(&cond_val),
+                            span: *span,
+                        }),
+                    }
+                }
+                Ok(Value::Unit)
+            }
+
+            Expr::Loop { body, .. } => {
+                loop {
+                    // Execute body, handling break/continue
+                    match self.eval_expr(body) {
+                        Ok(_) => continue, // Continue to next iteration
+                        Err(RuntimeError::BreakSignal { .. }) => break, // Exit loop
+                        Err(RuntimeError::ContinueSignal { .. }) => continue, // Next iteration
+                        Err(e) => return Err(e), // Propagate other errors
+                    }
+                }
+                Ok(Value::Unit)
+            }
+
+            Expr::Break { span, .. } => {
+                // Signal a break by returning a "BreakSignal" error
+                Err(RuntimeError::BreakSignal { span: *span })
+            }
+
+            Expr::Continue { span, .. } => {
+                // Signal a continue by returning a "ContinueSignal" error
+                Err(RuntimeError::ContinueSignal { span: *span })
+            }
+
+            Expr::Closure { body, .. } => {
+                // A closure evaluates to a Value::Closure carrying its body
+                Ok(Value::new_closure(*body.clone()))
+            }
+
+            Expr::Shell { parts, span, .. } => self.eval_shell(parts, *span),
         }
+    }
+
+    /// Builds the command string from shell parts and runs it as a subprocess.
+    fn eval_shell(&mut self, parts: &[ShellPart], span: Span) -> Result<Value, RuntimeError> {
+        let mut cmd = String::new();
+        for part in parts {
+            match part {
+                ShellPart::Literal(s) => cmd.push_str(s),
+                ShellPart::Interpolated(expr) => {
+                    let v = self.eval_expr(expr)?;
+                    match v {
+                        Value::Str(s) => cmd.push_str(&s),
+                        Value::Int(n) => cmd.push_str(&n.to_string()),
+                        other => {
+                            // Type checker should have rejected these; treat as runtime mismatch.
+                            return Err(RuntimeError::TypeMismatch {
+                                expected: "Str or Int".to_string(),
+                                found: self.type_name(&other),
+                                span,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        Ok(run_shell_command(&cmd))
     }
 
     /// Evaluates a literal.
     fn eval_literal(&self, lit: &Literal) -> Result<Value, RuntimeError> {
         match lit {
             Literal::Int(n) => Ok(Value::Int(*n)),
+            Literal::Float(f) => Ok(Value::Float(*f)),
             Literal::Bool(b) => Ok(Value::Bool(*b)),
             Literal::Str(sym) => {
                 // Resolve the string from the interner
@@ -427,7 +626,7 @@ impl TreeWalker {
     }
 
     /// Evaluates a function call.
-    fn eval_call(&mut self, callee: &Expr, args: &[Expr], span: Span) -> Result<Value, RuntimeError> {
+    fn eval_call(&mut self, callee: &Expr, args: &[NamedArg], span: Span) -> Result<Value, RuntimeError> {
         // For M1, we only support direct function name calls
         if let Expr::Variable { name, .. } = callee {
             // Check if it's a native function
@@ -443,11 +642,11 @@ impl TreeWalker {
     }
 
     /// Calls a native function.
-    fn call_native(&mut self, native_fn: NativeFn, args: &[Expr], span: Span) -> Result<Value, RuntimeError> {
-        // Evaluate all arguments
+    fn call_native(&mut self, native_fn: NativeFn, args: &[NamedArg], span: Span) -> Result<Value, RuntimeError> {
+        // Evaluate all arguments (already in definition order from resolver)
         let mut arg_values = Vec::new();
         for arg in args {
-            arg_values.push(self.eval_expr(arg)?);
+            arg_values.push(self.eval_expr(&arg.value)?);
         }
 
         // Convert to NativeValue
@@ -466,7 +665,7 @@ impl TreeWalker {
     }
 
     /// Calls a user-defined function.
-    fn call_user_function(&mut self, name: Symbol, args: &[Expr], span: Span) -> Result<Value, RuntimeError> {
+    fn call_user_function(&mut self, name: Symbol, args: &[NamedArg], span: Span) -> Result<Value, RuntimeError> {
         // Find the function definition in the AST and clone it to avoid borrow issues
         let fn_def = self.ast_items.iter().find_map(|item| {
             if let Item::FnDef { name: fn_name, params, body, .. } = item {
@@ -479,7 +678,7 @@ impl TreeWalker {
 
         let (params, body) = fn_def.ok_or(RuntimeError::UndefinedFunction { name, span })?;
 
-        // Check argument count
+        // Check argument count (canonical args always match after resolver validation)
         if args.len() != params.len() {
             return Err(RuntimeError::WrongArgumentCount {
                 expected: params.len(),
@@ -488,23 +687,23 @@ impl TreeWalker {
             });
         }
 
-        // Evaluate all arguments
+        // Evaluate all arguments (already in definition order from resolver)
         let mut arg_values = Vec::new();
         for arg in args {
-            arg_values.push(self.eval_expr(arg)?);
+            arg_values.push(self.eval_expr(&arg.value)?);
         }
 
         // Push a new environment for the function
         self.push_env();
 
-        // Bind parameters to arguments
-        for (i, (param_name, _param_ty)) in params.iter().enumerate() {
+        // Bind parameters to arguments (params[i] ↔ args[i] by definition order)
+        for (i, param) in params.iter().enumerate() {
             // Create a new DefId for the parameter
             let def_id = self.new_def_id();
 
             // Store the symbol -> DefId mapping
             if let Some(scope) = self.symbol_stack.last_mut() {
-                scope.insert(*param_name, def_id);
+                scope.insert(param.name, def_id);
             }
 
             self.define(def_id, arg_values[i].clone());
@@ -527,7 +726,9 @@ impl TreeWalker {
             Value::Bool(b) => NativeValue::Bool(*b),
             Value::Str(s) => NativeValue::Str(s.clone()),
             Value::Unit => NativeValue::Unit,
-            Value::Fn(_) => NativeValue::Unit, // Can't pass functions to natives in M1
+            Value::Fn(_) => NativeValue::Unit,
+            Value::Closure(_) => NativeValue::Unit,
+            Value::ShellOutput(out) => NativeValue::ShellOutput(out.clone()),
         }
     }
 
@@ -539,6 +740,7 @@ impl TreeWalker {
             NativeValue::Bool(b) => Value::Bool(*b),
             NativeValue::Str(s) => Value::Str(s.clone()),
             NativeValue::Unit => Value::Unit,
+            NativeValue::ShellOutput(out) => Value::ShellOutput(out.clone()),
         }
     }
 
@@ -551,7 +753,38 @@ impl TreeWalker {
             Value::Str(_) => "Str".to_string(),
             Value::Unit => "Unit".to_string(),
             Value::Fn(_) => "Fn".to_string(),
+            Value::Closure(_) => "Fn".to_string(),
+            Value::ShellOutput(_) => "ShellOutput".to_string(),
         }
+    }
+}
+
+/// Runs a shell command synchronously and returns a `Value::ShellOutput`.
+///
+/// On Unix this delegates to `sh -c <cmd>`; on Windows to `cmd /C <cmd>`.
+/// On targets without subprocess support (e.g. WASM), returns exit code 126
+/// (the conventional "command not executable" code).
+fn run_shell_command(cmd: &str) -> Value {
+    #[cfg(any(unix, windows))]
+    {
+        let output = if cfg!(windows) {
+            std::process::Command::new("cmd").arg("/C").arg(cmd).output()
+        } else {
+            std::process::Command::new("sh").arg("-c").arg(cmd).output()
+        };
+        match output {
+            Ok(out) => {
+                let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+                let exit_code = out.status.code().unwrap_or(-1);
+                Value::new_shell_output(stdout, exit_code)
+            }
+            Err(_) => Value::new_shell_output(String::new(), 126),
+        }
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = cmd;
+        Value::new_shell_output(String::new(), 126)
     }
 }
 
@@ -756,7 +989,7 @@ mod tests {
             },
         ];
 
-        let program = Program::new(items);
+        let program = Program::new(items, ResolveResult::new(HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), vec![]));
         let mut vm = TreeWalker::new();
         let natives = NativeRegistry::new();
         let interner = Interner::new();
@@ -808,7 +1041,7 @@ mod tests {
             },
         ];
 
-        let program = Program::new(items);
+        let program = Program::new(items, ResolveResult::new(HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), vec![]));
         let mut vm = TreeWalker::new();
         let natives = NativeRegistry::new();
 
@@ -843,7 +1076,7 @@ mod tests {
             },
         ];
 
-        let program = Program::new(items);
+        let program = Program::new(items, ResolveResult::new(HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), vec![]));
         let mut vm = TreeWalker::new();
         let natives = NativeRegistry::new();
         let interner = Interner::new();
@@ -883,7 +1116,7 @@ mod tests {
             },
         ];
 
-        let program = Program::new(items);
+        let program = Program::new(items, ResolveResult::new(HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), vec![]));
         let mut vm = TreeWalker::new();
         let natives = NativeRegistry::new();
         let interner = Interner::new();
@@ -919,7 +1152,7 @@ mod tests {
             },
         ];
 
-        let program = Program::new(items);
+        let program = Program::new(items, ResolveResult::new(HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), vec![]));
         let mut vm = TreeWalker::new();
         let natives = NativeRegistry::new();
         let interner = Interner::new();

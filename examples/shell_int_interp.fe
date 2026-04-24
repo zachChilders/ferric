@@ -1,0 +1,10 @@
+// Int interpolation should be coerced to string
+let count = 42
+let out = $ echo count is @{count}
+println(s: shell_stdout(output: out))
+
+// Arbitrary expression in interpolation
+let a = 3
+let b = 4
+let r = $ echo @{a + b}
+println(s: shell_stdout(output: r))

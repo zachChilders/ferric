@@ -9,7 +9,8 @@
 use std::collections::HashMap;
 use ferric_common::{
     ParseResult, ResolveResult, ResolveError, Item, Stmt, Expr,
-    Symbol, Span, NodeId, DefId,
+    NamedArg, Param, ShellPart, Symbol, Span, NodeId, DefId, TypeAnnotation,
+    RequireStmt,
 };
 
 /// Public entry point for name resolution.
@@ -18,6 +19,7 @@ use ferric_common::{
 /// - Mappings from variable uses (NodeId) to definitions (DefId)
 /// - Stack slot assignments for variables
 /// - Function slot assignments for functions
+/// - Canonicalized call argument lists (definition order, defaults inserted)
 /// - Any resolution errors encountered
 pub fn resolve(ast: &ParseResult) -> ResolveResult {
     resolve_with_natives(ast, &[])
@@ -25,14 +27,14 @@ pub fn resolve(ast: &ParseResult) -> ResolveResult {
 
 /// Name resolution with support for native functions.
 ///
-/// This variant allows registering native function names as pre-defined,
-/// preventing undefined variable errors for native function calls.
-pub fn resolve_with_natives(ast: &ParseResult, native_names: &[Symbol]) -> ResolveResult {
+/// `native_fns` is a slice of `(fn_name, param_names)` pairs — one entry per
+/// native function, providing the parameter names needed for named-arg validation.
+pub fn resolve_with_natives(ast: &ParseResult, native_fns: &[(Symbol, Vec<Symbol>)]) -> ResolveResult {
     let mut resolver = Resolver::new();
 
-    // Pre-register native functions in the global scope
-    for &name in native_names {
-        resolver.register_native(name);
+    // Pre-register native functions (name in scope + param info for call validation)
+    for (name, param_names) in native_fns {
+        resolver.register_native(*name, param_names.clone());
     }
 
     resolver.resolve_program(ast);
@@ -63,7 +65,6 @@ impl DefIdGen {
 /// A binding in a scope.
 struct Binding {
     def_id: DefId,
-    #[allow(dead_code)]
     mutable: bool,
     span: Span,
 }
@@ -104,8 +105,20 @@ struct Resolver {
     /// Output: maps DefId to function slot
     fn_slots: HashMap<DefId, u32>,
 
+    /// Output: maps Call NodeId to canonical arg list (definition order, defaults inserted)
+    canonical_call_args: HashMap<NodeId, Vec<NamedArg>>,
+
+    /// Known function parameter lists (user-defined + native), keyed by function name
+    fn_params: HashMap<Symbol, Vec<Param>>,
+
     /// Accumulated errors
     errors: Vec<ResolveError>,
+
+    /// Depth of loop nesting (for validating break/continue)
+    loop_depth: u32,
+
+    /// Depth of function nesting (for validating return)
+    fn_depth: u32,
 }
 
 impl Resolver {
@@ -118,7 +131,11 @@ impl Resolver {
             resolutions: HashMap::new(),
             def_slots: HashMap::new(),
             fn_slots: HashMap::new(),
+            canonical_call_args: HashMap::new(),
+            fn_params: HashMap::new(),
             errors: Vec::new(),
+            loop_depth: 0,
+            fn_depth: 0,
         }
     }
 
@@ -128,6 +145,7 @@ impl Resolver {
             self.resolutions,
             self.def_slots,
             self.fn_slots,
+            self.canonical_call_args,
             self.errors,
         )
     }
@@ -181,11 +199,8 @@ impl Resolver {
         None
     }
 
-    /// Registers a native function as a pre-defined name.
-    ///
-    /// This creates a binding in the global scope for the native function,
-    /// preventing undefined variable errors when it's called.
-    fn register_native(&mut self, name: Symbol) {
+    /// Registers a native function as a pre-defined name with its parameter names.
+    fn register_native(&mut self, name: Symbol, param_names: Vec<Symbol>) {
         // Ensure global scope exists
         if self.scopes.is_empty() {
             self.push_scope();
@@ -198,7 +213,7 @@ impl Resolver {
             scope.bindings.insert(name, Binding {
                 def_id,
                 mutable: false,
-                span: Span::new(0, 0), // Native functions don't have source spans
+                span: Span::new(0, 0),
             });
         }
 
@@ -206,6 +221,15 @@ impl Resolver {
         let fn_slot = self.next_fn_slot;
         self.next_fn_slot += 1;
         self.fn_slots.insert(def_id, fn_slot);
+
+        // Store parameter info for named-arg validation at call sites
+        let params: Vec<Param> = param_names.into_iter().map(|pname| Param {
+            span: Span::new(0, 0),
+            name: pname,
+            ty: TypeAnnotation::Named(Symbol::new(0)), // unused by resolver
+            default: None,
+        }).collect();
+        self.fn_params.insert(name, params);
     }
 
     /// Resolves the entire program.
@@ -213,6 +237,14 @@ impl Resolver {
         // Create a top-level scope for the program (or reuse if natives were registered)
         if self.scopes.is_empty() {
             self.push_scope();
+        }
+
+        // Pre-pass: collect all user-defined function param info so calls to any
+        // function (regardless of textual order) can be validated and canonicalized.
+        for item in &ast.items {
+            if let Item::FnDef { name, params, .. } = item {
+                self.fn_params.insert(*name, params.clone());
+            }
         }
 
         for item in &ast.items {
@@ -237,18 +269,30 @@ impl Resolver {
                 // Push a new scope for function body
                 self.push_scope();
 
+                // Increment function depth (we're inside a function now)
+                self.fn_depth += 1;
+
                 // Define parameters in the function scope
-                for (param_name, _param_ty) in params {
-                    let param_def_id = self.define(*param_name, false, *span);
+                for param in params {
+                    let param_def_id = self.define(param.name, false, param.span);
 
                     // Assign variable slot to parameter
                     let slot = self.next_slot;
                     self.next_slot += 1;
                     self.def_slots.insert(param_def_id, slot);
+
+                    // Resolve default expression (if any) in the outer scope — defaults
+                    // are evaluated before the function body runs.
+                    if let Some(default) = &param.default {
+                        self.resolve_expr(default);
+                    }
                 }
 
                 // Resolve function body
                 self.resolve_expr(body);
+
+                // Decrement function depth
+                self.fn_depth -= 1;
 
                 // Pop function scope
                 self.pop_scope();
@@ -262,21 +306,77 @@ impl Resolver {
     /// Resolves a statement.
     fn resolve_stmt(&mut self, stmt: &Stmt) {
         match stmt {
-            Stmt::Let { name, init, span, .. } => {
+            Stmt::Let { name, mutable, init, span, .. } => {
                 // Resolve initializer first (before defining the variable)
                 self.resolve_expr(init);
 
                 // Define the variable in the current scope
-                let def_id = self.define(*name, false, *span);
+                let def_id = self.define(*name, *mutable, *span);
 
                 // Assign variable slot
                 let slot = self.next_slot;
                 self.next_slot += 1;
                 self.def_slots.insert(def_id, slot);
             }
+            Stmt::Assign { target, value, span, .. } => {
+                // Resolve the value first
+                self.resolve_expr(value);
+
+                // Check that the target is a variable
+                if let Expr::Variable { name, id, span: var_span } = target {
+                    // Look up the variable and extract needed info
+                    let binding_info = self.lookup(*name).map(|b| (b.def_id, b.mutable));
+
+                    if let Some((def_id, mutable)) = binding_info {
+                        // Check if it's mutable
+                        if !mutable {
+                            self.errors.push(ResolveError::AssignToImmutable {
+                                name: *name,
+                                span: *span,
+                            });
+                        }
+                        // Record the resolution of the target variable
+                        self.resolutions.insert(*id, def_id);
+                    } else {
+                        // Undefined variable
+                        self.errors.push(ResolveError::UndefinedVariable {
+                            name: *name,
+                            span: *var_span,
+                        });
+                    }
+                } else {
+                    // For now, we only support assigning to simple variables
+                    // In a full implementation, we might support field access, array indexing, etc.
+                    // For M2, we just resolve the target expression
+                    self.resolve_expr(target);
+                }
+            }
             Stmt::Expr { expr } => {
                 self.resolve_expr(expr);
             }
+            Stmt::Require(req) => {
+                self.resolve_require(req);
+            }
+        }
+    }
+
+    /// Resolves a require statement.
+    fn resolve_require(&mut self, req: &RequireStmt) {
+        self.resolve_expr(&req.expr);
+
+        if let Some(msg) = &req.message {
+            self.resolve_expr(msg);
+        }
+
+        if let Some(set_fn) = &req.set_fn {
+            // Check arity: set closure must have zero declared parameters
+            if let Expr::Closure { params, span, .. } = set_fn.as_ref() {
+                if !params.is_empty() {
+                    self.errors.push(ResolveError::RequireSetArity { span: *span });
+                }
+            }
+            // Resolve the set_fn expression
+            self.resolve_expr(set_fn);
         }
     }
 
@@ -306,10 +406,48 @@ impl Resolver {
             Expr::Unary { expr, .. } => {
                 self.resolve_expr(expr);
             }
-            Expr::Call { callee, args, .. } => {
+            Expr::Call { callee, args, id, span } => {
                 self.resolve_expr(callee);
+
+                // Resolve all arg values first
                 for arg in args {
-                    self.resolve_expr(arg);
+                    self.resolve_expr(&arg.value);
+                }
+
+                // Named-arg validation and canonicalization (only for direct fn calls)
+                if let Expr::Variable { name: fname, .. } = callee.as_ref() {
+                    if let Some(params) = self.fn_params.get(fname).cloned() {
+                        // Check for unknown arg names
+                        for arg in args {
+                            if !params.iter().any(|p| p.name == arg.name) {
+                                self.errors.push(ResolveError::UnknownArg {
+                                    name: arg.name,
+                                    span: arg.span,
+                                });
+                            }
+                        }
+
+                        // Build canonical arg list in definition order
+                        let mut canonical: Vec<NamedArg> = Vec::new();
+                        for param in &params {
+                            if let Some(arg) = args.iter().find(|a| a.name == param.name) {
+                                canonical.push(arg.clone());
+                            } else if let Some(default) = &param.default {
+                                canonical.push(NamedArg {
+                                    span: *span,
+                                    name: param.name,
+                                    value: default.clone(),
+                                });
+                            } else {
+                                self.errors.push(ResolveError::MissingArg {
+                                    param: param.name,
+                                    call_span: *span,
+                                });
+                            }
+                        }
+
+                        self.canonical_call_args.insert(*id, canonical);
+                    }
                 }
             }
             Expr::If { cond, then_branch, else_branch, .. } => {
@@ -334,9 +472,69 @@ impl Resolver {
                 // Pop the block scope
                 self.pop_scope();
             }
-            Expr::Return { expr, .. } => {
+            Expr::Return { expr, span, .. } => {
+                // Check if we're inside a function
+                if self.fn_depth == 0 {
+                    self.errors.push(ResolveError::ReturnOutsideFn {
+                        span: *span,
+                    });
+                }
                 if let Some(e) = expr {
                     self.resolve_expr(e);
+                }
+            }
+            Expr::While { cond, body, .. } => {
+                self.resolve_expr(cond);
+
+                // Increment loop depth before resolving body
+                self.loop_depth += 1;
+                self.resolve_expr(body);
+                self.loop_depth -= 1;
+            }
+            Expr::Loop { body, .. } => {
+                // Increment loop depth before resolving body
+                self.loop_depth += 1;
+                self.resolve_expr(body);
+                self.loop_depth -= 1;
+            }
+            Expr::Break { span, .. } => {
+                // Check if we're inside a loop
+                if self.loop_depth == 0 {
+                    self.errors.push(ResolveError::BreakOutsideLoop {
+                        span: *span,
+                    });
+                }
+            }
+            Expr::Continue { span, .. } => {
+                // Check if we're inside a loop
+                if self.loop_depth == 0 {
+                    self.errors.push(ResolveError::ContinueOutsideLoop {
+                        span: *span,
+                    });
+                }
+            }
+            Expr::Closure { params, body, .. } => {
+                // Push a scope for the closure body so any local vars are scoped
+                self.push_scope();
+
+                // Define any parameters (for M2.5 set_fn closures these will be empty)
+                for param in params {
+                    let param_def_id = self.define(param.name, false, param.span);
+                    let slot = self.next_slot;
+                    self.next_slot += 1;
+                    self.def_slots.insert(param_def_id, slot);
+                }
+
+                // Resolve the closure body in the closure's scope
+                self.resolve_expr(body);
+
+                self.pop_scope();
+            }
+            Expr::Shell { parts, .. } => {
+                for part in parts {
+                    if let ShellPart::Interpolated(expr) = part {
+                        self.resolve_expr(expr);
+                    }
                 }
             }
         }
@@ -346,7 +544,7 @@ impl Resolver {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ferric_common::{Span, Symbol, NodeId, Item, Stmt, Expr, Literal, TypeAnnotation};
+    use ferric_common::{Span, Symbol, NodeId, Item, Stmt, Expr, Literal, Param, TypeAnnotation};
 
     fn make_span() -> Span {
         Span::new(0, 0)
@@ -368,6 +566,7 @@ mod tests {
                 Item::Script {
                     stmt: Stmt::Let {
                         name: make_sym(0), // x
+                        mutable: false,
                         ty: None,
                         init: Expr::Literal {
                             value: Literal::Int(5),
@@ -401,6 +600,10 @@ mod tests {
         assert_eq!(result.def_slots.len(), 1);
     }
 
+    fn make_param(name: Symbol, ty: TypeAnnotation) -> Param {
+        Param { span: Span::new(0, 0), name, ty, default: None }
+    }
+
     #[test]
     fn test_function_parameter_resolution() {
         // fn foo(x: Int) { x }
@@ -409,7 +612,7 @@ mod tests {
                 Item::FnDef {
                     id: make_node_id(0),
                     name: make_sym(0), // foo
-                    params: vec![(make_sym(1), TypeAnnotation::Named(make_sym(2)))], // x: Int
+                    params: vec![make_param(make_sym(1), TypeAnnotation::Named(make_sym(2)))],
                     ret_ty: TypeAnnotation::Named(make_sym(2)), // Int
                     body: Expr::Variable {
                         name: make_sym(1), // x
@@ -436,6 +639,7 @@ mod tests {
                 Item::Script {
                     stmt: Stmt::Let {
                         name: make_sym(0), // x
+                        mutable: false,
                         ty: None,
                         init: Expr::Literal {
                             value: Literal::Int(1),
@@ -454,6 +658,7 @@ mod tests {
                             stmts: vec![
                                 Stmt::Let {
                                     name: make_sym(0), // x (shadows outer x)
+                                    mutable: false,
                                     ty: None,
                                     init: Expr::Literal {
                                         value: Literal::Int(2),
@@ -496,6 +701,7 @@ mod tests {
                 Item::Script {
                     stmt: Stmt::Let {
                         name: make_sym(0), // x
+                        mutable: false,
                         ty: None,
                         init: Expr::Variable {
                             name: make_sym(1), // y (undefined)
@@ -528,6 +734,7 @@ mod tests {
                 Item::Script {
                     stmt: Stmt::Let {
                         name: make_sym(0), // x
+                        mutable: false,
                         ty: None,
                         init: Expr::Literal {
                             value: Literal::Int(1),
@@ -543,6 +750,7 @@ mod tests {
                 Item::Script {
                     stmt: Stmt::Let {
                         name: make_sym(0), // x (duplicate)
+                        mutable: false,
                         ty: None,
                         init: Expr::Literal {
                             value: Literal::Int(2),
@@ -575,6 +783,7 @@ mod tests {
                 Item::Script {
                     stmt: Stmt::Let {
                         name: make_sym(0), // x
+                        mutable: false,
                         ty: None,
                         init: Expr::Literal {
                             value: Literal::Int(1),
@@ -623,6 +832,7 @@ mod tests {
                             stmts: vec![
                                 Stmt::Let {
                                     name: make_sym(0), // x
+                                    mutable: false,
                                     ty: None,
                                     init: Expr::Literal {
                                         value: Literal::Int(1),
@@ -672,12 +882,13 @@ mod tests {
                 Item::FnDef {
                     id: make_node_id(0),
                     name: make_sym(0), // foo
-                    params: vec![(make_sym(1), TypeAnnotation::Named(make_sym(2)))], // x: Int
+                    params: vec![make_param(make_sym(1), TypeAnnotation::Named(make_sym(2)))],
                     ret_ty: TypeAnnotation::Named(make_sym(2)), // Int
                     body: Expr::Block {
                         stmts: vec![
                             Stmt::Let {
                                 name: make_sym(3), // y
+                                mutable: false,
                                 ty: None,
                                 init: Expr::Variable {
                                     name: make_sym(1), // x

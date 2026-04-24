@@ -1,0 +1,3 @@
+let x = -1
+require x > 0, "x must be positive"
+println(s: "should not reach here")

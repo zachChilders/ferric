@@ -1,0 +1,12 @@
+// Test: basic require (passes)
+let x = 5
+require x > 0
+
+// Test: require with message (passes)
+let y = 10
+require y > 0, "y must be positive"
+
+// Test: require(warn) passes silently
+require(warn) x > 0, "x should be positive"
+
+println(s: "all requires passed")

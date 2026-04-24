@@ -1,12 +1,12 @@
 // Test the standard library functions
 
 fn main() -> Int {
-    println("Hello from Ferric!");
-    print("The answer is: ");
+    println(s: "Hello from Ferric!")
+    print(s: "The answer is: ")
 
-    let x: Int = 42;
-    let s: Str = int_to_str(x);
-    println(s);
+    let x: Int = 42
+    let s: Str = int_to_str(n: x)
+    println(s: s)
 
     x
 }

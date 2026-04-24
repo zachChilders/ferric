@@ -1,10 +1,12 @@
 //! Unique identifiers used throughout the compiler pipeline.
 
+use serde::{Deserialize, Serialize};
+
 /// Unique identifier for AST nodes.
 ///
 /// Each AST node receives a unique NodeId during parsing, which is used
 /// to associate type information, resolution data, and other metadata.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct NodeId(pub u32);
 
 impl NodeId {
@@ -18,7 +20,7 @@ impl NodeId {
 ///
 /// Created by the Interner to avoid string duplication and enable
 /// fast equality comparison of identifiers.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Symbol(pub u32);
 
 impl Symbol {
@@ -32,7 +34,7 @@ impl Symbol {
 ///
 /// Unique identifier for variable, function, and type definitions.
 /// Used by the resolver to track which definition each name reference points to.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct DefId(pub u32);
 
 impl DefId {

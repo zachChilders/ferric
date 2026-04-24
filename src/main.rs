@@ -13,6 +13,14 @@ use std::process;
 fn main() {
     let args: Vec<String> = env::args().collect();
 
+    // --dump-ast takes priority and bypasses the rest of the pipeline. It must
+    // appear as the first argument; any subsequent positional argument is
+    // treated as the source file.
+    if args.len() == 3 && args[1] == "--dump-ast" {
+        dump_ast(&args[2]);
+        return;
+    }
+
     if args.len() == 1 {
         // No arguments - start REPL
         run_repl();
@@ -21,9 +29,36 @@ fn main() {
         run_file(&args[1]);
     } else {
         eprintln!("Usage: ferric [file]");
-        eprintln!("  ferric          Start interactive REPL");
-        eprintln!("  ferric <file>   Run a Ferric source file");
+        eprintln!("  ferric                       Start interactive REPL");
+        eprintln!("  ferric <file>                Run a Ferric source file");
+        eprintln!("  ferric --dump-ast <file>     Print the parsed AST as JSON");
         process::exit(2);
+    }
+}
+
+/// Runs the lexer + parser only and prints the AST as pretty-printed JSON.
+///
+/// External tools (LSPs, formatters, linters) consume Ferric's AST through
+/// this entry point. No later stage runs.
+fn dump_ast(filename: &str) {
+    let source = fs::read_to_string(filename)
+        .unwrap_or_else(|e| {
+            eprintln!("Error reading file '{}': {}", filename, e);
+            process::exit(1);
+        });
+
+    let mut interner = Interner::new();
+    let lex_result = lex(&source, &mut interner);
+    let parse_result = parse(&lex_result);
+
+    match ferric_common::ast_to_json(&parse_result) {
+        Ok(json) => {
+            println!("{}", json);
+        }
+        Err(e) => {
+            eprintln!("Error serialising AST: {}", e);
+            process::exit(1);
+        }
     }
 }
 
@@ -41,11 +76,16 @@ fn run_file(filename: &str) {
     let mut natives = NativeRegistry::new();
     register_stdlib(&mut natives, &mut interner);
 
-    // Collect native function symbols for the resolver
-    let native_symbols: Vec<Symbol> = vec![
-        interner.intern("println"),
-        interner.intern("print"),
-        interner.intern("int_to_str"),
+    // Native function info: (fn_name, param_names) for named-arg validation in resolver
+    let native_fns: Vec<(Symbol, Vec<Symbol>)> = vec![
+        (interner.intern("println"),         vec![interner.intern("s")]),
+        (interner.intern("print"),           vec![interner.intern("s")]),
+        (interner.intern("int_to_str"),      vec![interner.intern("n")]),
+        (interner.intern("float_to_str"),    vec![interner.intern("n")]),
+        (interner.intern("bool_to_str"),     vec![interner.intern("b")]),
+        (interner.intern("int_to_float"),    vec![interner.intern("n")]),
+        (interner.intern("shell_stdout"),    vec![interner.intern("output")]),
+        (interner.intern("shell_exit_code"), vec![interner.intern("output")]),
     ];
 
     // Lex
@@ -54,8 +94,8 @@ fn run_file(filename: &str) {
     // Parse
     let parse_result = parse(&lex_result);
 
-    // Resolve (with knowledge of native functions)
-    let resolve_result = resolve_with_natives(&parse_result, &native_symbols);
+    // Resolve (with knowledge of native functions and their param names)
+    let resolve_result = resolve_with_natives(&parse_result, &native_fns);
 
     // Type check
     let type_result = typecheck(&parse_result, &resolve_result, &interner);
@@ -68,8 +108,8 @@ fn run_file(filename: &str) {
     // Create VM
     let mut vm: Box<dyn Executor> = Box::new(TreeWalker::new());
 
-    // Create program (M1: just wrap the AST)
-    let program = Program::new(parse_result.items.clone());
+    // Create program (M1: wrap AST + resolve result so VM has canonical_call_args)
+    let program = Program::new(parse_result.items.clone(), resolve_result);
 
     // Execute
     match vm.run(program, natives, &interner) {
@@ -117,10 +157,13 @@ fn run_repl() {
         let mut natives = NativeRegistry::new();
         register_stdlib(&mut natives, &mut interner);
 
-        let native_symbols: Vec<Symbol> = vec![
-            interner.intern("println"),
-            interner.intern("print"),
-            interner.intern("int_to_str"),
+        let native_fns: Vec<(Symbol, Vec<Symbol>)> = vec![
+            (interner.intern("println"),       vec![interner.intern("s")]),
+            (interner.intern("print"),         vec![interner.intern("s")]),
+            (interner.intern("int_to_str"),    vec![interner.intern("n")]),
+            (interner.intern("float_to_str"),  vec![interner.intern("n")]),
+            (interner.intern("bool_to_str"),   vec![interner.intern("b")]),
+            (interner.intern("int_to_float"),  vec![interner.intern("n")]),
         ];
 
         // Parse and evaluate the input
@@ -144,7 +187,7 @@ fn run_repl() {
             continue;
         }
 
-        let resolve_result = resolve_with_natives(&parse_result, &native_symbols);
+        let resolve_result = resolve_with_natives(&parse_result, &native_fns);
 
         if !resolve_result.errors.is_empty() {
             for error in &resolve_result.errors {
@@ -165,7 +208,7 @@ fn run_repl() {
         }
 
         // Execute
-        let program = Program::new(parse_result.items.clone());
+        let program = Program::new(parse_result.items.clone(), resolve_result);
         let mut vm: Box<dyn Executor> = Box::new(TreeWalker::new());
 
         match vm.run(program, natives, &interner) {
@@ -178,6 +221,10 @@ fn run_repl() {
                     Value::Bool(b) => println!("{}", b),
                     Value::Str(s) => println!("\"{}\"", s),
                     Value::Fn(_) => println!("<function>"),
+                    Value::Closure(_) => println!("<closure>"),
+                    Value::ShellOutput(out) => {
+                        println!("ShellOutput {{ exit_code: {}, stdout: {:?} }}", out.exit_code, out.stdout)
+                    }
                 }
             }
             Err(e) => {
