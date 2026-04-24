@@ -8,7 +8,7 @@
 use std::collections::HashMap;
 use ferric_common::{
     Program, ParseResult, ResolveResult, Symbol, Span, DefId,
-    Item, Stmt, Expr, Literal, BinOp, UnOp,
+    Item, Stmt, Expr, Literal, BinOp, UnOp, Interner,
 };
 use ferric_stdlib::{NativeRegistry, NativeValue, NativeFn};
 
@@ -24,7 +24,7 @@ pub trait Executor {
     /// Executes a program with the given native function registry.
     ///
     /// Returns the result value or a runtime error.
-    fn run(&mut self, program: Program, natives: NativeRegistry) -> Result<Value, RuntimeError>;
+    fn run(&mut self, program: Program, natives: NativeRegistry, interner: &Interner) -> Result<Value, RuntimeError>;
 }
 
 /// Tree-walking interpreter implementation.
@@ -41,6 +41,8 @@ pub struct TreeWalker {
     resolve: ResolveResult,
     /// Native function registry
     natives: NativeRegistry,
+    /// String interner for resolving string literals
+    interner: Interner,
     /// DefId generator
     next_def_id: u32,
 }
@@ -54,6 +56,7 @@ impl TreeWalker {
             ast_items: Vec::new(),
             resolve: ResolveResult::new(HashMap::new(), HashMap::new(), HashMap::new(), Vec::new()),
             natives: NativeRegistry::new(),
+            interner: Interner::new(),
             next_def_id: 0,
         }
     }
@@ -66,8 +69,9 @@ impl Default for TreeWalker {
 }
 
 impl Executor for TreeWalker {
-    fn run(&mut self, program: Program, natives: NativeRegistry) -> Result<Value, RuntimeError> {
+    fn run(&mut self, program: Program, natives: NativeRegistry, interner: &Interner) -> Result<Value, RuntimeError> {
         self.natives = natives;
+        self.interner = interner.clone();
         self.ast_items = program.items.clone();
 
         // For M1, we need to also run resolve to get the resolution info
@@ -343,10 +347,10 @@ impl TreeWalker {
         match lit {
             Literal::Int(n) => Ok(Value::Int(*n)),
             Literal::Bool(b) => Ok(Value::Bool(*b)),
-            Literal::Str(_s) => {
-                // For now, return a simple string
-                // In a full implementation, we'd look up the interned string
-                Ok(Value::Str("string".to_string()))
+            Literal::Str(sym) => {
+                // Resolve the string from the interner
+                let s = self.interner.resolve(*sym);
+                Ok(Value::Str(s.to_string()))
             }
             Literal::Unit => Ok(Value::Unit),
         }
@@ -755,14 +759,21 @@ mod tests {
         let program = Program::new(items);
         let mut vm = TreeWalker::new();
         let natives = NativeRegistry::new();
+        let interner = Interner::new();
 
-        let result = vm.run(program, natives).unwrap();
+        let result = vm.run(program, natives, &interner).unwrap();
         assert_eq!(result, Value::Int(7));
     }
 
     #[test]
     fn test_string_concatenation() {
         // "hello" + " " + "world"
+        // First, set up an interner with the strings
+        let mut interner = Interner::new();
+        let hello_sym = interner.intern("hello");
+        let space_sym = interner.intern(" ");
+        let world_sym = interner.intern("world");
+
         let items = vec![
             Item::Script {
                 stmt: Stmt::Expr {
@@ -771,12 +782,12 @@ mod tests {
                         left: Box::new(Expr::Binary {
                             op: BinOp::Add,
                             left: Box::new(Expr::Literal {
-                                value: Literal::Str(make_sym(0)),
+                                value: Literal::Str(hello_sym),
                                 id: make_node_id(0),
                                 span: make_span(),
                             }),
                             right: Box::new(Expr::Literal {
-                                value: Literal::Str(make_sym(1)),
+                                value: Literal::Str(space_sym),
                                 id: make_node_id(1),
                                 span: make_span(),
                             }),
@@ -784,7 +795,7 @@ mod tests {
                             span: make_span(),
                         }),
                         right: Box::new(Expr::Literal {
-                            value: Literal::Str(make_sym(2)),
+                            value: Literal::Str(world_sym),
                             id: make_node_id(3),
                             span: make_span(),
                         }),
@@ -801,10 +812,8 @@ mod tests {
         let mut vm = TreeWalker::new();
         let natives = NativeRegistry::new();
 
-        let result = vm.run(program, natives).unwrap();
-        // Note: string literals are simplified in our implementation
-        // Each literal returns "string", so 3 concatenations = "stringstringstring"
-        assert_eq!(result, Value::Str("stringstringstring".to_string()));
+        let result = vm.run(program, natives, &interner).unwrap();
+        assert_eq!(result, Value::Str("hello world".to_string()));
     }
 
     #[test]
@@ -837,8 +846,9 @@ mod tests {
         let program = Program::new(items);
         let mut vm = TreeWalker::new();
         let natives = NativeRegistry::new();
+        let interner = Interner::new();
 
-        let result = vm.run(program, natives).unwrap();
+        let result = vm.run(program, natives, &interner).unwrap();
         assert_eq!(result, Value::Bool(false));
     }
 
@@ -876,8 +886,9 @@ mod tests {
         let program = Program::new(items);
         let mut vm = TreeWalker::new();
         let natives = NativeRegistry::new();
+        let interner = Interner::new();
 
-        let result = vm.run(program, natives).unwrap();
+        let result = vm.run(program, natives, &interner).unwrap();
         assert_eq!(result, Value::Int(1));
     }
 
@@ -911,8 +922,9 @@ mod tests {
         let program = Program::new(items);
         let mut vm = TreeWalker::new();
         let natives = NativeRegistry::new();
+        let interner = Interner::new();
 
-        let result = vm.run(program, natives);
+        let result = vm.run(program, natives, &interner);
         assert!(matches!(result, Err(RuntimeError::DivisionByZero { .. })));
     }
 

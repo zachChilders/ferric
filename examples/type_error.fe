@@ -1,0 +1,2 @@
+// Test type mismatch error
+let x: Int = "hello"

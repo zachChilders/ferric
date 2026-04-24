@@ -1,0 +1,2 @@
+// Test undefined variable error
+let x = y + 1

@@ -1,200 +1,222 @@
-use ferric_common::{Interner, Program};
+use ferric_common::{Interner, Program, LexResult, ParseResult, ResolveResult, TypeResult, Symbol};
 use ferric_lexer::lex;
 use ferric_parser::parse;
-use ferric_resolve::resolve;
+use ferric_resolve::resolve_with_natives;
 use ferric_typecheck::typecheck;
-use ferric_vm::{Executor, TreeWalker};
-use ferric_stdlib::NativeRegistry;
+use ferric_vm::{Executor, TreeWalker, Value};
+use ferric_stdlib::{NativeRegistry, register_stdlib};
+use ferric_diagnostics::Renderer;
 use std::env;
 use std::fs;
 use std::process;
 
 fn main() {
-    // Get filename from command line args
     let args: Vec<String> = env::args().collect();
 
-    let filename = if args.len() > 1 {
-        &args[1]
+    if args.len() == 1 {
+        // No arguments - start REPL
+        run_repl();
+    } else if args.len() == 2 {
+        // One argument - run file
+        run_file(&args[1]);
     } else {
-        "examples/test.fe"
-    };
+        eprintln!("Usage: ferric [file]");
+        eprintln!("  ferric          Start interactive REPL");
+        eprintln!("  ferric <file>   Run a Ferric source file");
+        process::exit(2);
+    }
+}
 
-    println!("=== Ferric Compiler - M1 Progress ===");
-    println!("File: {}\n", filename);
-
-    // Read the source file
-    let source = match fs::read_to_string(filename) {
-        Ok(content) => content,
-        Err(err) => {
-            eprintln!("Error reading file '{}': {}", filename, err);
-            eprintln!("\nUsage: cargo run [file.fe]");
-            eprintln!("Example: cargo run examples/test.fe");
+fn run_file(filename: &str) {
+    let source = fs::read_to_string(filename)
+        .unwrap_or_else(|e| {
+            eprintln!("Error reading file '{}': {}", filename, e);
             process::exit(1);
-        }
-    };
+        });
 
-    // Create an interner for string interning
+    // Create interner
     let mut interner = Interner::new();
 
-    println!("Source code:");
-    println!("{}", "=".repeat(60));
-    println!("{}", source);
-    println!("{}", "=".repeat(60));
-    println!();
+    // Register stdlib BEFORE lexing so symbol IDs match
+    let mut natives = NativeRegistry::new();
+    register_stdlib(&mut natives, &mut interner);
 
-    // Lex the source
+    // Collect native function symbols for the resolver
+    let native_symbols: Vec<Symbol> = vec![
+        interner.intern("println"),
+        interner.intern("print"),
+        interner.intern("int_to_str"),
+    ];
+
+    // Lex
     let lex_result = lex(&source, &mut interner);
 
-    println!("📝 Lexer Results:");
-    println!("  Tokens: {}", lex_result.tokens.len());
-    println!("  Errors: {}", lex_result.errors.len());
-
-    if !lex_result.errors.is_empty() {
-        println!("\n❌ Lexer Errors:");
-        for err in &lex_result.errors {
-            println!("  - {} at position {}", err.description(), err.span().start);
-        }
-        println!();
-    } else {
-        println!("  ✓ Lexing successful!");
-        println!();
-    }
-
-    // Parse the tokens
+    // Parse
     let parse_result = parse(&lex_result);
 
-    println!("🌲 Parser Results:");
-    println!("  Top-level items: {}", parse_result.items.len());
-    println!("  Errors: {}", parse_result.errors.len());
+    // Resolve (with knowledge of native functions)
+    let resolve_result = resolve_with_natives(&parse_result, &native_symbols);
 
-    if !parse_result.errors.is_empty() {
-        println!("\n❌ Parser Errors:");
-        for err in &parse_result.errors {
-            println!("  - {} at position {}", err.description(), err.span().start);
-        }
-        println!();
-    } else {
-        println!("  ✓ Parsing successful!");
-        println!();
-    }
-
-    // Print AST summary
-    if parse_result.errors.is_empty() && !parse_result.items.is_empty() {
-        println!("📋 AST Summary:");
-
-        let mut script_count = 0;
-        let mut fn_count = 0;
-
-        for item in &parse_result.items {
-            match item {
-                ferric_common::Item::FnDef { name, params, ret_ty, .. } => {
-                    let name_str = interner.resolve(*name);
-                    let param_count = params.len();
-                    let ret_type = match ret_ty {
-                        ferric_common::TypeAnnotation::Named(sym) => interner.resolve(*sym),
-                    };
-                    println!("  fn {}({} params) -> {}", name_str, param_count, ret_type);
-                    fn_count += 1;
-                }
-                ferric_common::Item::Script { stmt, .. } => {
-                    script_count += 1;
-                    match stmt {
-                        ferric_common::Stmt::Let { name, .. } => {
-                            let name_str = interner.resolve(*name);
-                            println!("  let {} = ...", name_str);
-                        }
-                        ferric_common::Stmt::Expr { .. } => {
-                            println!("  <expression>");
-                        }
-                    }
-                }
-            }
-        }
-
-        println!();
-        println!("  Summary: {} function(s), {} script statement(s)", fn_count, script_count);
-        println!();
-    }
-
-    // Perform name resolution
-    let resolve_result = resolve(&parse_result);
-
-    println!("🔍 Name Resolution Results:");
-    println!("  Resolutions: {}", resolve_result.resolutions.len());
-    println!("  Variable slots: {}", resolve_result.def_slots.len());
-    println!("  Function slots: {}", resolve_result.fn_slots.len());
-    println!("  Errors: {}", resolve_result.errors.len());
-
-    if !resolve_result.errors.is_empty() {
-        println!("\n❌ Resolution Errors:");
-        for err in &resolve_result.errors {
-            println!("  - {} at position {}", err.description(), err.span().start);
-        }
-        println!();
-    } else {
-        println!("  ✓ Name resolution successful!");
-        println!();
-    }
-
-    // Perform type checking
+    // Type check
     let type_result = typecheck(&parse_result, &resolve_result, &interner);
 
-    println!("🔧 Type Checking Results:");
-    println!("  Node types: {}", type_result.node_types.len());
-    println!("  Errors: {}", type_result.errors.len());
-
-    if !type_result.errors.is_empty() {
-        println!("\n❌ Type Errors:");
-        for err in &type_result.errors {
-            println!("  - {} at position {}", err.description(), err.span().start);
-        }
-        println!();
-    } else {
-        println!("  ✓ Type checking successful!");
-        println!();
-    }
-
-    // Execute the program if all stages succeeded
-    if lex_result.errors.is_empty() && parse_result.errors.is_empty() && resolve_result.errors.is_empty() && type_result.errors.is_empty() {
-        println!("🚀 VM Execution:");
-
-        // Create the program from the AST
-        let program = Program::new(parse_result.items.clone());
-
-        // Create a native function registry (empty for now)
-        let natives = NativeRegistry::new();
-
-        // Create the VM and execute (Rule 6: use Executor trait, not TreeWalker directly)
-        let mut vm: Box<dyn Executor> = Box::new(TreeWalker::new());
-
-        match vm.run(program, natives) {
-            Ok(result) => {
-                println!("  ✓ Execution successful!");
-                println!("  Result: {:?}", result);
-                println!();
-            }
-            Err(err) => {
-                println!("  ❌ Runtime Error:");
-                println!("  {:?}", err);
-                println!();
-                process::exit(1);
-            }
-        }
-    }
-
-    // Summary
-    println!("=== Summary ===");
-    if lex_result.errors.is_empty() && parse_result.errors.is_empty() && resolve_result.errors.is_empty() && type_result.errors.is_empty() {
-        println!("✅ All stages completed successfully!");
-        println!("\n📌 Current pipeline:");
-        println!("  ✓ Lexer: Tokenizes source code");
-        println!("  ✓ Parser: Builds AST with proper precedence");
-        println!("  ✓ Name Resolution: Maps variables to definitions");
-        println!("  ✓ Type Checking: Verifies type safety (M1 with Unknown escape hatch)");
-        println!("  ✓ VM/Execution: Tree-walking interpreter");
-    } else {
-        println!("❌ Compilation failed with {} error(s)",
-                 lex_result.errors.len() + parse_result.errors.len() + resolve_result.errors.len() + type_result.errors.len());
+    // Report errors
+    if report_errors(&source, &lex_result, &parse_result, &resolve_result, &type_result) {
         process::exit(1);
     }
+
+    // Create VM
+    let mut vm: Box<dyn Executor> = Box::new(TreeWalker::new());
+
+    // Create program (M1: just wrap the AST)
+    let program = Program::new(parse_result.items.clone());
+
+    // Execute
+    match vm.run(program, natives, &interner) {
+        Ok(_) => {
+            // Success
+            process::exit(0);
+        }
+        Err(e) => {
+            let renderer = Renderer::new(source);
+            eprintln!("{}", renderer.render_runtime_error(&e));
+            process::exit(1);
+        }
+    }
+}
+
+fn run_repl() {
+    use std::io::{self, Write};
+
+    println!("Ferric REPL v0.1.0");
+    println!("Type expressions to evaluate, or 'exit' to quit");
+    println!();
+
+    loop {
+        print!(">> ");
+        io::stdout().flush().unwrap();
+
+        let mut input = String::new();
+        if io::stdin().read_line(&mut input).is_err() {
+            break;
+        }
+
+        let input = input.trim();
+
+        if input.is_empty() {
+            continue;
+        }
+
+        if input == "exit" || input == "quit" {
+            println!("Goodbye!");
+            break;
+        }
+
+        // Fresh state for each evaluation
+        let mut interner = Interner::new();
+        let mut natives = NativeRegistry::new();
+        register_stdlib(&mut natives, &mut interner);
+
+        let native_symbols: Vec<Symbol> = vec![
+            interner.intern("println"),
+            interner.intern("print"),
+            interner.intern("int_to_str"),
+        ];
+
+        // Parse and evaluate the input
+        let lex_result = lex(input, &mut interner);
+
+        if !lex_result.errors.is_empty() {
+            for error in &lex_result.errors {
+                let renderer = Renderer::new(input.to_string());
+                eprintln!("{}", renderer.render_lex_error(error));
+            }
+            continue;
+        }
+
+        let parse_result = parse(&lex_result);
+
+        if !parse_result.errors.is_empty() {
+            for error in &parse_result.errors {
+                let renderer = Renderer::new(input.to_string());
+                eprintln!("{}", renderer.render_parse_error(error));
+            }
+            continue;
+        }
+
+        let resolve_result = resolve_with_natives(&parse_result, &native_symbols);
+
+        if !resolve_result.errors.is_empty() {
+            for error in &resolve_result.errors {
+                let renderer = Renderer::new(input.to_string());
+                eprintln!("{}", renderer.render_resolve_error(error));
+            }
+            continue;
+        }
+
+        let type_result = typecheck(&parse_result, &resolve_result, &interner);
+
+        if !type_result.errors.is_empty() {
+            for error in &type_result.errors {
+                let renderer = Renderer::new(input.to_string());
+                eprintln!("{}", renderer.render_type_error(error));
+            }
+            continue;
+        }
+
+        // Execute
+        let program = Program::new(parse_result.items.clone());
+        let mut vm: Box<dyn Executor> = Box::new(TreeWalker::new());
+
+        match vm.run(program, natives, &interner) {
+            Ok(value) => {
+                // Print the result (except Unit)
+                match value {
+                    Value::Unit => {},
+                    Value::Int(n) => println!("{}", n),
+                    Value::Float(f) => println!("{}", f),
+                    Value::Bool(b) => println!("{}", b),
+                    Value::Str(s) => println!("\"{}\"", s),
+                    Value::Fn(_) => println!("<function>"),
+                }
+            }
+            Err(e) => {
+                let renderer = Renderer::new(input.to_string());
+                eprintln!("{}", renderer.render_runtime_error(&e));
+            }
+        }
+    }
+}
+
+fn report_errors(
+    source: &str,
+    lex: &LexResult,
+    parse: &ParseResult,
+    resolve: &ResolveResult,
+    types: &TypeResult,
+) -> bool {
+    let renderer = Renderer::new(source.to_string());
+    let mut has_errors = false;
+
+    for error in &lex.errors {
+        eprintln!("{}", renderer.render_lex_error(error));
+        has_errors = true;
+    }
+
+    for error in &parse.errors {
+        eprintln!("{}", renderer.render_parse_error(error));
+        has_errors = true;
+    }
+
+    for error in &resolve.errors {
+        eprintln!("{}", renderer.render_resolve_error(error));
+        has_errors = true;
+    }
+
+    for error in &types.errors {
+        eprintln!("{}", renderer.render_type_error(error));
+        has_errors = true;
+    }
+
+    has_errors
 }

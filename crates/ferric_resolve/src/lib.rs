@@ -20,7 +20,21 @@ use ferric_common::{
 /// - Function slot assignments for functions
 /// - Any resolution errors encountered
 pub fn resolve(ast: &ParseResult) -> ResolveResult {
+    resolve_with_natives(ast, &[])
+}
+
+/// Name resolution with support for native functions.
+///
+/// This variant allows registering native function names as pre-defined,
+/// preventing undefined variable errors for native function calls.
+pub fn resolve_with_natives(ast: &ParseResult, native_names: &[Symbol]) -> ResolveResult {
     let mut resolver = Resolver::new();
+
+    // Pre-register native functions in the global scope
+    for &name in native_names {
+        resolver.register_native(name);
+    }
+
     resolver.resolve_program(ast);
     resolver.into_result()
 }
@@ -167,10 +181,39 @@ impl Resolver {
         None
     }
 
+    /// Registers a native function as a pre-defined name.
+    ///
+    /// This creates a binding in the global scope for the native function,
+    /// preventing undefined variable errors when it's called.
+    fn register_native(&mut self, name: Symbol) {
+        // Ensure global scope exists
+        if self.scopes.is_empty() {
+            self.push_scope();
+        }
+
+        let def_id = self.def_id_gen.next();
+
+        // Add to global scope (first scope in the stack)
+        if let Some(scope) = self.scopes.first_mut() {
+            scope.bindings.insert(name, Binding {
+                def_id,
+                mutable: false,
+                span: Span::new(0, 0), // Native functions don't have source spans
+            });
+        }
+
+        // Assign a function slot to the native function
+        let fn_slot = self.next_fn_slot;
+        self.next_fn_slot += 1;
+        self.fn_slots.insert(def_id, fn_slot);
+    }
+
     /// Resolves the entire program.
     fn resolve_program(&mut self, ast: &ParseResult) {
-        // Create a top-level scope for the program
-        self.push_scope();
+        // Create a top-level scope for the program (or reuse if natives were registered)
+        if self.scopes.is_empty() {
+            self.push_scope();
+        }
 
         for item in &ast.items {
             self.resolve_item(item);

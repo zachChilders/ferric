@@ -9,4 +9,4 @@ fn max(a: Int, b: Int) -> Int {
 
 let x = 10
 let y = 20
-max(x, y)
+println(int_to_str(max(x, y)))

@@ -1,0 +1,4 @@
+// Test file to demonstrate diagnostics renderer
+let x = 5
+let y = @  // Unexpected character error
+let x = 10  // Duplicate definition error

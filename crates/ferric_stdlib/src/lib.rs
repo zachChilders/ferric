@@ -34,6 +34,7 @@ pub enum NativeValue {
 /// The VM queries this registry when calling functions by name.
 /// If a function is found here, it's executed as a native function.
 /// Otherwise, the VM looks for a user-defined function in the AST.
+#[derive(Clone)]
 pub struct NativeRegistry {
     functions: HashMap<Symbol, NativeFn>,
 }
@@ -60,5 +61,343 @@ impl NativeRegistry {
 impl Default for NativeRegistry {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+// ============================================================================
+// Helper Functions
+// ============================================================================
+
+/// Checks that the argument count matches the expected count.
+fn check_arg_count(args: &[NativeValue], expected: usize) -> Result<(), String> {
+    if args.len() != expected {
+        Err(format!("expected {} argument(s), got {}", expected, args.len()))
+    } else {
+        Ok(())
+    }
+}
+
+/// Extracts a string from a NativeValue or returns an error.
+fn expect_str(value: &NativeValue) -> Result<&String, String> {
+    match value {
+        NativeValue::Str(s) => Ok(s),
+        _ => Err(format!("expected string, got {:?}", value)),
+    }
+}
+
+/// Extracts an integer from a NativeValue or returns an error.
+fn expect_int(value: &NativeValue) -> Result<i64, String> {
+    match value {
+        NativeValue::Int(n) => Ok(*n),
+        _ => Err(format!("expected int, got {:?}", value)),
+    }
+}
+
+// ============================================================================
+// Built-in Functions
+// ============================================================================
+
+/// Prints a string followed by a newline to stdout.
+///
+/// # Arguments
+/// * `s: Str` - The string to print
+///
+/// # Returns
+/// * `Unit`
+fn builtin_println(args: &[NativeValue]) -> Result<NativeValue, String> {
+    check_arg_count(args, 1)?;
+    let s = expect_str(&args[0])?;
+    println!("{}", s);
+    Ok(NativeValue::Unit)
+}
+
+/// Prints a string without a newline to stdout.
+///
+/// # Arguments
+/// * `s: Str` - The string to print
+///
+/// # Returns
+/// * `Unit`
+fn builtin_print(args: &[NativeValue]) -> Result<NativeValue, String> {
+    check_arg_count(args, 1)?;
+    let s = expect_str(&args[0])?;
+    print!("{}", s);
+    Ok(NativeValue::Unit)
+}
+
+/// Converts an integer to its string representation.
+///
+/// # Arguments
+/// * `n: Int` - The integer to convert
+///
+/// # Returns
+/// * `Str` - The string representation of the integer
+fn builtin_int_to_str(args: &[NativeValue]) -> Result<NativeValue, String> {
+    check_arg_count(args, 1)?;
+    let n = expect_int(&args[0])?;
+    Ok(NativeValue::Str(n.to_string()))
+}
+
+// ============================================================================
+// Standard Library Registration
+// ============================================================================
+
+/// Registers all M1 standard library functions with the given registry.
+///
+/// This function should be called at startup to populate the native function
+/// registry with all built-in functions.
+///
+/// # Arguments
+/// * `registry` - The native function registry to populate
+/// * `interner` - The string interner for creating function name symbols
+pub fn register_stdlib(registry: &mut NativeRegistry, interner: &mut ferric_common::Interner) {
+    let println_sym = interner.intern("println");
+    registry.register(println_sym, builtin_println);
+
+    let print_sym = interner.intern("print");
+    registry.register(print_sym, builtin_print);
+
+    let int_to_str_sym = interner.intern("int_to_str");
+    registry.register(int_to_str_sym, builtin_int_to_str);
+}
+
+// ============================================================================
+// Tests
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_sym(n: u32) -> Symbol {
+        Symbol::new(n)
+    }
+
+    #[test]
+    fn test_native_registry_new() {
+        // Test that NativeRegistry::new() creates an empty registry
+        let registry = NativeRegistry::new();
+        let sym = make_sym(0);
+        assert!(registry.get(sym).is_none());
+    }
+
+    #[test]
+    fn test_native_registry_register() {
+        // Test that register() adds a function
+        let mut registry = NativeRegistry::new();
+        let sym = make_sym(0);
+
+        registry.register(sym, builtin_println);
+        assert!(registry.get(sym).is_some());
+    }
+
+    #[test]
+    fn test_native_registry_get() {
+        // Test that get() retrieves a registered function
+        let mut registry = NativeRegistry::new();
+        let sym = make_sym(0);
+
+        registry.register(sym, builtin_println);
+        let func = registry.get(sym);
+        assert!(func.is_some());
+    }
+
+    #[test]
+    fn test_native_registry_get_unregistered() {
+        // Test that get() returns None for an unregistered function
+        let registry = NativeRegistry::new();
+        let sym = make_sym(42);
+        assert!(registry.get(sym).is_none());
+    }
+
+    #[test]
+    fn test_register_stdlib() {
+        // Test that register_stdlib() registers all M1 functions
+        let mut registry = NativeRegistry::new();
+        let mut interner = ferric_common::Interner::new();
+
+        register_stdlib(&mut registry, &mut interner);
+
+        // Check that all three functions are registered
+        let println_sym = interner.intern("println");
+        let print_sym = interner.intern("print");
+        let int_to_str_sym = interner.intern("int_to_str");
+
+        assert!(registry.get(println_sym).is_some());
+        assert!(registry.get(print_sym).is_some());
+        assert!(registry.get(int_to_str_sym).is_some());
+    }
+
+    #[test]
+    fn test_builtin_println_valid() {
+        // Test that builtin_println with valid string argument works
+        let args = vec![NativeValue::Str("Hello, world!".to_string())];
+        let result = builtin_println(&args);
+
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), NativeValue::Unit);
+    }
+
+    #[test]
+    fn test_builtin_println_wrong_arg_count() {
+        // Test that builtin_println with wrong arg count returns error
+        let args = vec![];
+        let result = builtin_println(&args);
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("expected 1 argument(s), got 0"));
+    }
+
+    #[test]
+    fn test_builtin_println_wrong_arg_count_too_many() {
+        // Test that builtin_println with too many args returns error
+        let args = vec![
+            NativeValue::Str("Hello".to_string()),
+            NativeValue::Str("World".to_string()),
+        ];
+        let result = builtin_println(&args);
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("expected 1 argument(s), got 2"));
+    }
+
+    #[test]
+    fn test_builtin_println_wrong_arg_type() {
+        // Test that builtin_println with wrong arg type returns error
+        let args = vec![NativeValue::Int(42)];
+        let result = builtin_println(&args);
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("expected string"));
+    }
+
+    #[test]
+    fn test_builtin_print_valid() {
+        // Test that builtin_print works without newline
+        let args = vec![NativeValue::Str("Hello".to_string())];
+        let result = builtin_print(&args);
+
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), NativeValue::Unit);
+    }
+
+    #[test]
+    fn test_builtin_print_wrong_arg_count() {
+        // Test that builtin_print with wrong arg count returns error
+        let args = vec![];
+        let result = builtin_print(&args);
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("expected 1 argument(s), got 0"));
+    }
+
+    #[test]
+    fn test_builtin_print_wrong_arg_type() {
+        // Test that builtin_print with wrong arg type returns error
+        let args = vec![NativeValue::Bool(true)];
+        let result = builtin_print(&args);
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("expected string"));
+    }
+
+    #[test]
+    fn test_builtin_int_to_str() {
+        // Test that builtin_int_to_str(42) returns "42"
+        let args = vec![NativeValue::Int(42)];
+        let result = builtin_int_to_str(&args);
+
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), NativeValue::Str("42".to_string()));
+    }
+
+    #[test]
+    fn test_builtin_int_to_str_negative() {
+        // Test int_to_str with negative number
+        let args = vec![NativeValue::Int(-123)];
+        let result = builtin_int_to_str(&args);
+
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), NativeValue::Str("-123".to_string()));
+    }
+
+    #[test]
+    fn test_builtin_int_to_str_zero() {
+        // Test int_to_str with zero
+        let args = vec![NativeValue::Int(0)];
+        let result = builtin_int_to_str(&args);
+
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), NativeValue::Str("0".to_string()));
+    }
+
+    #[test]
+    fn test_builtin_int_to_str_wrong_arg_count() {
+        // Test that int_to_str with wrong arg count returns error
+        let args = vec![];
+        let result = builtin_int_to_str(&args);
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("expected 1 argument(s), got 0"));
+    }
+
+    #[test]
+    fn test_builtin_int_to_str_wrong_arg_type() {
+        // Test that int_to_str with wrong arg type returns error
+        let args = vec![NativeValue::Str("not an int".to_string())];
+        let result = builtin_int_to_str(&args);
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("expected int"));
+    }
+
+    #[test]
+    fn test_check_arg_count_correct() {
+        // Test helper function with correct arg count
+        let args = vec![NativeValue::Int(1), NativeValue::Int(2)];
+        let result = check_arg_count(&args, 2);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_check_arg_count_wrong() {
+        // Test helper function with wrong arg count
+        let args = vec![NativeValue::Int(1)];
+        let result = check_arg_count(&args, 2);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_expect_str_valid() {
+        // Test expect_str with valid string
+        let value = NativeValue::Str("test".to_string());
+        let result = expect_str(&value);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "test");
+    }
+
+    #[test]
+    fn test_expect_str_invalid() {
+        // Test expect_str with invalid type
+        let value = NativeValue::Int(42);
+        let result = expect_str(&value);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_expect_int_valid() {
+        // Test expect_int with valid integer
+        let value = NativeValue::Int(42);
+        let result = expect_int(&value);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), 42);
+    }
+
+    #[test]
+    fn test_expect_int_invalid() {
+        // Test expect_int with invalid type
+        let value = NativeValue::Str("not an int".to_string());
+        let result = expect_int(&value);
+        assert!(result.is_err());
     }
 }
