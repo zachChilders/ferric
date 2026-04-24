@@ -7,6 +7,7 @@ name = "ferric"
 version = "0.1.0"
 dependencies = [
  "ferric_common",
+ "ferric_compiler",
  "ferric_diagnostics",
  "ferric_lexer",
  "ferric_parser",
@@ -22,6 +23,17 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "ferric_compiler"
+version = "0.1.0"
+dependencies = [
+ "ferric_common",
+ "ferric_lexer",
+ "ferric_parser",
+ "ferric_resolve",
+ "ferric_typecheck",
 ]
 
 [[package]]
@@ -73,7 +85,12 @@ name = "ferric_vm"
 version = "0.1.0"
 dependencies = [
  "ferric_common",
+ "ferric_compiler",
+ "ferric_lexer",
+ "ferric_parser",
+ "ferric_resolve",
  "ferric_stdlib",
+ "ferric_typecheck",
 ]
 
 [[package]]

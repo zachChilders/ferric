@@ -1,9 +1,9 @@
-use ferric_common::{Interner, Program, LexResult, ParseResult, ResolveResult, TypeResult, Symbol};
+use ferric_common::{Interner, LexResult, ParseResult, ResolveResult, TypeResult, Symbol};
 use ferric_lexer::lex;
 use ferric_parser::parse;
 use ferric_resolve::resolve_with_natives;
 use ferric_typecheck::typecheck;
-use ferric_vm::{Executor, TreeWalker, Value};
+use ferric_vm::{BytecodeVM, Executor, Value};
 use ferric_stdlib::{NativeRegistry, register_stdlib};
 use ferric_diagnostics::Renderer;
 use std::env;
@@ -105,11 +105,11 @@ fn run_file(filename: &str) {
         process::exit(1);
     }
 
-    // Create VM
-    let mut vm: Box<dyn Executor> = Box::new(TreeWalker::new());
+    // Compile to bytecode.
+    let program = ferric_compiler::compile(&parse_result, &resolve_result, &type_result, &interner);
 
-    // Create program (M1: wrap AST + resolve result so VM has canonical_call_args)
-    let program = Program::new(parse_result.items.clone(), resolve_result);
+    // Create VM
+    let mut vm: Box<dyn Executor> = Box::new(BytecodeVM::new());
 
     // Execute
     match vm.run(program, natives, &interner) {
@@ -158,12 +158,14 @@ fn run_repl() {
         register_stdlib(&mut natives, &mut interner);
 
         let native_fns: Vec<(Symbol, Vec<Symbol>)> = vec![
-            (interner.intern("println"),       vec![interner.intern("s")]),
-            (interner.intern("print"),         vec![interner.intern("s")]),
-            (interner.intern("int_to_str"),    vec![interner.intern("n")]),
-            (interner.intern("float_to_str"),  vec![interner.intern("n")]),
-            (interner.intern("bool_to_str"),   vec![interner.intern("b")]),
-            (interner.intern("int_to_float"),  vec![interner.intern("n")]),
+            (interner.intern("println"),         vec![interner.intern("s")]),
+            (interner.intern("print"),           vec![interner.intern("s")]),
+            (interner.intern("int_to_str"),      vec![interner.intern("n")]),
+            (interner.intern("float_to_str"),    vec![interner.intern("n")]),
+            (interner.intern("bool_to_str"),     vec![interner.intern("b")]),
+            (interner.intern("int_to_float"),    vec![interner.intern("n")]),
+            (interner.intern("shell_stdout"),    vec![interner.intern("output")]),
+            (interner.intern("shell_exit_code"), vec![interner.intern("output")]),
         ];
 
         // Parse and evaluate the input
@@ -207,9 +209,9 @@ fn run_repl() {
             continue;
         }
 
-        // Execute
-        let program = Program::new(parse_result.items.clone(), resolve_result);
-        let mut vm: Box<dyn Executor> = Box::new(TreeWalker::new());
+        // Compile + execute
+        let program = ferric_compiler::compile(&parse_result, &resolve_result, &type_result, &interner);
+        let mut vm: Box<dyn Executor> = Box::new(BytecodeVM::new());
 
         match vm.run(program, natives, &interner) {
             Ok(value) => {
@@ -220,8 +222,7 @@ fn run_repl() {
                     Value::Float(f) => println!("{}", f),
                     Value::Bool(b) => println!("{}", b),
                     Value::Str(s) => println!("\"{}\"", s),
-                    Value::Fn(_) => println!("<function>"),
-                    Value::Closure(_) => println!("<closure>"),
+                    Value::Fn(_) | Value::NativeFn(_) => println!("<function>"),
                     Value::ShellOutput(out) => {
                         println!("ShellOutput {{ exit_code: {}, stdout: {:?} }}", out.exit_code, out.stdout)
                     }

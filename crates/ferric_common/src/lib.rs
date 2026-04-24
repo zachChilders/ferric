@@ -15,6 +15,7 @@ pub use types::*;
 pub use errors::*;
 pub use results::*;
 pub use ast::*;
+pub use bytecode::*;
 
 mod span;
 mod identifiers;
@@ -24,6 +25,7 @@ mod types;
 mod errors;
 mod results;
 mod ast;
+mod bytecode;
 
 /// Serialises a `ParseResult` as pretty-printed JSON.
 ///
@@ -76,6 +78,8 @@ const _: fn() = || {
     check::<TypeResult>();
     check::<Program>();
     check::<Chunk>();
+    check::<Op>();
+    check::<Constant>();
 };
 
 #[cfg(test)]

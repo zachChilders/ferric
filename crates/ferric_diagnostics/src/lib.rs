@@ -334,15 +334,9 @@ impl Renderer {
                     found
                 )
             }
-            RuntimeError::BreakSignal { span } => {
+            RuntimeError::StackUnderflow { span } => {
                 format!(
-                    "error at line {}: unexpected break (internal error)",
-                    self.span_to_line(*span)
-                )
-            }
-            RuntimeError::ContinueSignal { span } => {
-                format!(
-                    "error at line {}: unexpected continue (internal error)",
+                    "error at line {}: stack underflow (internal error)",
                     self.span_to_line(*span)
                 )
             }

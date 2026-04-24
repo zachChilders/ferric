@@ -2,14 +2,7 @@
 
 use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
-use crate::{Token, LexError, ParseError, ResolveError, TypeError, NodeId, DefId, Ty, Item, NamedArg};
-
-/// Placeholder for bytecode Chunk type (defined in ferric_vm)
-///
-/// This will be defined by the VM crate. We use a unit struct here
-/// to allow ferric_common to compile independently.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Chunk;
+use crate::{Token, LexError, ParseError, ResolveError, TypeError, NodeId, DefId, Ty, Item, NamedArg, Chunk};
 
 /// Result of the lexing stage.
 ///
@@ -128,20 +121,28 @@ impl TypeResult {
 
 /// A compiled Ferric program ready for execution.
 ///
-/// M1: Contains the AST items directly for tree-walking interpretation.
-/// M3: Will be replaced with bytecode chunks for bytecode VM execution.
+/// A `Program` is pure bytecode: a list of `Chunk`s (one per user function,
+/// plus the entry chunk for top-level script code) and an `entry` index.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Program {
-    /// M1: AST items for tree-walking
-    /// M3: Will become bytecode chunks
-    pub items: Vec<Item>,
-    /// Resolve result carried so the VM has access to canonical_call_args
-    pub resolve: ResolveResult,
+    /// Bytecode chunks (one per function, plus the entry chunk for top-level code).
+    pub chunks: Vec<Chunk>,
+    /// Index into `chunks` of the entry point.
+    pub entry: u16,
 }
 
 impl Program {
-    /// Creates a new Program from AST items and resolve result (M1).
-    pub fn new(items: Vec<Item>, resolve: ResolveResult) -> Self {
-        Self { items, resolve }
+    /// Creates a Program from the given chunks and entry index.
+    pub fn new(chunks: Vec<Chunk>, entry: u16) -> Self {
+        Self { chunks, entry }
     }
 }
+
+// `Item` and `NamedArg` remain part of the public API of `ferric_common` —
+// later stages use them — but neither appears in `Program` anymore. The
+// `_Keep*` aliases silence unused-import warnings inside `results.rs` without
+// affecting the public re-export surface.
+#[allow(dead_code)]
+type _KeepItem = Item;
+#[allow(dead_code)]
+type _KeepNamedArg = NamedArg;

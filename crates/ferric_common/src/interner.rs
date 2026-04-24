@@ -49,6 +49,16 @@ impl Interner {
     pub fn resolve(&self, sym: Symbol) -> &str {
         &self.strings[sym.0 as usize]
     }
+
+    /// Looks up a string without mutating the interner. Returns `None` if the
+    /// string has not been interned yet.
+    ///
+    /// Use this from stages that only have `&Interner` and need to discover
+    /// whether a well-known name (e.g. a stdlib native) has already been
+    /// registered.
+    pub fn lookup(&self, s: &str) -> Option<Symbol> {
+        self.map.get(s).copied()
+    }
 }
 
 impl Default for Interner {

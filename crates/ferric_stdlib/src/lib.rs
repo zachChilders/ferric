@@ -224,6 +224,51 @@ fn builtin_shell_exit_code(args: &[NativeValue]) -> Result<NativeValue, String> 
     }
 }
 
+/// Name used by the compiler when lowering `$ ...` shell expressions. Not
+/// a user-visible identifier (the `__` prefix keeps it out of the happy path
+/// of typo-correction and reserves it as internal ABI between the compiler
+/// and the VM).
+pub const SHELL_EXEC_NATIVE: &str = "__shell_exec";
+
+/// Runs a shell command synchronously and returns a `Value::ShellOutput`.
+///
+/// On Unix this delegates to `sh -c <cmd>`; on Windows to `cmd /C <cmd>`.
+/// On targets without subprocess support (e.g. WASM), returns exit code 126
+/// (the conventional "command not executable" code).
+fn run_shell_command(cmd: &str) -> ShellOutput {
+    #[cfg(any(unix, windows))]
+    {
+        let output = if cfg!(windows) {
+            std::process::Command::new("cmd").arg("/C").arg(cmd).output()
+        } else {
+            std::process::Command::new("sh").arg("-c").arg(cmd).output()
+        };
+        match output {
+            Ok(out) => {
+                let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+                let exit_code = out.status.code().unwrap_or(-1);
+                ShellOutput { stdout, exit_code }
+            }
+            Err(_) => ShellOutput { stdout: String::new(), exit_code: 126 },
+        }
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = cmd;
+        ShellOutput { stdout: String::new(), exit_code: 126 }
+    }
+}
+
+/// Runs a shell command and returns a `ShellOutput`.
+///
+/// This native is emitted by the compiler when lowering `$ cmd @{interp}`
+/// expressions. User code never calls it directly.
+fn builtin_shell_exec(args: &[NativeValue]) -> Result<NativeValue, String> {
+    check_arg_count(args, 1)?;
+    let cmd = expect_str(&args[0])?;
+    Ok(NativeValue::ShellOutput(run_shell_command(cmd)))
+}
+
 // ============================================================================
 // Standard Library Registration
 // ============================================================================
@@ -263,6 +308,11 @@ pub fn register_stdlib(registry: &mut NativeRegistry, interner: &mut ferric_comm
 
     let shell_exit_code_sym = interner.intern("shell_exit_code");
     registry.register(shell_exit_code_sym, builtin_shell_exit_code);
+
+    // M3: compiler-internal shell runner. Interned so the compiler can find
+    // the symbol via `Interner::lookup(SHELL_EXEC_NATIVE)`.
+    let shell_exec_sym = interner.intern(SHELL_EXEC_NATIVE);
+    registry.register(shell_exec_sym, builtin_shell_exec);
 }
 
 // ============================================================================
