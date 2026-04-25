@@ -64,6 +64,11 @@ pub enum Value {
     Variant(u16, Vec<Value>),
     /// Tuple value: elements in declaration order.
     Tuple(Vec<Value>),
+    /// Homogeneous array value.
+    Array(Vec<Value>),
+    /// User-defined closure: function chunk plus the values it captured at
+    /// the moment it was constructed.
+    Closure { fn_idx: u16, captures: Vec<Value> },
 }
 
 impl Value {
@@ -103,6 +108,15 @@ impl Value {
 
     /// Creates a tuple value.
     pub fn new_tuple(elements: Vec<Value>) -> Self { Value::Tuple(elements) }
+
+    /// Creates an array value.
+    pub fn new_array(elements: Vec<Value>) -> Self { Value::Array(elements) }
+
+    /// Creates a closure value referencing chunk `fn_idx` with `captures`
+    /// pre-bound into the leading slots of the call frame.
+    pub fn new_closure(fn_idx: u16, captures: Vec<Value>) -> Self {
+        Value::Closure { fn_idx, captures }
+    }
 }
 
 /// Runtime errors with source location information.
@@ -124,6 +138,10 @@ pub enum RuntimeError {
     WrongArgumentCount { expected: usize, found: usize, span: Span },
     /// A require statement with `Error` mode failed.
     RequireError { span: Span, message: Option<String> },
+    /// Array index outside `[0, len)`.
+    IndexOutOfBounds { index: i64, len: usize, span: Span },
+    /// Receiver of an indexing op was not an array.
+    NotAnArray { found: String, span: Span },
 }
 
 // Compile-time assertion: `Value` must be `Send` so a future async runtime

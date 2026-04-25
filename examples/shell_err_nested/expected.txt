@@ -1,1 +1,5 @@
-error at line 2: nested shell interpolation `@{` is not allowed
+error: nested shell interpolation `@{` is not allowed
+  --> input:2:20
+  |
+2 | let bad = $ echo @{@{x}}
+  |                    ^^

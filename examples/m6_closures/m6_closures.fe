@@ -1,0 +1,18 @@
+// M6: closures with capture analysis
+let bonus = 100
+
+fn apply(f: Int, x: Int) -> Int {
+    // f is unused as a real callable here — see the inline closure below
+    x + f
+}
+
+let add_bonus = |n| n + bonus
+let triple = |n| n * 3
+
+println(s: int_to_str(n: add_bonus(n: 5)))
+println(s: int_to_str(n: triple(n: 7)))
+
+// Nested capture
+let make_adder = |inc| |x| x + inc
+let add10 = make_adder(inc: 10)
+println(s: int_to_str(n: add10(x: 32)))

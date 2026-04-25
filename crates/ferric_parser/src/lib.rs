@@ -191,6 +191,7 @@ impl<'a> Parser<'a> {
             TokenKind::Impl => self.parse_impl_block(),
             TokenKind::Let => self.parse_script_let(),
             TokenKind::Require => self.parse_script_require(),
+            TokenKind::For => self.parse_script_for(),
             _ if self.is_expr_start() => self.parse_script_expr(),
             _ => {
                 let token = self.peek().clone();
@@ -358,6 +359,14 @@ impl<'a> Parser<'a> {
     /// Parses a top-level require statement (script mode).
     fn parse_script_require(&mut self) -> Option<Item> {
         let stmt = self.parse_require_stmt()?;
+        let span = stmt.span();
+        let id = self.node_id_gen.next();
+        Some(Item::Script { stmt, id, span })
+    }
+
+    /// Parses a top-level for-loop (script mode).
+    fn parse_script_for(&mut self) -> Option<Item> {
+        let stmt = self.parse_for_stmt()?;
         let span = stmt.span();
         let id = self.node_id_gen.next();
         Some(Item::Script { stmt, id, span })
@@ -861,9 +870,36 @@ impl<'a> Parser<'a> {
     fn parse_type(&mut self) -> Option<TypeAnnotation> {
         match &self.peek().kind {
             TokenKind::Ident(sym) => {
-                let sym = *sym;
+                let head = *sym;
                 self.advance();
-                Some(TypeAnnotation::Named(sym))
+
+                // Generic type application: `Name<T1, T2, ...>`. The head's
+                // identity (Option, Result, …) is resolved by later stages
+                // that have access to the interner.
+                if self.check(&TokenKind::Lt) {
+                    self.advance(); // '<'
+                    let mut args: Vec<TypeAnnotation> = Vec::new();
+                    if !self.check(&TokenKind::Gt) {
+                        loop {
+                            let arg = self.parse_type()?;
+                            args.push(arg);
+                            if !self.match_token(&TokenKind::Comma) {
+                                break;
+                            }
+                        }
+                    }
+                    let _ = self.expect(TokenKind::Gt, "'>'");
+                    return Some(TypeAnnotation::Generic { head, args });
+                }
+
+                Some(TypeAnnotation::Named(head))
+            }
+            TokenKind::LBracket => {
+                // Array type: `[T]`.
+                self.advance(); // '['
+                let inner = self.parse_type()?;
+                let _ = self.expect(TokenKind::RBracket, "']'");
+                Some(TypeAnnotation::Array(Box::new(inner)))
             }
             _ => {
                 let token = self.peek().clone();
@@ -897,6 +933,14 @@ impl<'a> Parser<'a> {
             // Check if this is a require statement
             if self.check(&TokenKind::Require) {
                 if let Some(stmt) = self.parse_require_stmt() {
+                    stmts.push(stmt);
+                }
+                continue;
+            }
+
+            // Check for a `for x in iter { body }` loop.
+            if self.check(&TokenKind::For) {
+                if let Some(stmt) = self.parse_for_stmt() {
                     stmts.push(stmt);
                 }
                 continue;
@@ -989,7 +1033,9 @@ impl<'a> Parser<'a> {
                 | TokenKind::Continue
                 | TokenKind::Return
                 | TokenKind::Match
-                | TokenKind::OrOr  // closure: || { body }
+                | TokenKind::OrOr      // zero-param closure: || ...
+                | TokenKind::Pipe      // closure: |x| ...
+                | TokenKind::LBracket  // array literal: [1, 2]
                 | TokenKind::ShellLine(_)
         )
     }
@@ -1019,6 +1065,76 @@ impl<'a> Parser<'a> {
         Some(Stmt::Assign {
             target,
             value,
+            id,
+            span,
+        })
+    }
+
+    /// Parses `for var in iter_expr { body }`.
+    ///
+    /// `in` is not a reserved keyword — it's lexed as `Ident`. We accept any
+    /// identifier whose interned name will later be `"in"`; mismatches produce
+    /// an UnexpectedToken error.
+    fn parse_for_stmt(&mut self) -> Option<Stmt> {
+        let start_span = self.peek().span;
+        self.advance(); // 'for'
+
+        let var_id = self.node_id_gen.next();
+        let var = match self.peek().kind {
+            TokenKind::Ident(s) => {
+                self.advance();
+                s
+            }
+            _ => {
+                let tok = self.peek().clone();
+                self.errors.push(ParseError::UnexpectedToken {
+                    expected: "loop variable name".to_string(),
+                    found: tok.kind,
+                    span: tok.span,
+                });
+                return None;
+            }
+        };
+
+        // Expect `in` (an identifier with that text — checked downstream).
+        match self.peek().kind {
+            TokenKind::Ident(_) => {
+                self.advance();
+            }
+            _ => {
+                let tok = self.peek().clone();
+                self.errors.push(ParseError::UnexpectedToken {
+                    expected: "'in'".to_string(),
+                    found: tok.kind,
+                    span: tok.span,
+                });
+                return None;
+            }
+        }
+
+        // Parse iterable in a no-struct-literal context so `for x in arr {`
+        // doesn't try to consume the body brace as a struct literal.
+        let iter = self.with_no_struct_literal(|p| p.parse_expr());
+
+        // Body is a block.
+        if !self.check(&TokenKind::LBrace) {
+            let tok = self.peek().clone();
+            self.errors.push(ParseError::UnexpectedToken {
+                expected: "'{' to start for-loop body".to_string(),
+                found: tok.kind,
+                span: tok.span,
+            });
+            return None;
+        }
+        let body = self.parse_block();
+        let span = start_span.to(body.span());
+        let id = self.node_id_gen.next();
+
+        Some(Stmt::For {
+            var,
+            var_id,
+            iter,
+            body,
             id,
             span,
         })
@@ -1667,6 +1783,23 @@ impl<'a> Parser<'a> {
                     id,
                     span,
                 };
+            } else if self.check(&TokenKind::LBracket) {
+                // Postfix indexing: `expr[index]`.
+                self.advance(); // '['
+                let index = self.with_struct_literal_allowed(|p| p.parse_expr());
+                let end_span = if let Ok(tok) = self.expect(TokenKind::RBracket, "']'") {
+                    tok.span
+                } else {
+                    self.peek().span
+                };
+                let span = expr.span().to(end_span);
+                let id = self.node_id_gen.next();
+                expr = Expr::Index {
+                    array: Box::new(expr),
+                    index: Box::new(index),
+                    id,
+                    span,
+                };
             } else if self.check(&TokenKind::Dot) {
                 self.advance(); // '.'
                 let field_tok = self.peek().clone();
@@ -1951,17 +2084,94 @@ impl<'a> Parser<'a> {
                 first
             }
             TokenKind::LBrace => self.parse_block(),
-            // Zero-parameter closure: || { body }
+            // Zero-parameter closure: `|| body` (body may be a block or expr).
             TokenKind::OrOr => {
                 let start_span = token.span;
                 self.advance(); // consume '||'
-                let body = self.parse_block();
+                let body = self.parse_expr();
                 let span = start_span.to(body.span());
                 Expr::Closure {
                     params: vec![],
                     body: Box::new(body),
                     id,
                     span,
+                }
+            }
+            // Closure with parameters: `|x, y| body` or `|x: Int| body`.
+            TokenKind::Pipe => {
+                let start_span = token.span;
+                self.advance(); // consume opening '|'
+
+                let mut params: Vec<Param> = Vec::new();
+                if !self.check(&TokenKind::Pipe) {
+                    loop {
+                        let param_start = self.peek().span;
+                        let pname = match self.peek().kind {
+                            TokenKind::Ident(s) => {
+                                self.advance();
+                                s
+                            }
+                            _ => {
+                                let tok = self.peek().clone();
+                                self.errors.push(ParseError::UnexpectedToken {
+                                    expected: "closure parameter name".to_string(),
+                                    found: tok.kind,
+                                    span: tok.span,
+                                });
+                                Symbol::new(0)
+                            }
+                        };
+                        let ty = if self.match_token(&TokenKind::Colon) {
+                            self.parse_type().unwrap_or(TypeAnnotation::Infer)
+                        } else {
+                            TypeAnnotation::Infer
+                        };
+                        params.push(Param {
+                            span: param_start.to(self.tokens[self.current.saturating_sub(1)].span),
+                            name: pname,
+                            ty,
+                            default: None,
+                        });
+                        if !self.match_token(&TokenKind::Comma) {
+                            break;
+                        }
+                    }
+                }
+                let _ = self.expect(TokenKind::Pipe, "'|'");
+
+                let body = self.parse_expr();
+                let span = start_span.to(body.span());
+                Expr::Closure {
+                    params,
+                    body: Box::new(body),
+                    id,
+                    span,
+                }
+            }
+            // Array literal: `[]`, `[1, 2, 3]`.
+            TokenKind::LBracket => {
+                let start_span = token.span;
+                self.advance(); // '['
+                let mut elements: Vec<Expr> = Vec::new();
+                if !self.check(&TokenKind::RBracket) {
+                    loop {
+                        let elem =
+                            self.with_struct_literal_allowed(|p| p.parse_expr());
+                        elements.push(elem);
+                        if !self.match_token(&TokenKind::Comma) {
+                            break;
+                        }
+                    }
+                }
+                let end_span = if let Ok(tok) = self.expect(TokenKind::RBracket, "']'") {
+                    tok.span
+                } else {
+                    self.peek().span
+                };
+                Expr::ArrayLit {
+                    elements,
+                    id,
+                    span: start_span.to(end_span),
                 }
             }
             // Shell expression: `$ cmd ...`

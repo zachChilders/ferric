@@ -156,6 +156,23 @@ fn convert_annotation(
                 }
             }
         }
+        TypeAnnotation::Array(inner) => Ty::Array(Box::new(convert_annotation(
+            inner, self_trait, interner, resolve,
+        ))),
+        TypeAnnotation::Generic { head, args } => {
+            let name = interner.resolve(*head);
+            match (name, args.as_slice()) {
+                ("Option", [inner]) => Ty::Option(Box::new(convert_annotation(
+                    inner, self_trait, interner, resolve,
+                ))),
+                ("Result", [ok, err]) => Ty::Result(
+                    Box::new(convert_annotation(ok, self_trait, interner, resolve)),
+                    Box::new(convert_annotation(err, self_trait, interner, resolve)),
+                ),
+                _ => Ty::Var(ferric_common::TyVar(0)),
+            }
+        }
+        TypeAnnotation::Infer => Ty::Var(ferric_common::TyVar(0)),
     }
 }
 

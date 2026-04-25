@@ -122,6 +122,8 @@ pub enum TokenKind {
     AndAnd,
     /// `||` logical or
     OrOr,
+    /// `|` (single pipe) — used for closure parameter delimiters.
+    Pipe,
 
     // Punctuation
     /// `(` left parenthesis
@@ -204,6 +206,7 @@ impl TokenKind {
             TokenKind::GtEq => "'>='".to_string(),
             TokenKind::AndAnd => "'&&'".to_string(),
             TokenKind::OrOr => "'||'".to_string(),
+            TokenKind::Pipe => "'|'".to_string(),
             TokenKind::LParen => "'('".to_string(),
             TokenKind::RParen => "')'".to_string(),
             TokenKind::LBrace => "'{'".to_string(),

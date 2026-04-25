@@ -83,6 +83,11 @@ pub struct ResolveResult {
     /// Stored separately from `fn_params` (which is keyed by Symbol) because
     /// methods share names across types.
     pub method_params: HashMap<NodeId, Vec<crate::Param>>,
+    /// Map from each `Expr::Closure` NodeId to the ordered list of
+    /// captured (DefId, Symbol) pairs. The Symbol is the captured variable's
+    /// source name — the compiler binds it to a local slot inside the closure
+    /// chunk so the body can reference it by name.
+    pub captures: HashMap<NodeId, Vec<(DefId, Symbol)>>,
     /// Any errors encountered during resolution
     pub errors: Vec<ResolveError>,
 }
@@ -106,6 +111,7 @@ impl ResolveResult {
             enum_variants: HashMap::new(),
             method_def_ids: HashMap::new(),
             method_params: HashMap::new(),
+            captures: HashMap::new(),
             errors,
         }
     }

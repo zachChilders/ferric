@@ -1,2 +1,6 @@
-warning at line 6: unreachable match arm
+warning: unreachable match arm
+  --> input:6:9
+   |
+ 6 |         Light::Red => "red",
+   |         ^^^^^^^^^^^^^^^^^^^
 any

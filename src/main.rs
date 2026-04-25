@@ -15,6 +15,47 @@ use std::env;
 use std::fs;
 use std::process;
 
+/// Table of `(fn_name, param_names)` for every native registered via
+/// `register_stdlib`. The resolver uses parameter names to canonicalize
+/// named-arg call sites.
+fn native_fn_table(interner: &mut Interner) -> Vec<(Symbol, Vec<Symbol>)> {
+    let mut intern = |name: &str| interner.intern(name);
+    let entries: &[(&str, &[&str])] = &[
+        ("println",         &["s"]),
+        ("print",           &["s"]),
+        ("int_to_str",      &["n"]),
+        ("float_to_str",    &["n"]),
+        ("bool_to_str",     &["b"]),
+        ("int_to_float",    &["n"]),
+        ("shell_stdout",    &["output"]),
+        ("shell_exit_code", &["output"]),
+        // M6
+        ("array_len",       &["arr"]),
+        ("str_len",         &["s"]),
+        ("str_trim",        &["s"]),
+        ("str_contains",    &["s", "sub"]),
+        ("str_starts_with", &["s", "prefix"]),
+        ("str_parse_int",   &["s"]),
+        ("str_split",       &["s", "sep"]),
+        ("abs",             &["n"]),
+        ("min",             &["a", "b"]),
+        ("max",             &["a", "b"]),
+        ("sqrt",            &["n"]),
+        ("pow",             &["base", "exp"]),
+        ("floor",           &["n"]),
+        ("ceil",            &["n"]),
+        ("read_line",       &[]),
+    ];
+    entries
+        .iter()
+        .map(|(name, params)| {
+            let n = intern(name);
+            let ps = params.iter().map(|p| intern(p)).collect();
+            (n, ps)
+        })
+        .collect()
+}
+
 fn main() {
     let args: Vec<String> = env::args().collect();
 
@@ -81,17 +122,7 @@ fn run_file(filename: &str) {
     let mut natives = NativeRegistry::new();
     register_stdlib(&mut natives, &mut interner);
 
-    // Native function info: (fn_name, param_names) for named-arg validation in resolver
-    let native_fns: Vec<(Symbol, Vec<Symbol>)> = vec![
-        (interner.intern("println"),         vec![interner.intern("s")]),
-        (interner.intern("print"),           vec![interner.intern("s")]),
-        (interner.intern("int_to_str"),      vec![interner.intern("n")]),
-        (interner.intern("float_to_str"),    vec![interner.intern("n")]),
-        (interner.intern("bool_to_str"),     vec![interner.intern("b")]),
-        (interner.intern("int_to_float"),    vec![interner.intern("n")]),
-        (interner.intern("shell_stdout"),    vec![interner.intern("output")]),
-        (interner.intern("shell_exit_code"), vec![interner.intern("output")]),
-    ];
+    let native_fns = native_fn_table(&mut interner);
 
     // Lex
     let lex_result = lex(&source, &mut interner);
@@ -115,6 +146,7 @@ fn run_file(filename: &str) {
     // Report errors
     if report_errors(
         &source,
+        &interner,
         &lex_result,
         &parse_result,
         &resolve_result,
@@ -137,7 +169,7 @@ fn run_file(filename: &str) {
             process::exit(0);
         }
         Err(e) => {
-            let renderer = Renderer::new(source);
+            let renderer = Renderer::with_interner(source, &interner);
             eprintln!("{}", renderer.render_runtime_error(&e));
             process::exit(1);
         }
@@ -147,9 +179,15 @@ fn run_file(filename: &str) {
 fn run_repl() {
     use std::io::{self, Write};
 
-    println!("Ferric REPL v0.1.0");
-    println!("Type expressions to evaluate, or 'exit' to quit");
+    println!("Ferric REPL v1.0");
+    println!("Type expressions to evaluate, or 'exit' to quit.");
+    println!("Each new line is appended to the session — definitions persist.");
     println!();
+
+    // Source accumulated across all inputs. Each iteration re-runs the full
+    // session so prior definitions are visible — a simple correctness strategy
+    // that avoids reimplementing incremental compilation.
+    let mut session = String::new();
 
     loop {
         print!(">> ");
@@ -160,129 +198,167 @@ fn run_repl() {
             break;
         }
 
-        let input = input.trim();
-
-        if input.is_empty() {
+        let trimmed = input.trim();
+        if trimmed.is_empty() {
             continue;
         }
-
-        if input == "exit" || input == "quit" {
+        if trimmed == "exit" || trimmed == "quit" {
             println!("Goodbye!");
             break;
         }
-
-        // Fresh state for each evaluation
-        let mut interner = Interner::new();
-        let mut natives = NativeRegistry::new();
-        register_stdlib(&mut natives, &mut interner);
-
-        let native_fns: Vec<(Symbol, Vec<Symbol>)> = vec![
-            (interner.intern("println"),         vec![interner.intern("s")]),
-            (interner.intern("print"),           vec![interner.intern("s")]),
-            (interner.intern("int_to_str"),      vec![interner.intern("n")]),
-            (interner.intern("float_to_str"),    vec![interner.intern("n")]),
-            (interner.intern("bool_to_str"),     vec![interner.intern("b")]),
-            (interner.intern("int_to_float"),    vec![interner.intern("n")]),
-            (interner.intern("shell_stdout"),    vec![interner.intern("output")]),
-            (interner.intern("shell_exit_code"), vec![interner.intern("output")]),
-        ];
-
-        // Parse and evaluate the input
-        let lex_result = lex(input, &mut interner);
-
-        if !lex_result.errors.is_empty() {
-            for error in &lex_result.errors {
-                let renderer = Renderer::new(input.to_string());
-                eprintln!("{}", renderer.render_lex_error(error));
-            }
+        if trimmed == ":reset" {
+            session.clear();
+            println!("(session cleared)");
             continue;
         }
 
-        let parse_result = parse(&lex_result);
+        // Tentatively append the new input and run the full session. If
+        // anything fails we leave `session` unchanged so the user can fix
+        // and retry without polluting state.
+        let candidate = if session.is_empty() {
+            input.to_string()
+        } else {
+            format!("{}\n{}", session.trim_end(), input)
+        };
 
-        if !parse_result.errors.is_empty() {
-            for error in &parse_result.errors {
-                let renderer = Renderer::new(input.to_string());
-                eprintln!("{}", renderer.render_parse_error(error));
+        let result = run_session(&candidate);
+        match result {
+            Ok(()) => {
+                session = candidate;
             }
-            continue;
-        }
-
-        let resolve_result = resolve_with_natives(&parse_result, &native_fns);
-
-        if !resolve_result.errors.is_empty() {
-            for error in &resolve_result.errors {
-                let renderer = Renderer::new(input.to_string());
-                eprintln!("{}", renderer.render_resolve_error(error));
-            }
-            continue;
-        }
-
-        let trait_registry = build_registry(&parse_result, &resolve_result, &interner);
-        let type_result = typecheck(&parse_result, &resolve_result, &interner, &trait_registry);
-
-        if !type_result.errors.is_empty() {
-            for error in &type_result.errors {
-                let renderer = Renderer::new(input.to_string());
-                eprintln!("{}", renderer.render_type_error(error));
-            }
-            continue;
-        }
-
-        let exhaust_result = check_exhaustiveness(&parse_result, &type_result);
-        let mut had_exhaust_error = false;
-        for error in &exhaust_result.errors {
-            let renderer = Renderer::new(input.to_string());
-            eprintln!("{}", renderer.render_exhaustiveness_error(error));
-            if matches!(error, ExhaustivenessError::NonExhaustive { .. }) {
-                had_exhaust_error = true;
-            }
-        }
-        if had_exhaust_error {
-            continue;
-        }
-
-        // Compile + execute
-        let program = ferric_compiler::compile(&parse_result, &resolve_result, &type_result, &interner);
-        let mut vm: Box<dyn Executor> = Box::new(BytecodeVM::new());
-
-        match vm.run(program, natives, &interner) {
-            Ok(value) => {
-                // Print the result (except Unit)
-                match value {
-                    Value::Unit => {},
-                    Value::Int(n) => println!("{}", n),
-                    Value::Float(f) => println!("{}", f),
-                    Value::Bool(b) => println!("{}", b),
-                    Value::Str(s) => println!("\"{}\"", s),
-                    Value::Fn(_) | Value::NativeFn(_) => println!("<function>"),
-                    Value::ShellOutput(out) => {
-                        println!("ShellOutput {{ exit_code: {}, stdout: {:?} }}", out.exit_code, out.stdout)
-                    }
-                    Value::Struct(fields) => println!("Struct({:?})", fields),
-                    Value::Variant(idx, fields) => {
-                        println!("Variant({}, {:?})", idx, fields)
-                    }
-                    Value::Tuple(elems) => println!("Tuple({:?})", elems),
-                }
-            }
-            Err(e) => {
-                let renderer = Renderer::new(input.to_string());
-                eprintln!("{}", renderer.render_runtime_error(&e));
+            Err(message) => {
+                eprintln!("{}", message);
             }
         }
     }
 }
 
+/// Runs the full accumulated session source. Errors are returned as a rendered
+/// diagnostic string. On success returns `Ok(())`. The whole session re-runs
+/// each iteration — side effects from earlier inputs replay (a known cost of
+/// this simple "persistent state" strategy).
+fn run_session(source: &str) -> Result<(), String> {
+    // The simplest "persistent state" semantics: re-run the whole session
+    // every time. Side effects replay — that's a known cost of this design.
+    // (Suppressing prior side effects would require span-aware op tagging,
+    // which is post-M6 work.)
+    let mut interner = Interner::new();
+    let mut natives = NativeRegistry::new();
+    register_stdlib(&mut natives, &mut interner);
+    let native_fns = native_fn_table(&mut interner);
+
+    let lex_result = lex(source, &mut interner);
+    if !lex_result.errors.is_empty() {
+        let r = Renderer::with_interner(source.to_string(), &interner);
+        return Err(lex_result
+            .errors
+            .iter()
+            .map(|e| r.render_lex_error(e))
+            .collect::<Vec<_>>()
+            .join("\n"));
+    }
+
+    let parse_result = parse(&lex_result);
+    if !parse_result.errors.is_empty() {
+        let r = Renderer::with_interner(source.to_string(), &interner);
+        return Err(parse_result
+            .errors
+            .iter()
+            .map(|e| r.render_parse_error(e))
+            .collect::<Vec<_>>()
+            .join("\n"));
+    }
+
+    let resolve_result = resolve_with_natives(&parse_result, &native_fns);
+    if !resolve_result.errors.is_empty() {
+        let r = Renderer::with_interner(source.to_string(), &interner);
+        return Err(resolve_result
+            .errors
+            .iter()
+            .map(|e| r.render_resolve_error(e))
+            .collect::<Vec<_>>()
+            .join("\n"));
+    }
+
+    let trait_registry = build_registry(&parse_result, &resolve_result, &interner);
+    let type_result = typecheck(&parse_result, &resolve_result, &interner, &trait_registry);
+    if !type_result.errors.is_empty() {
+        let r = Renderer::with_interner(source.to_string(), &interner);
+        return Err(type_result
+            .errors
+            .iter()
+            .map(|e| r.render_type_error(e))
+            .collect::<Vec<_>>()
+            .join("\n"));
+    }
+
+    let exhaust_result = check_exhaustiveness(&parse_result, &type_result);
+    let mut fatal_exhaust = Vec::new();
+    for e in &exhaust_result.errors {
+        if matches!(e, ExhaustivenessError::NonExhaustive { .. }) {
+            fatal_exhaust.push(e.clone());
+        }
+    }
+    if !fatal_exhaust.is_empty() {
+        let r = Renderer::with_interner(source.to_string(), &interner);
+        return Err(fatal_exhaust
+            .iter()
+            .map(|e| r.render_exhaustiveness_error(e))
+            .collect::<Vec<_>>()
+            .join("\n"));
+    }
+
+    let program = ferric_compiler::compile(
+        &parse_result,
+        &resolve_result,
+        &type_result,
+        &interner,
+    );
+    let mut vm: Box<dyn Executor> = Box::new(BytecodeVM::new());
+    match vm.run(program, natives, &interner) {
+        Ok(value) => {
+            print_repl_value(&value);
+            Ok(())
+        }
+        Err(e) => {
+            let r = Renderer::with_interner(source.to_string(), &interner);
+            Err(r.render_runtime_error(&e))
+        }
+    }
+}
+
+fn print_repl_value(value: &Value) {
+    match value {
+        Value::Unit => {}
+        Value::Int(n) => println!("{}", n),
+        Value::Float(f) => println!("{}", f),
+        Value::Bool(b) => println!("{}", b),
+        Value::Str(s) => println!("{:?}", s),
+        Value::Fn(_) | Value::NativeFn(_) => println!("<function>"),
+        Value::ShellOutput(out) => {
+            println!(
+                "ShellOutput {{ exit_code: {}, stdout: {:?} }}",
+                out.exit_code, out.stdout
+            )
+        }
+        Value::Struct(fields) => println!("Struct({:?})", fields),
+        Value::Variant(idx, fields) => println!("Variant({}, {:?})", idx, fields),
+        Value::Tuple(elems) => println!("Tuple({:?})", elems),
+        Value::Array(elems) => println!("{:?}", elems),
+        Value::Closure { .. } => println!("<closure>"),
+    }
+}
+
 fn report_errors(
     source: &str,
+    interner: &Interner,
     lex: &LexResult,
     parse: &ParseResult,
     resolve: &ResolveResult,
     types: &TypeResult,
     exhaust: &ExhaustivenessResult,
 ) -> bool {
-    let renderer = Renderer::new(source.to_string());
+    let renderer = Renderer::with_interner(source.to_string(), interner);
     let mut has_errors = false;
 
     for error in &lex.errors {

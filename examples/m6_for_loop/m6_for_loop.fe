@@ -1,0 +1,11 @@
+// M6: for-loop iteration over arrays
+let mut total = 0
+for x in [1, 2, 3, 4, 5] {
+    total = total + x
+}
+println(s: int_to_str(n: total))
+
+let names = ["alpha", "beta", "gamma"]
+for name in names {
+    println(s: name)
+}

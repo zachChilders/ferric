@@ -1,4 +1,21 @@
-error at line 6: positional argument not allowed; use named syntax (name: value)
-error at line 6: unknown argument name `0`
-error at line 6: missing required argument `14`
-error at line 6: expected 1 argument(s), found 0
+error: positional arguments are not allowed
+  --> input:6:8
+  |
+6 | double(21)
+  |        ^^ use `name: value`
+  = help: Ferric requires named arguments at every call site
+error: unknown argument name `println`
+  --> input:6:8
+  |
+6 | double(21)
+  |        ^^
+error: missing required argument `x`
+  --> input:6:1
+  |
+6 | double(21)
+  | ^^^^^^^^^^
+error: expected 1 argument(s), found 0
+  --> input:6:1
+  |
+6 | double(21)
+  | ^^^^^^^^^^

@@ -1,1 +1,5 @@
-error at line 2: shell interpolation must be Str or Int, found bool
+error: shell interpolation must be Str or Int, found bool
+  --> input:2:20
+  |
+2 | let bad = $ echo @{b}
+  |                    ^

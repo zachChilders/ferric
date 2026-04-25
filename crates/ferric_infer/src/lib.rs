@@ -86,6 +86,12 @@ impl Substitution {
                     .map(|(n, ts)| (*n, ts.iter().map(|t| self.apply(t)).collect()))
                     .collect(),
             },
+            Ty::Array(inner) => Ty::Array(Box::new(self.apply(inner))),
+            Ty::Option(inner) => Ty::Option(Box::new(self.apply(inner))),
+            Ty::Result(ok, err) => Ty::Result(
+                Box::new(self.apply(ok)),
+                Box::new(self.apply(err)),
+            ),
             other => other.clone(),
         }
     }
@@ -112,6 +118,8 @@ fn occurs_raw(var: TyVar, ty: &Ty) -> bool {
         Ty::Enum { variants, .. } => variants
             .iter()
             .any(|(_, ts)| ts.iter().any(|t| occurs_raw(var, t))),
+        Ty::Array(inner) | Ty::Option(inner) => occurs_raw(var, inner),
+        Ty::Result(ok, err) => occurs_raw(var, ok) || occurs_raw(var, err),
         _ => false,
     }
 }
@@ -149,6 +157,11 @@ fn free_vars_raw(ty: &Ty, out: &mut HashSet<TyVar>) {
                     free_vars_raw(t, out);
                 }
             }
+        }
+        Ty::Array(inner) | Ty::Option(inner) => free_vars_raw(inner, out),
+        Ty::Result(ok, err) => {
+            free_vars_raw(ok, out);
+            free_vars_raw(err, out);
         }
         _ => {}
     }
@@ -491,6 +504,21 @@ impl<'a> TypeInfer<'a> {
             ("int_to_float", &[Ty::Int], Ty::Float),
             ("shell_stdout", &[Ty::ShellOutput], Ty::Str),
             ("shell_exit_code", &[Ty::ShellOutput], Ty::Int),
+            // M6: string / math / io
+            ("str_len", &[Ty::Str], Ty::Int),
+            ("str_trim", &[Ty::Str], Ty::Str),
+            ("str_contains", &[Ty::Str, Ty::Str], Ty::Bool),
+            ("str_starts_with", &[Ty::Str, Ty::Str], Ty::Bool),
+            ("str_parse_int", &[Ty::Str], Ty::Int),
+            ("str_split", &[Ty::Str, Ty::Str], Ty::Array(Box::new(Ty::Str))),
+            ("abs", &[Ty::Int], Ty::Int),
+            ("min", &[Ty::Int, Ty::Int], Ty::Int),
+            ("max", &[Ty::Int, Ty::Int], Ty::Int),
+            ("sqrt", &[Ty::Float], Ty::Float),
+            ("pow", &[Ty::Float, Ty::Float], Ty::Float),
+            ("floor", &[Ty::Float], Ty::Int),
+            ("ceil", &[Ty::Float], Ty::Int),
+            ("read_line", &[], Ty::Str),
         ];
         for (name, params, ret) in natives {
             if let Some(sym) = self.interner.lookup(name) {
@@ -500,6 +528,20 @@ impl<'a> TypeInfer<'a> {
                 };
                 self.env.define(sym, TypeScheme::monomorphic(fn_ty));
             }
+        }
+
+        // Polymorphic natives: `array_len(arr: [T]) -> Int` is generic in T.
+        // Build a type scheme with one quantified TyVar so each call site
+        // instantiates a fresh element type.
+        if let Some(sym) = self.interner.lookup("array_len") {
+            let elem_var = TyVar(self.next_tyvar);
+            self.next_tyvar += 1;
+            let fn_ty = Ty::Fn {
+                params: vec![Ty::Array(Box::new(Ty::Var(elem_var)))],
+                ret: Box::new(Ty::Int),
+            };
+            self.env
+                .define(sym, TypeScheme { forall: vec![elem_var], ty: fn_ty });
         }
     }
 
@@ -600,6 +642,23 @@ impl<'a> TypeInfer<'a> {
                     }
                 }
             }
+            TypeAnnotation::Array(inner) => {
+                Ty::Array(Box::new(self.resolve_type_annotation(inner, aliases)))
+            }
+            TypeAnnotation::Generic { head, args } => {
+                let name = self.interner.resolve(*head);
+                match (name, args.as_slice()) {
+                    ("Option", [inner]) => Ty::Option(Box::new(
+                        self.resolve_type_annotation(inner, aliases),
+                    )),
+                    ("Result", [ok, err]) => Ty::Result(
+                        Box::new(self.resolve_type_annotation(ok, aliases)),
+                        Box::new(self.resolve_type_annotation(err, aliases)),
+                    ),
+                    _ => self.fresh_tyvar(),
+                }
+            }
+            TypeAnnotation::Infer => self.fresh_tyvar(),
         }
     }
 
@@ -675,6 +734,20 @@ impl<'a> TypeInfer<'a> {
             }
             Stmt::Require(req) => {
                 self.check_require(req);
+            }
+            Stmt::For { var, var_id, iter, body, span, .. } => {
+                let iter_ty = self.infer_expr(iter);
+                let elem_ty = self.fresh_tyvar();
+                self.unify(&iter_ty, &Ty::Array(Box::new(elem_ty.clone())), *span);
+
+                let resolved_elem = self.subst.apply(&elem_ty);
+                self.node_types.insert(*var_id, resolved_elem.clone());
+
+                self.env.push_scope();
+                self.env
+                    .define(*var, TypeScheme::monomorphic(resolved_elem));
+                let _ = self.infer_expr(body);
+                self.env.pop_scope();
             }
         }
     }
@@ -1155,6 +1228,35 @@ impl<'a> TypeInfer<'a> {
                 self.node_types.insert(*id, enum_ty.clone());
                 enum_ty
             }
+
+            Expr::ArrayLit { elements, id, span } => {
+                let elem_ty = if let Some(first) = elements.first() {
+                    let first_ty = self.infer_expr(first);
+                    for e in &elements[1..] {
+                        let t = self.infer_expr(e);
+                        self.unify(&first_ty, &t, e.span());
+                    }
+                    first_ty
+                } else {
+                    self.fresh_tyvar()
+                };
+                let array_ty = Ty::Array(Box::new(elem_ty));
+                self.node_types.insert(*id, array_ty.clone());
+                let _ = span;
+                array_ty
+            }
+
+            Expr::Index { array, index, id, span } => {
+                let array_ty = self.infer_expr(array);
+                let index_ty = self.infer_expr(index);
+                self.unify(&index_ty, &Ty::Int, index.span());
+
+                let elem_ty = self.fresh_tyvar();
+                self.unify(&array_ty, &Ty::Array(Box::new(elem_ty.clone())), *span);
+                let resolved = self.subst.apply(&elem_ty);
+                self.node_types.insert(*id, resolved.clone());
+                resolved
+            }
         };
 
         ty
@@ -1416,6 +1518,13 @@ impl<'a> TypeInfer<'a> {
                 }
             }
 
+            (Ty::Array(a), Ty::Array(b)) => self.try_unify(&a, &b),
+            (Ty::Option(a), Ty::Option(b)) => self.try_unify(&a, &b),
+            (Ty::Result(a_ok, a_err), Ty::Result(b_ok, b_err)) => {
+                self.try_unify(&a_ok, &b_ok)?;
+                self.try_unify(&a_err, &b_err)
+            }
+
             _ => Err(()),
         }
     }
@@ -1507,9 +1616,15 @@ impl<'a> TypeInfer<'a> {
 
         let mut name_to_var: HashMap<Symbol, TyVar> = HashMap::new();
         for (formal, ty) in formal_params.iter().zip(param_tys.iter()) {
-            let TypeAnnotation::Named(sym) = &formal.ty;
+            // Generic-bound checking only meaningful for `Named` annotations
+            // (the parameter is the generic name, e.g. `T`). Other forms
+            // (Array, Option, Result, Infer) don't introduce new generics.
+            let sym = match &formal.ty {
+                TypeAnnotation::Named(sym) => *sym,
+                _ => continue,
+            };
             if let Ty::Var(v) = ty {
-                name_to_var.insert(*sym, *v);
+                name_to_var.insert(sym, *v);
             }
         }
 
@@ -1638,6 +1753,12 @@ fn rename_vars(ty: &Ty, mapping: &HashMap<TyVar, Ty>) -> Ty {
                 .map(|(n, ts)| (*n, ts.iter().map(|t| rename_vars(t, mapping)).collect()))
                 .collect(),
         },
+        Ty::Array(inner) => Ty::Array(Box::new(rename_vars(inner, mapping))),
+        Ty::Option(inner) => Ty::Option(Box::new(rename_vars(inner, mapping))),
+        Ty::Result(ok, err) => Ty::Result(
+            Box::new(rename_vars(ok, mapping)),
+            Box::new(rename_vars(err, mapping)),
+        ),
         other => other.clone(),
     }
 }
@@ -1670,6 +1791,12 @@ fn default_remaining_vars(ty: &Ty) -> Ty {
                 .map(|(n, ts)| (*n, ts.iter().map(default_remaining_vars).collect()))
                 .collect(),
         },
+        Ty::Array(inner) => Ty::Array(Box::new(default_remaining_vars(inner))),
+        Ty::Option(inner) => Ty::Option(Box::new(default_remaining_vars(inner))),
+        Ty::Result(ok, err) => Ty::Result(
+            Box::new(default_remaining_vars(ok)),
+            Box::new(default_remaining_vars(err)),
+        ),
         other => other.clone(),
     }
 }
@@ -1716,6 +1843,9 @@ fn span_in_stmt(stmt: &Stmt, target: NodeId) -> Option<Span> {
             span_in_expr(&req.expr, target)
                 .or_else(|| req.message.as_ref().and_then(|m| span_in_expr(m, target)))
                 .or_else(|| req.set_fn.as_ref().and_then(|s| span_in_expr(s, target)))
+        }
+        Stmt::For { iter, body, .. } => {
+            span_in_expr(iter, target).or_else(|| span_in_expr(body, target))
         }
     }
 }
@@ -1764,6 +1894,12 @@ fn span_in_expr(expr: &Expr, target: NodeId) -> Option<Span> {
         Expr::VariantCtor { args, .. } => args.iter().find_map(|e| span_in_expr(e, target)),
         Expr::MethodCall { receiver, args, .. } => span_in_expr(receiver, target)
             .or_else(|| args.iter().find_map(|a| span_in_expr(&a.value, target))),
+        Expr::ArrayLit { elements, .. } => {
+            elements.iter().find_map(|e| span_in_expr(e, target))
+        }
+        Expr::Index { array, index, .. } => {
+            span_in_expr(array, target).or_else(|| span_in_expr(index, target))
+        }
     }
 }
 

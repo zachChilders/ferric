@@ -1,0 +1,13 @@
+// M6: expanded stdlib
+println(s: int_to_str(n: abs(n: -7)))
+println(s: int_to_str(n: max(a: 4, b: 9)))
+println(s: int_to_str(n: min(a: 4, b: 9)))
+println(s: int_to_str(n: str_len(s: "hello")))
+println(s: str_trim(s: "   hi   "))
+println(s: bool_to_str(b: str_contains(s: "ferric", sub: "err")))
+println(s: bool_to_str(b: str_starts_with(s: "ferric", prefix: "fe")))
+println(s: int_to_str(n: str_parse_int(s: "  -42 ")))
+let parts = str_split(s: "a,b,c", sep: ",")
+for p in parts {
+    println(s: p)
+}

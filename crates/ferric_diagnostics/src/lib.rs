@@ -1,705 +1,882 @@
-//! # Ferric Diagnostics (M1 Implementation)
+//! # Ferric Diagnostics (M6)
 //!
-//! This is the M1 baseline diagnostics renderer. It provides minimal error
-//! rendering with just line numbers - no fancy formatting or colors.
+//! Multi-label, rustc-style diagnostic renderer. Replaces the M1 baseline
+//! line-prefix renderer wholesale. The public API (six `render_*` methods on
+//! `Renderer`) is unchanged — every other stage feeds in errors that already
+//! carry `Span` values (Rule 5), so no other crate needed touching for this
+//! replacement.
 //!
-//! **IMPORTANT**: This entire implementation will be completely replaced in M2
-//! with rich span-annotated rendering. Keep it simple! The goal is to prove
-//! the architecture works by showing surgical replacement.
+//! Output format:
 //!
-//! Rule 5: All errors carry Spans, so the renderer can work without knowledge
-//! of the pipeline internals.
+//! ```text
+//! error: type mismatch
+//!   --> input:8:18
+//!    |
+//!  8 |     x + 1.0
+//!    |         ^^^ found `Float`
+//! ```
+//!
+//! Multi-label diagnostics add secondary span pointers and trailing
+//! `= note:` / `= help:` lines. `RuntimeError` and a few internal errors
+//! use a synthetic span (`Span::new(0, 0)`) — the renderer falls back to a
+//! header-only block in that case.
 
-use ferric_common::{ExhaustivenessError, LexError, ParseError, ResolveError, TypeError, Span};
+use ferric_common::{
+    ExhaustivenessError, Interner, LexError, ParseError, ResolveError, Span, Symbol,
+    TypeError,
+};
 
-/// Error renderer for Ferric.
-///
-/// This is the public API for the diagnostics crate. It takes errors from
-/// any stage and renders them as human-readable strings.
-///
-/// For M1, the output format is intentionally minimal:
-/// ```text
-/// error at line 5: unexpected character '@'
-/// ```
-pub struct Renderer {
+/// Public entry point for diagnostics. Keep the surface stable: every other
+/// stage consumes `Renderer` through these six methods.
+pub struct Renderer<'a> {
     source: String,
+    interner: Option<&'a Interner>,
+    /// Cached byte offsets of every line start. Computed once at construction.
+    line_starts: Vec<usize>,
 }
 
-impl Renderer {
-    /// Creates a new renderer for the given source code.
-    ///
-    /// The source is stored to enable span-to-line conversion.
+impl<'a> Renderer<'a> {
+    /// Convenience constructor that does not carry an interner. Symbol-bearing
+    /// errors will fall back to printing the raw symbol id.
     pub fn new(source: String) -> Self {
-        Self { source }
+        let line_starts = compute_line_starts(&source);
+        Self { source, interner: None, line_starts }
     }
 
-    /// Converts a span to a line number.
-    ///
-    /// Line numbers are 1-indexed. This implementation counts newlines
-    /// up to the span's start position.
-    fn span_to_line(&self, span: Span) -> usize {
-        self.source[..span.start as usize]
-            .chars()
-            .filter(|&c| c == '\n')
-            .count()
-            + 1
+    /// Constructs a renderer that resolves `Symbol`s through `interner` so
+    /// error messages print user-visible names instead of numeric ids.
+    pub fn with_interner(source: String, interner: &'a Interner) -> Self {
+        let line_starts = compute_line_starts(&source);
+        Self { source, interner: Some(interner), line_starts }
     }
 
-    /// Renders a lexer error.
+    fn name(&self, sym: Symbol) -> String {
+        match self.interner {
+            Some(i) => i.resolve(sym).to_string(),
+            None => sym.0.to_string(),
+        }
+    }
+
     pub fn render_lex_error(&self, error: &LexError) -> String {
         match error {
-            LexError::UnexpectedChar { ch, span } => {
-                format!(
-                    "error at line {}: unexpected character '{}'",
-                    self.span_to_line(*span),
-                    ch
-                )
-            }
-            LexError::UnterminatedString { span } => {
-                format!(
-                    "error at line {}: unterminated string literal",
-                    self.span_to_line(*span)
-                )
-            }
-            LexError::NestedShellInterp { span } => {
-                format!(
-                    "error at line {}: nested shell interpolation `@{{` is not allowed",
-                    self.span_to_line(*span)
-                )
-            }
-            LexError::UnclosedShellInterp { span } => {
-                format!(
-                    "error at line {}: unclosed shell interpolation: missing `}}`",
-                    self.span_to_line(*span)
-                )
-            }
+            LexError::UnexpectedChar { ch, span } => self.render(Diag {
+                kind: "error",
+                message: &format!("unexpected character '{}'", ch),
+                primary: Some(Label { span: *span, message: None }),
+                secondary: vec![],
+                notes: vec![],
+                help: None,
+            }),
+            LexError::UnterminatedString { span } => self.render(Diag {
+                kind: "error",
+                message: "unterminated string literal",
+                primary: Some(Label {
+                    span: *span,
+                    message: Some("string starts here".to_string()),
+                }),
+                secondary: vec![],
+                notes: vec![],
+                help: Some("add a closing `\"`".to_string()),
+            }),
+            LexError::NestedShellInterp { span } => self.render(Diag {
+                kind: "error",
+                message: "nested shell interpolation `@{` is not allowed",
+                primary: Some(Label { span: *span, message: None }),
+                secondary: vec![],
+                notes: vec![],
+                help: None,
+            }),
+            LexError::UnclosedShellInterp { span } => self.render(Diag {
+                kind: "error",
+                message: "unclosed shell interpolation: missing `}`",
+                primary: Some(Label { span: *span, message: None }),
+                secondary: vec![],
+                notes: vec![],
+                help: None,
+            }),
         }
     }
 
-    /// Renders a parser error.
     pub fn render_parse_error(&self, error: &ParseError) -> String {
-        use ferric_common::ParseError;
-
         match error {
-            ParseError::UnexpectedToken {
-                expected,
-                found,
-                span,
-            } => {
-                format!(
-                    "error at line {}: expected {}, found {}",
-                    self.span_to_line(*span),
+            ParseError::UnexpectedToken { expected, found, span } => self.render(Diag {
+                kind: "error",
+                message: &format!(
+                    "expected {}, found {}",
                     expected,
                     found.description()
-                )
-            }
-            ParseError::ExpectedExpression { found, span } => {
-                format!(
-                    "error at line {}: expected expression, found {}",
-                    self.span_to_line(*span),
-                    found.description()
-                )
-            }
-            ParseError::ExpectedStatement { found, span } => {
-                format!(
-                    "error at line {}: expected statement, found {}",
-                    self.span_to_line(*span),
-                    found.description()
-                )
-            }
-            ParseError::PositionalArg { span } => {
-                format!(
-                    "error at line {}: positional argument not allowed; use named syntax (name: value)",
-                    self.span_to_line(*span)
-                )
-            }
-            ParseError::InvalidRequireMode { span } => {
-                format!(
-                    "error at line {}: invalid require mode; expected 'warn'",
-                    self.span_to_line(*span)
-                )
-            }
+                ),
+                primary: Some(Label { span: *span, message: None }),
+                secondary: vec![],
+                notes: vec![],
+                help: None,
+            }),
+            ParseError::ExpectedExpression { found, span } => self.render(Diag {
+                kind: "error",
+                message: &format!("expected expression, found {}", found.description()),
+                primary: Some(Label { span: *span, message: None }),
+                secondary: vec![],
+                notes: vec![],
+                help: None,
+            }),
+            ParseError::ExpectedStatement { found, span } => self.render(Diag {
+                kind: "error",
+                message: &format!("expected statement, found {}", found.description()),
+                primary: Some(Label { span: *span, message: None }),
+                secondary: vec![],
+                notes: vec![],
+                help: None,
+            }),
+            ParseError::PositionalArg { span } => self.render(Diag {
+                kind: "error",
+                message: "positional arguments are not allowed",
+                primary: Some(Label {
+                    span: *span,
+                    message: Some("use `name: value`".to_string()),
+                }),
+                secondary: vec![],
+                notes: vec![],
+                help: Some("Ferric requires named arguments at every call site".to_string()),
+            }),
+            ParseError::InvalidRequireMode { span, .. } => self.render(Diag {
+                kind: "error",
+                message: "invalid require mode (expected `error` or `warn`)",
+                primary: Some(Label { span: *span, message: None }),
+                secondary: vec![],
+                notes: vec![],
+                help: None,
+            }),
         }
     }
 
-    /// Renders a resolver error.
     pub fn render_resolve_error(&self, error: &ResolveError) -> String {
-        use ferric_common::ResolveError;
-
         match error {
-            ResolveError::UndefinedVariable { name, span } => {
-                format!(
-                    "error at line {}: undefined variable `{}`",
-                    self.span_to_line(*span),
-                    name.0 // For M1, just print the raw symbol ID
-                )
-            }
-            ResolveError::DuplicateDefinition {
-                name,
-                first,
-                second,
-            } => {
-                format!(
-                    "error at line {}: duplicate definition of `{}` (first defined at line {})",
-                    self.span_to_line(*second),
-                    name.0,
-                    self.span_to_line(*first)
-                )
-            }
-            ResolveError::AssignToImmutable { name, span } => {
-                format!(
-                    "error at line {}: assignment to immutable variable `{}`",
-                    self.span_to_line(*span),
-                    name.0
-                )
-            }
-            ResolveError::BreakOutsideLoop { span } => {
-                format!(
-                    "error at line {}: break outside of loop",
-                    self.span_to_line(*span)
-                )
-            }
-            ResolveError::ContinueOutsideLoop { span } => {
-                format!(
-                    "error at line {}: continue outside of loop",
-                    self.span_to_line(*span)
-                )
-            }
-            ResolveError::ReturnOutsideFn { span } => {
-                format!(
-                    "error at line {}: return outside of function",
-                    self.span_to_line(*span)
-                )
-            }
-            ResolveError::MissingArg { param, call_span } => {
-                format!(
-                    "error at line {}: missing required argument `{}`",
-                    self.span_to_line(*call_span),
-                    param.0
-                )
-            }
-            ResolveError::UnknownArg { name, span } => {
-                format!(
-                    "error at line {}: unknown argument name `{}`",
-                    self.span_to_line(*span),
-                    name.0
-                )
-            }
-            ResolveError::RequireSetArity { span } => {
-                format!(
-                    "error at line {}: require set closure must take zero arguments",
-                    self.span_to_line(*span)
-                )
-            }
-            ResolveError::UndefinedType { name, span } => {
-                format!(
-                    "error at line {}: undefined type `{}`",
-                    self.span_to_line(*span),
-                    name.0
-                )
-            }
-            ResolveError::UnknownField { struct_name, field, span } => {
-                format!(
-                    "error at line {}: struct `{}` has no field `{}`",
-                    self.span_to_line(*span),
-                    struct_name.0,
-                    field.0
-                )
-            }
-            ResolveError::MissingField { struct_name, field, span } => {
-                format!(
-                    "error at line {}: missing field `{}` in struct literal of `{}`",
-                    self.span_to_line(*span),
-                    field.0,
-                    struct_name.0
-                )
-            }
-            ResolveError::UnknownVariant { enum_name, variant, span } => {
-                format!(
-                    "error at line {}: enum `{}` has no variant `{}`",
-                    self.span_to_line(*span),
-                    enum_name.0,
-                    variant.0
-                )
-            }
+            ResolveError::UndefinedVariable { name, span } => self.render(Diag {
+                kind: "error",
+                message: &format!("undefined variable `{}`", self.name(*name)),
+                primary: Some(Label { span: *span, message: Some("not in scope".to_string()) }),
+                secondary: vec![],
+                notes: vec![],
+                help: None,
+            }),
+            ResolveError::DuplicateDefinition { name, first, second } => self.render(Diag {
+                kind: "error",
+                message: &format!("duplicate definition of `{}`", self.name(*name)),
+                primary: Some(Label {
+                    span: *second,
+                    message: Some("redefined here".to_string()),
+                }),
+                secondary: vec![Label {
+                    span: *first,
+                    message: Some("first defined here".to_string()),
+                }],
+                notes: vec![],
+                help: None,
+            }),
+            ResolveError::AssignToImmutable { name, span } => self.render(Diag {
+                kind: "error",
+                message: &format!("cannot assign to immutable variable `{}`", self.name(*name)),
+                primary: Some(Label { span: *span, message: None }),
+                secondary: vec![],
+                notes: vec![],
+                help: Some("declare with `let mut` to allow reassignment".to_string()),
+            }),
+            ResolveError::BreakOutsideLoop { span } => self.render(Diag {
+                kind: "error",
+                message: "`break` used outside of a loop",
+                primary: Some(Label { span: *span, message: None }),
+                secondary: vec![],
+                notes: vec![],
+                help: None,
+            }),
+            ResolveError::ContinueOutsideLoop { span } => self.render(Diag {
+                kind: "error",
+                message: "`continue` used outside of a loop",
+                primary: Some(Label { span: *span, message: None }),
+                secondary: vec![],
+                notes: vec![],
+                help: None,
+            }),
+            ResolveError::ReturnOutsideFn { span } => self.render(Diag {
+                kind: "error",
+                message: "`return` used outside of a function",
+                primary: Some(Label { span: *span, message: None }),
+                secondary: vec![],
+                notes: vec![],
+                help: None,
+            }),
+            ResolveError::MissingArg { param, call_span } => self.render(Diag {
+                kind: "error",
+                message: &format!("missing required argument `{}`", self.name(*param)),
+                primary: Some(Label { span: *call_span, message: None }),
+                secondary: vec![],
+                notes: vec![],
+                help: None,
+            }),
+            ResolveError::UnknownArg { name, span } => self.render(Diag {
+                kind: "error",
+                message: &format!("unknown argument name `{}`", self.name(*name)),
+                primary: Some(Label { span: *span, message: None }),
+                secondary: vec![],
+                notes: vec![],
+                help: None,
+            }),
+            ResolveError::RequireSetArity { span } => self.render(Diag {
+                kind: "error",
+                message: "the `set:` closure of a require must take zero parameters",
+                primary: Some(Label { span: *span, message: None }),
+                secondary: vec![],
+                notes: vec![],
+                help: None,
+            }),
+            ResolveError::UndefinedType { name, span } => self.render(Diag {
+                kind: "error",
+                message: &format!("undefined type `{}`", self.name(*name)),
+                primary: Some(Label { span: *span, message: None }),
+                secondary: vec![],
+                notes: vec![],
+                help: None,
+            }),
+            ResolveError::UnknownField { struct_name, field, span } => self.render(Diag {
+                kind: "error",
+                message: &format!("struct `{}` has no field `{}`", self.name(*struct_name), self.name(*field)),
+                primary: Some(Label { span: *span, message: None }),
+                secondary: vec![],
+                notes: vec![],
+                help: None,
+            }),
+            ResolveError::MissingField { struct_name, field, span } => self.render(Diag {
+                kind: "error",
+                message: &format!(
+                    "missing field `{}` in struct `{}` literal",
+                    self.name(*field), self.name(*struct_name)
+                ),
+                primary: Some(Label { span: *span, message: None }),
+                secondary: vec![],
+                notes: vec![],
+                help: None,
+            }),
+            ResolveError::UnknownVariant { enum_name, variant, span } => self.render(Diag {
+                kind: "error",
+                message: &format!(
+                    "enum `{}` has no variant `{}`",
+                    self.name(*enum_name), self.name(*variant)
+                ),
+                primary: Some(Label { span: *span, message: None }),
+                secondary: vec![],
+                notes: vec![],
+                help: None,
+            }),
             ResolveError::VariantArity {
                 enum_name,
                 variant,
                 expected,
                 found,
                 span,
-            } => {
-                format!(
-                    "error at line {}: variant `{}::{}` expected {} argument(s), found {}",
-                    self.span_to_line(*span),
-                    enum_name.0,
-                    variant.0,
-                    expected,
-                    found
-                )
-            }
+            } => self.render(Diag {
+                kind: "error",
+                message: &format!(
+                    "variant `{}::{}` expects {} field(s), got {}",
+                    self.name(*enum_name), self.name(*variant), expected, found
+                ),
+                primary: Some(Label { span: *span, message: None }),
+                secondary: vec![],
+                notes: vec![],
+                help: None,
+            }),
         }
     }
 
-    /// Renders a type checker error.
     pub fn render_type_error(&self, error: &TypeError) -> String {
-        use ferric_common::TypeError;
-
         match error {
-            TypeError::Mismatch {
-                expected,
-                found,
-                span,
-            } => {
-                format!(
-                    "error at line {}: type mismatch: expected {}, found {}",
-                    self.span_to_line(*span),
+            TypeError::Mismatch { expected, found, span } => self.render(Diag {
+                kind: "error",
+                message: &format!(
+                    "type mismatch: expected {}, found {}",
                     expected.description(),
                     found.description()
-                )
-            }
-            TypeError::IncompatibleTypes {
-                operation,
-                left,
-                right,
-                span,
-            } => {
-                format!(
-                    "error at line {}: incompatible types for {}: {} and {}",
-                    self.span_to_line(*span),
+                ),
+                primary: Some(Label {
+                    span: *span,
+                    message: Some(format!("found `{}`", found.description())),
+                }),
+                secondary: vec![],
+                notes: vec![],
+                help: None,
+            }),
+            TypeError::IncompatibleTypes { left, right, operation, span } => self.render(Diag {
+                kind: "error",
+                message: &format!(
+                    "operator `{}` does not apply to `{}` and `{}`",
                     operation,
                     left.description(),
                     right.description()
-                )
-            }
-            TypeError::RequireNonBool { found, span } => {
-                format!(
-                    "error at line {}: require condition must be Bool, found {}",
-                    self.span_to_line(*span),
+                ),
+                primary: Some(Label { span: *span, message: None }),
+                secondary: vec![],
+                notes: vec![],
+                help: None,
+            }),
+            TypeError::RequireNonBool { found, span } => self.render(Diag {
+                kind: "error",
+                message: &format!(
+                    "require condition must be Bool, found {}",
                     found.description()
-                )
-            }
-            TypeError::RequireMessageNonStr { found, span } => {
-                format!(
-                    "error at line {}: require message must be Str, found {}",
-                    self.span_to_line(*span),
+                ),
+                primary: Some(Label { span: *span, message: None }),
+                secondary: vec![],
+                notes: vec![],
+                help: None,
+            }),
+            TypeError::RequireMessageNonStr { found, span } => self.render(Diag {
+                kind: "error",
+                message: &format!(
+                    "require message must be Str, found {}",
                     found.description()
-                )
-            }
-            TypeError::RequireSetType { found, span } => {
-                format!(
-                    "error at line {}: require set closure must be Fn() -> Unit, found {}",
-                    self.span_to_line(*span),
+                ),
+                primary: Some(Label { span: *span, message: None }),
+                secondary: vec![],
+                notes: vec![],
+                help: None,
+            }),
+            TypeError::RequireSetType { found, span } => self.render(Diag {
+                kind: "error",
+                message: &format!(
+                    "require `set:` closure must have type fn() -> (), found {}",
                     found.description()
-                )
-            }
-            TypeError::ShellInterpType { found, span } => {
-                format!(
-                    "error at line {}: shell interpolation must be Str or Int, found {}",
-                    self.span_to_line(*span),
+                ),
+                primary: Some(Label { span: *span, message: None }),
+                secondary: vec![],
+                notes: vec![],
+                help: None,
+            }),
+            TypeError::ShellInterpType { found, span } => self.render(Diag {
+                kind: "error",
+                message: &format!(
+                    "shell interpolation must be Str or Int, found {}",
                     found.description()
-                )
-            }
-            TypeError::InfiniteType { var, ty, span } => {
-                format!(
-                    "error at line {}: occurs check failed: cannot construct the infinite type ?T{} = {}",
-                    self.span_to_line(*span),
+                ),
+                primary: Some(Label { span: *span, message: None }),
+                secondary: vec![],
+                notes: vec![],
+                help: None,
+            }),
+            TypeError::InfiniteType { var, ty, span } => self.render(Diag {
+                kind: "error",
+                message: &format!(
+                    "infinite type: ?T{} occurs in {}",
                     var.0,
                     ty.description()
-                )
-            }
-            TypeError::CannotInfer { span } => {
-                format!(
-                    "error at line {}: cannot infer a concrete type for this expression",
-                    self.span_to_line(*span)
-                )
-            }
-            TypeError::WrongArgumentCount { expected, found, span } => {
-                format!(
-                    "error at line {}: expected {} argument(s), found {}",
-                    self.span_to_line(*span),
-                    expected,
-                    found
-                )
-            }
-            TypeError::NotCallable { ty, span } => {
-                format!(
-                    "error at line {}: cannot call value of type {}",
-                    self.span_to_line(*span),
+                ),
+                primary: Some(Label { span: *span, message: None }),
+                secondary: vec![],
+                notes: vec![],
+                help: None,
+            }),
+            TypeError::CannotInfer { span } => self.render(Diag {
+                kind: "error",
+                message: "type annotations needed: cannot infer type",
+                primary: Some(Label { span: *span, message: None }),
+                secondary: vec![],
+                notes: vec![],
+                help: Some("add an explicit type annotation".to_string()),
+            }),
+            TypeError::WrongArgumentCount { expected, found, span } => self.render(Diag {
+                kind: "error",
+                message: &format!(
+                    "expected {} argument(s), found {}",
+                    expected, found
+                ),
+                primary: Some(Label { span: *span, message: None }),
+                secondary: vec![],
+                notes: vec![],
+                help: None,
+            }),
+            TypeError::NotCallable { ty, span } => self.render(Diag {
+                kind: "error",
+                message: &format!(
+                    "type `{}` is not callable",
                     ty.description()
-                )
-            }
-            TypeError::NotAStruct { ty, span } => {
-                format!(
-                    "error at line {}: field access on non-struct type {}",
-                    self.span_to_line(*span),
+                ),
+                primary: Some(Label { span: *span, message: None }),
+                secondary: vec![],
+                notes: vec![],
+                help: None,
+            }),
+            TypeError::NotAStruct { ty, span } => self.render(Diag {
+                kind: "error",
+                message: &format!(
+                    "type `{}` is not a struct",
                     ty.description()
-                )
-            }
-            TypeError::NoSuchField { ty, field, span } => {
-                format!(
-                    "error at line {}: type {} has no field `{}`",
-                    self.span_to_line(*span),
-                    ty.description(),
-                    field.0
-                )
-            }
+                ),
+                primary: Some(Label { span: *span, message: None }),
+                secondary: vec![],
+                notes: vec![],
+                help: None,
+            }),
+            TypeError::NoSuchField { ty, field, span } => self.render(Diag {
+                kind: "error",
+                message: &format!(
+                    "type `{}` has no field `{}`",
+                    ty.description(), self.name(*field)
+                ),
+                primary: Some(Label { span: *span, message: None }),
+                secondary: vec![],
+                notes: vec![],
+                help: None,
+            }),
             TypeError::FieldTypeMismatch {
                 struct_name,
                 field,
                 expected,
                 found,
                 span,
-            } => {
-                format!(
-                    "error at line {}: field `{}::{}` expected type {}, found {}",
-                    self.span_to_line(*span),
-                    struct_name.0,
-                    field.0,
+            } => self.render(Diag {
+                kind: "error",
+                message: &format!(
+                    "field `{}::{}` expects {}, found {}",
+                    self.name(*struct_name),
+                    self.name(*field),
                     expected.description(),
                     found.description()
-                )
-            }
-            TypeError::NoSuchMethod { ty, method, span } => {
-                format!(
-                    "error at line {}: type {} has no method `{}`",
-                    self.span_to_line(*span),
+                ),
+                primary: Some(Label { span: *span, message: None }),
+                secondary: vec![],
+                notes: vec![],
+                help: None,
+            }),
+            TypeError::NoSuchMethod { ty, method, span } => self.render(Diag {
+                kind: "error",
+                message: &format!(
+                    "type `{}` has no method `{}`",
                     ty.description(),
-                    method.0
-                )
-            }
+                    self.name(*method)
+                ),
+                primary: Some(Label { span: *span, message: None }),
+                secondary: vec![],
+                notes: vec![],
+                help: None,
+            }),
             TypeError::TraitBoundNotSatisfied {
                 type_param,
                 bound,
                 ty,
                 span,
-            } => {
-                format!(
-                    "error at line {}: trait bound `{}: {}` not satisfied for type {}",
-                    self.span_to_line(*span),
-                    type_param.0,
-                    bound.0,
+            } => self.render(Diag {
+                kind: "error",
+                message: &format!(
+                    "the trait bound `{}: {}` is not satisfied (got `{}`)",
+                    self.name(*type_param),
+                    self.name(*bound),
                     ty.description()
-                )
-            }
-            TypeError::UnknownTrait { name, span } => {
-                format!(
-                    "error at line {}: unknown trait `{}`",
-                    self.span_to_line(*span),
-                    name.0
-                )
-            }
-            TypeError::ImplOfUnknownTrait { trait_name, span } => {
-                format!(
-                    "error at line {}: impl block targets undefined trait `{}`",
-                    self.span_to_line(*span),
-                    trait_name.0
-                )
-            }
-            TypeError::ImplMethodSignatureMismatch {
-                trait_name,
-                method,
-                span,
-            } => {
-                format!(
-                    "error at line {}: impl method `{}::{}` does not match trait declaration",
-                    self.span_to_line(*span),
-                    trait_name.0,
-                    method.0
-                )
-            }
+                ),
+                primary: Some(Label { span: *span, message: None }),
+                secondary: vec![],
+                notes: vec![],
+                help: None,
+            }),
+            TypeError::UnknownTrait { name, span } => self.render(Diag {
+                kind: "error",
+                message: &format!("unknown trait `{}`", self.name(*name)),
+                primary: Some(Label { span: *span, message: None }),
+                secondary: vec![],
+                notes: vec![],
+                help: None,
+            }),
+            TypeError::ImplOfUnknownTrait { trait_name, span } => self.render(Diag {
+                kind: "error",
+                message: &format!("impl of unknown trait `{}`", self.name(*trait_name)),
+                primary: Some(Label { span: *span, message: None }),
+                secondary: vec![],
+                notes: vec![],
+                help: None,
+            }),
+            TypeError::ImplMethodSignatureMismatch { trait_name, method, span } => self.render(Diag {
+                kind: "error",
+                message: &format!(
+                    "impl method `{}::{}` does not match the trait signature",
+                    self.name(*trait_name), self.name(*method)
+                ),
+                primary: Some(Label { span: *span, message: None }),
+                secondary: vec![],
+                notes: vec![],
+                help: None,
+            }),
         }
     }
 
-    /// Renders an exhaustiveness checker error.
     pub fn render_exhaustiveness_error(&self, error: &ExhaustivenessError) -> String {
         match error {
             ExhaustivenessError::NonExhaustive { missing, span } => {
-                let names: Vec<String> = missing.iter().map(|s| format!("`{}`", s.0)).collect();
-                format!(
-                    "error at line {}: non-exhaustive match: missing {}",
-                    self.span_to_line(*span),
-                    names.join(", ")
-                )
+                let names: Vec<String> = missing
+                    .iter()
+                    .map(|s| format!("`{}`", self.name(*s)))
+                    .collect();
+                self.render(Diag {
+                    kind: "error",
+                    message: "non-exhaustive match",
+                    primary: Some(Label {
+                        span: *span,
+                        message: Some(format!("missing patterns: {}", names.join(", "))),
+                    }),
+                    secondary: vec![],
+                    notes: vec![],
+                    help: Some(
+                        "add a wildcard arm `_ => ...` to cover remaining cases".to_string(),
+                    ),
+                })
             }
-            ExhaustivenessError::UnreachableArm { span } => {
-                format!(
-                    "warning at line {}: unreachable match arm",
-                    self.span_to_line(*span)
-                )
-            }
+            ExhaustivenessError::UnreachableArm { span } => self.render(Diag {
+                kind: "warning",
+                message: "unreachable match arm",
+                primary: Some(Label { span: *span, message: None }),
+                secondary: vec![],
+                notes: vec![],
+                help: None,
+            }),
         }
     }
 
-    /// Renders a runtime error.
-    ///
-    /// Note: RuntimeError is defined in ferric_vm, but for M1 we'll accept
-    /// a generic approach. In M2+ this might be more sophisticated.
     pub fn render_runtime_error(&self, error: &ferric_vm::RuntimeError) -> String {
         use ferric_vm::RuntimeError;
 
+        // Most runtime errors carry a sentinel span (Span::new(0, 0)) because
+        // the bytecode VM does not yet thread spans through every op. The
+        // renderer falls back to a header-only block when the span is null.
         match error {
-            RuntimeError::UndefinedVariable { name, span } => {
-                format!(
-                    "error at line {}: undefined variable `{}`",
-                    self.span_to_line(*span),
-                    name.0
-                )
-            }
-            RuntimeError::UndefinedFunction { name, span } => {
-                format!(
-                    "error at line {}: undefined function `{}`",
-                    self.span_to_line(*span),
-                    name.0
-                )
-            }
-            RuntimeError::TypeMismatch {
-                expected,
-                found,
-                span,
-            } => {
-                format!(
-                    "error at line {}: type mismatch: expected {}, found {}",
-                    self.span_to_line(*span),
-                    expected,
-                    found
-                )
-            }
-            RuntimeError::DivisionByZero { span } => {
-                format!(
-                    "error at line {}: division by zero",
-                    self.span_to_line(*span)
-                )
-            }
-            RuntimeError::StackOverflow { span } => {
-                format!(
-                    "error at line {}: stack overflow",
-                    self.span_to_line(*span)
-                )
-            }
-            RuntimeError::NativeFunctionError { message, span } => {
-                format!(
-                    "error at line {}: native function error: {}",
-                    self.span_to_line(*span),
-                    message
-                )
-            }
-            RuntimeError::InvalidOperation { op, span } => {
-                format!(
-                    "error at line {}: invalid operation: {}",
-                    self.span_to_line(*span),
-                    op
-                )
-            }
-            RuntimeError::NotCallable { span } => {
-                format!(
-                    "error at line {}: not a callable value",
-                    self.span_to_line(*span)
-                )
-            }
-            RuntimeError::WrongArgumentCount {
-                expected,
-                found,
-                span,
-            } => {
-                format!(
-                    "error at line {}: wrong number of arguments: expected {}, found {}",
-                    self.span_to_line(*span),
-                    expected,
-                    found
-                )
-            }
-            RuntimeError::StackUnderflow { span } => {
-                format!(
-                    "error at line {}: stack underflow (internal error)",
-                    self.span_to_line(*span)
-                )
-            }
+            RuntimeError::UndefinedVariable { name, span } => self.render(Diag {
+                kind: "error",
+                message: &format!("undefined variable `{}`", self.name(*name)),
+                primary: nonzero_label(*span),
+                secondary: vec![],
+                notes: vec![],
+                help: None,
+            }),
+            RuntimeError::UndefinedFunction { name, span } => self.render(Diag {
+                kind: "error",
+                message: &format!("undefined function `{}`", self.name(*name)),
+                primary: nonzero_label(*span),
+                secondary: vec![],
+                notes: vec![],
+                help: None,
+            }),
+            RuntimeError::TypeMismatch { expected, found, span } => self.render(Diag {
+                kind: "error",
+                message: &format!("runtime type mismatch: expected {}, found {}", expected, found),
+                primary: nonzero_label(*span),
+                secondary: vec![],
+                notes: vec![],
+                help: None,
+            }),
+            RuntimeError::DivisionByZero { span } => self.render(Diag {
+                kind: "error",
+                message: "division by zero",
+                primary: nonzero_label(*span),
+                secondary: vec![],
+                notes: vec![],
+                help: None,
+            }),
+            RuntimeError::StackOverflow { span } => self.render(Diag {
+                kind: "error",
+                message: "stack overflow",
+                primary: nonzero_label(*span),
+                secondary: vec![],
+                notes: vec![],
+                help: None,
+            }),
+            RuntimeError::StackUnderflow { span } => self.render(Diag {
+                kind: "error",
+                message: "stack underflow (internal VM error)",
+                primary: nonzero_label(*span),
+                secondary: vec![],
+                notes: vec![],
+                help: None,
+            }),
+            RuntimeError::NativeFunctionError { message, span } => self.render(Diag {
+                kind: "error",
+                message: &format!("native function error: {}", message),
+                primary: nonzero_label(*span),
+                secondary: vec![],
+                notes: vec![],
+                help: None,
+            }),
+            RuntimeError::InvalidOperation { op, span } => self.render(Diag {
+                kind: "error",
+                message: &format!("invalid operation: {}", op),
+                primary: nonzero_label(*span),
+                secondary: vec![],
+                notes: vec![],
+                help: None,
+            }),
+            RuntimeError::NotCallable { span } => self.render(Diag {
+                kind: "error",
+                message: "value is not callable",
+                primary: nonzero_label(*span),
+                secondary: vec![],
+                notes: vec![],
+                help: None,
+            }),
+            RuntimeError::WrongArgumentCount { expected, found, span } => self.render(Diag {
+                kind: "error",
+                message: &format!("expected {} argument(s), found {}", expected, found),
+                primary: nonzero_label(*span),
+                secondary: vec![],
+                notes: vec![],
+                help: None,
+            }),
             RuntimeError::RequireError { span, message } => {
-                if let Some(msg) = message {
-                    format!(
-                        "error at line {}: require failed: {}",
-                        self.span_to_line(*span),
-                        msg
-                    )
-                } else {
-                    format!(
-                        "error at line {}: require condition evaluated to false",
-                        self.span_to_line(*span)
-                    )
-                }
+                let msg = message.clone().unwrap_or_else(|| {
+                    "require condition evaluated to false".to_string()
+                });
+                self.render(Diag {
+                    kind: "error",
+                    message: &format!("require failed: {}", msg),
+                    primary: nonzero_label(*span),
+                    secondary: vec![],
+                    notes: vec![],
+                    help: None,
+                })
             }
+            RuntimeError::IndexOutOfBounds { index, len, span } => self.render(Diag {
+                kind: "error",
+                message: &format!(
+                    "array index {} out of bounds (length {})",
+                    index, len
+                ),
+                primary: nonzero_label(*span),
+                secondary: vec![],
+                notes: vec![],
+                help: None,
+            }),
+            RuntimeError::NotAnArray { found, span } => self.render(Diag {
+                kind: "error",
+                message: &format!("indexing requires an array, found {}", found),
+                primary: nonzero_label(*span),
+                secondary: vec![],
+                notes: vec![],
+                help: None,
+            }),
         }
     }
+
+    // ---------------------------------------------------------------- Layout
+
+    fn render(&self, diag: Diag) -> String {
+        let mut out = String::new();
+        out.push_str(diag.kind);
+        out.push_str(": ");
+        out.push_str(diag.message);
+
+        let primary = match diag.primary {
+            Some(p) => p,
+            None => return out,
+        };
+
+        let (line, col) = self.span_to_line_col(primary.span);
+        out.push_str(&format!("\n  --> input:{}:{}\n", line, col));
+
+        let gutter_width = max_gutter_width(&primary, &diag.secondary);
+        let blank_gutter = " ".repeat(gutter_width);
+
+        out.push_str(&format!("{} |\n", blank_gutter));
+        self.render_label(&mut out, &primary, gutter_width, /*primary*/ true);
+
+        for label in &diag.secondary {
+            self.render_label(&mut out, label, gutter_width, false);
+        }
+
+        for note in &diag.notes {
+            out.push_str(&format!("{} = note: {}\n", blank_gutter, note));
+        }
+        if let Some(help) = diag.help {
+            out.push_str(&format!("{} = help: {}\n", blank_gutter, help));
+        }
+
+        // Trim trailing newline for ergonomic eprintln.
+        if out.ends_with('\n') {
+            out.pop();
+        }
+        out
+    }
+
+    fn render_label(&self, out: &mut String, label: &Label, gutter_width: usize, is_primary: bool) {
+        let (line, col) = self.span_to_line_col(label.span);
+        let gutter = format!("{:>width$}", line, width = gutter_width);
+        let line_text = self.line_text(line);
+        out.push_str(&format!("{} | {}\n", gutter, line_text));
+
+        let blank_gutter = " ".repeat(gutter_width);
+        let mut underline = " ".repeat(col.saturating_sub(1));
+        let span_len = (label.span.end - label.span.start).max(1) as usize;
+        // Cap underline length to the rest of the visible source line so we
+        // never extend past the line's end.
+        let visible = line_text.chars().count();
+        let underline_len = span_len.min(visible.saturating_sub(col.saturating_sub(1))).max(1);
+        let glyph = if is_primary { '^' } else { '-' };
+        underline.extend(std::iter::repeat(glyph).take(underline_len));
+
+        let suffix = label
+            .message
+            .as_deref()
+            .map(|m| format!(" {}", m))
+            .unwrap_or_default();
+        out.push_str(&format!("{} | {}{}\n", blank_gutter, underline, suffix));
+    }
+
+    fn span_to_line_col(&self, span: Span) -> (usize, usize) {
+        let pos = span.start as usize;
+        // line_starts is sorted; partition_point gives us the line whose start
+        // is the largest one <= pos.
+        let line_idx = self
+            .line_starts
+            .partition_point(|&start| start <= pos)
+            .saturating_sub(1);
+        let line_start = self.line_starts.get(line_idx).copied().unwrap_or(0);
+        let col = self.source[line_start..pos].chars().count() + 1;
+        (line_idx + 1, col)
+    }
+
+    fn line_text(&self, line: usize) -> &str {
+        let idx = line.saturating_sub(1);
+        let start = self.line_starts.get(idx).copied().unwrap_or(0);
+        let end = self
+            .line_starts
+            .get(idx + 1)
+            .copied()
+            .unwrap_or(self.source.len());
+        let raw = &self.source[start..end];
+        // Trim a trailing newline so we don't print an extra blank line.
+        raw.trim_end_matches(|c: char| c == '\n' || c == '\r')
+    }
 }
+
+// ============================================================================
+// Internal types
+// ============================================================================
+
+struct Diag<'a> {
+    kind: &'a str,
+    message: &'a str,
+    primary: Option<Label>,
+    secondary: Vec<Label>,
+    notes: Vec<String>,
+    help: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct Label {
+    span: Span,
+    message: Option<String>,
+}
+
+fn compute_line_starts(source: &str) -> Vec<usize> {
+    let mut starts = vec![0];
+    for (i, b) in source.bytes().enumerate() {
+        if b == b'\n' {
+            starts.push(i + 1);
+        }
+    }
+    starts
+}
+
+fn max_gutter_width(primary: &Label, secondary: &[Label]) -> usize {
+    // Width is the max line-number digit count across all labels, with a
+    // floor of 1 so trivial errors don't crash the layout.
+    let max_line = std::iter::once(primary)
+        .chain(secondary.iter())
+        .map(|l| l.span.start as usize)
+        .max()
+        .unwrap_or(0);
+    let estimated_lines = max_line / 10 + 2;
+    estimated_lines.to_string().len().max(1)
+}
+
+fn nonzero_label(span: Span) -> Option<Label> {
+    if span.start == 0 && span.end == 0 {
+        None
+    } else {
+        Some(Label { span, message: None })
+    }
+}
+
+// ============================================================================
+// Tests
+// ============================================================================
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ferric_common::{LexError, ParseError, ResolveError, TypeError, Span, Symbol, TokenKind, Ty};
+    use ferric_common::{Span, Symbol, TokenKind, Ty};
 
     #[test]
-    fn test_span_to_line_single_line() {
-        let source = "let x = 5".to_string();
-        let renderer = Renderer::new(source);
-
-        // Position 0 is line 1
-        let span = Span::new(0, 3);
-        assert_eq!(renderer.span_to_line(span), 1);
-
-        // Position 5 is still line 1
-        let span = Span::new(5, 6);
-        assert_eq!(renderer.span_to_line(span), 1);
-    }
-
-    #[test]
-    fn test_span_to_line_multi_line() {
-        let source = "let x = 5\nlet y = 10\nlet z = 15".to_string();
-        let renderer = Renderer::new(source);
-
-        // First line
-        let span = Span::new(0, 3);
-        assert_eq!(renderer.span_to_line(span), 1);
-
-        // Second line (starts at position 10, after first \n)
-        let span = Span::new(10, 13);
-        assert_eq!(renderer.span_to_line(span), 2);
-
-        // Third line (starts at position 21, after second \n)
-        let span = Span::new(21, 24);
-        assert_eq!(renderer.span_to_line(span), 3);
-    }
-
-    #[test]
-    fn test_span_at_position_zero() {
-        let source = "test".to_string();
-        let renderer = Renderer::new(source);
-
-        let span = Span::new(0, 0);
-        assert_eq!(renderer.span_to_line(span), 1);
-    }
-
-    #[test]
-    fn test_render_lex_error_unexpected_char() {
+    fn renders_unexpected_char_with_caret() {
         let source = "let x = @".to_string();
         let renderer = Renderer::new(source);
-
-        let error = LexError::UnexpectedChar {
-            ch: '@',
-            span: Span::new(8, 9),
-        };
-
-        let rendered = renderer.render_lex_error(&error);
-        assert_eq!(rendered, "error at line 1: unexpected character '@'");
+        let error = LexError::UnexpectedChar { ch: '@', span: Span::new(8, 9) };
+        let out = renderer.render_lex_error(&error);
+        assert!(out.starts_with("error: unexpected character '@'"));
+        assert!(out.contains("--> input:1:9"));
+        assert!(out.contains("let x = @"));
+        assert!(out.contains("^"));
     }
 
     #[test]
-    fn test_render_lex_error_unterminated_string() {
-        let source = "let x = \"hello".to_string();
-        let renderer = Renderer::new(source);
-
-        let error = LexError::UnterminatedString {
-            span: Span::new(8, 14),
-        };
-
-        let rendered = renderer.render_lex_error(&error);
-        assert_eq!(rendered, "error at line 1: unterminated string literal");
-    }
-
-    #[test]
-    fn test_render_parse_error() {
-        let source = "let x =".to_string();
-        let renderer = Renderer::new(source);
-
-        let error = ParseError::UnexpectedToken {
-            expected: "expression".to_string(),
-            found: TokenKind::Eof,
-            span: Span::new(7, 7),
-        };
-
-        let rendered = renderer.render_parse_error(&error);
-        assert!(rendered.contains("error at line 1"));
-        assert!(rendered.contains("expected expression"));
-    }
-
-    #[test]
-    fn test_render_resolve_error_undefined() {
-        let source = "let x = y".to_string();
-        let renderer = Renderer::new(source);
-
-        let error = ResolveError::UndefinedVariable {
-            name: Symbol::new(42),
-            span: Span::new(8, 9),
-        };
-
-        let rendered = renderer.render_resolve_error(&error);
-        assert_eq!(rendered, "error at line 1: undefined variable `42`");
-    }
-
-    #[test]
-    fn test_render_resolve_error_duplicate() {
+    fn renders_duplicate_def_with_secondary_label() {
         let source = "let x = 1\nlet x = 2".to_string();
         let renderer = Renderer::new(source);
-
         let error = ResolveError::DuplicateDefinition {
             name: Symbol::new(5),
             first: Span::new(4, 5),
             second: Span::new(14, 15),
         };
-
-        let rendered = renderer.render_resolve_error(&error);
-        assert!(rendered.contains("error at line 2"));
-        assert!(rendered.contains("duplicate definition"));
-        assert!(rendered.contains("first defined at line 1"));
+        let out = renderer.render_resolve_error(&error);
+        assert!(out.starts_with("error: duplicate definition"));
+        assert!(out.contains("--> input:2:5"));
+        assert!(out.contains("redefined here"));
+        assert!(out.contains("first defined here"));
     }
 
     #[test]
-    fn test_render_type_error_mismatch() {
-        let source = "let x: Int = \"hello\"".to_string();
+    fn renders_type_mismatch_help() {
+        let source = "let x: Int = \"hi\"".to_string();
         let renderer = Renderer::new(source);
-
         let error = TypeError::Mismatch {
             expected: Ty::Int,
             found: Ty::Str,
-            span: Span::new(13, 20),
+            span: Span::new(13, 17),
         };
-
-        let rendered = renderer.render_type_error(&error);
-        assert_eq!(
-            rendered,
-            "error at line 1: type mismatch: expected int, found str"
-        );
+        let out = renderer.render_type_error(&error);
+        assert!(out.contains("type mismatch"));
+        assert!(out.contains("found `str`"));
     }
 
     #[test]
-    fn test_all_error_variants_produce_output() {
-        let source = "test\ncode\nhere".to_string();
+    fn parse_error_includes_token_description() {
+        let source = "let x =".to_string();
         let renderer = Renderer::new(source);
-
-        // Test that all error types can be rendered
-        let lex_err = LexError::UnexpectedChar {
-            ch: '@',
-            span: Span::new(0, 1),
-        };
-        assert!(!renderer.render_lex_error(&lex_err).is_empty());
-
-        let parse_err = ParseError::ExpectedExpression {
+        let error = ParseError::UnexpectedToken {
+            expected: "expression".to_string(),
             found: TokenKind::Eof,
-            span: Span::new(0, 1),
+            span: Span::new(7, 7),
         };
-        assert!(!renderer.render_parse_error(&parse_err).is_empty());
+        let out = renderer.render_parse_error(&error);
+        assert!(out.contains("expected expression"));
+    }
 
-        let resolve_err = ResolveError::UndefinedVariable {
-            name: Symbol::new(1),
-            span: Span::new(0, 1),
-        };
-        assert!(!renderer.render_resolve_error(&resolve_err).is_empty());
+    #[test]
+    fn header_only_for_zero_span_runtime_errors() {
+        let source = "println(s: \"x\")".to_string();
+        let renderer = Renderer::new(source);
+        let err = ferric_vm::RuntimeError::DivisionByZero { span: Span::new(0, 0) };
+        let out = renderer.render_runtime_error(&err);
+        assert_eq!(out, "error: division by zero");
+    }
 
-        let type_err = TypeError::Mismatch {
-            expected: Ty::Int,
-            found: Ty::Bool,
-            span: Span::new(0, 1),
-        };
-        assert!(!renderer.render_type_error(&type_err).is_empty());
+    #[test]
+    fn line_text_round_trip() {
+        let renderer = Renderer::new("a\nbb\nccc".to_string());
+        assert_eq!(renderer.line_text(1), "a");
+        assert_eq!(renderer.line_text(2), "bb");
+        assert_eq!(renderer.line_text(3), "ccc");
     }
 }

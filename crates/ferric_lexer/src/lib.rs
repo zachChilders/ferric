@@ -581,6 +581,8 @@ impl<'a> Lexer<'a> {
             ')' => TokenKind::RParen,
             '{' => TokenKind::LBrace,
             '}' => TokenKind::RBrace,
+            '[' => TokenKind::LBracket,
+            ']' => TokenKind::RBracket,
             ',' => TokenKind::Comma,
             '.' => TokenKind::Dot,
             ':' => {
@@ -654,11 +656,7 @@ impl<'a> Lexer<'a> {
                     self.advance();
                     TokenKind::OrOr
                 } else {
-                    // Single | is not supported in M1
-                    let end = self.position;
-                    let span = Span::new(start, end);
-                    self.errors.push(LexError::UnexpectedChar { ch, span });
-                    return self.lex_token();
+                    TokenKind::Pipe
                 }
             }
 

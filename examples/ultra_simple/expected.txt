@@ -1,1 +1,5 @@
-error at line 4: type mismatch: expected int, found str
+error: type mismatch: expected int, found str
+  --> input:4:11
+  |
+4 | let bad = x + y
+  |           ^^^^^ found `str`

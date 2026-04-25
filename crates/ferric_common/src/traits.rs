@@ -41,7 +41,12 @@ impl ImplTy {
             Ty::Struct { def_id, .. } => ImplTy::Struct(*def_id),
             Ty::Enum { def_id, .. } => ImplTy::Enum(*def_id),
             Ty::Tuple(elems) => ImplTy::Tuple(elems.len()),
-            Ty::Var(_) | Ty::Fn { .. } => return None,
+            // Generic / inference / function types don't appear as impl heads.
+            Ty::Var(_)
+            | Ty::Fn { .. }
+            | Ty::Array(_)
+            | Ty::Option(_)
+            | Ty::Result(_, _) => return None,
         })
     }
 }

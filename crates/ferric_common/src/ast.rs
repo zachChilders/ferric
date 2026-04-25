@@ -323,6 +323,20 @@ pub enum Expr {
         id: NodeId,
         span: Span,
     },
+    /// Array literal: `[1, 2, 3]`. All elements share an inferred element type.
+    ArrayLit {
+        elements: Vec<Expr>,
+        id: NodeId,
+        span: Span,
+    },
+    /// Indexing: `arr[i]`. The receiver must be an array; the index must be
+    /// an `Int`.
+    Index {
+        array: Box<Expr>,
+        index: Box<Expr>,
+        id: NodeId,
+        span: Span,
+    },
     /// Method call: `receiver.method(args)`. Lowered by the type checker /
     /// compiler to a regular function call where the receiver is the first
     /// argument.
@@ -408,6 +422,8 @@ impl Expr {
             Expr::Tuple { id, .. } => *id,
             Expr::VariantCtor { id, .. } => *id,
             Expr::MethodCall { id, .. } => *id,
+            Expr::ArrayLit { id, .. } => *id,
+            Expr::Index { id, .. } => *id,
         }
     }
 
@@ -434,6 +450,8 @@ impl Expr {
             Expr::Tuple { span, .. } => *span,
             Expr::VariantCtor { span, .. } => *span,
             Expr::MethodCall { span, .. } => *span,
+            Expr::ArrayLit { span, .. } => *span,
+            Expr::Index { span, .. } => *span,
         }
     }
 }
@@ -463,6 +481,15 @@ pub enum Stmt {
     },
     /// Require statement
     Require(RequireStmt),
+    /// `for x in expr { body }` loop.
+    For {
+        var: Symbol,
+        var_id: NodeId,
+        iter: Expr,
+        body: Expr,
+        id: NodeId,
+        span: Span,
+    },
 }
 
 impl Stmt {
@@ -473,6 +500,7 @@ impl Stmt {
             Stmt::Assign { id, .. } => *id,
             Stmt::Expr { expr } => expr.id(),
             Stmt::Require(req) => req.expr.id(),
+            Stmt::For { id, .. } => *id,
         }
     }
 
@@ -483,6 +511,7 @@ impl Stmt {
             Stmt::Assign { span, .. } => *span,
             Stmt::Expr { expr } => expr.span(),
             Stmt::Require(req) => req.span,
+            Stmt::For { span, .. } => *span,
         }
     }
 }
@@ -552,6 +581,17 @@ pub enum Literal {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TypeAnnotation {
     /// Named type (e.g., `Int`, `Bool`, `Str`, `Unit`)
-    /// In M1, we only support simple named types
     Named(Symbol),
+    /// Array type, e.g. `[Int]`.
+    Array(Box<TypeAnnotation>),
+    /// Generic type application, e.g. `Option<Int>` or `Result<Int, Str>`.
+    /// The parser produces this without knowing what `head` resolves to —
+    /// later stages dispatch on the head's name.
+    Generic {
+        head: Symbol,
+        args: Vec<TypeAnnotation>,
+    },
+    /// Placeholder for an annotation that should be inferred (used by closure
+    /// params that omit an explicit type).
+    Infer,
 }

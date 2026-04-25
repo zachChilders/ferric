@@ -28,6 +28,7 @@ pub enum NativeValue {
     Str(String),
     Unit,
     ShellOutput(ShellOutput),
+    Array(Vec<NativeValue>),
 }
 
 /// Registry of native functions available to the VM.
@@ -269,6 +270,129 @@ fn builtin_shell_exec(args: &[NativeValue]) -> Result<NativeValue, String> {
     Ok(NativeValue::ShellOutput(run_shell_command(cmd)))
 }
 
+// ---------------- M6: arrays / strings / math / io ----------------------
+
+fn expect_array(value: &NativeValue) -> Result<&Vec<NativeValue>, String> {
+    match value {
+        NativeValue::Array(elems) => Ok(elems),
+        other => Err(format!("expected array, got {:?}", other)),
+    }
+}
+
+fn builtin_array_len(args: &[NativeValue]) -> Result<NativeValue, String> {
+    check_arg_count(args, 1)?;
+    let arr = expect_array(&args[0])?;
+    Ok(NativeValue::Int(arr.len() as i64))
+}
+
+fn builtin_str_len(args: &[NativeValue]) -> Result<NativeValue, String> {
+    check_arg_count(args, 1)?;
+    let s = expect_str(&args[0])?;
+    Ok(NativeValue::Int(s.chars().count() as i64))
+}
+
+fn builtin_str_trim(args: &[NativeValue]) -> Result<NativeValue, String> {
+    check_arg_count(args, 1)?;
+    let s = expect_str(&args[0])?;
+    Ok(NativeValue::Str(s.trim().to_string()))
+}
+
+fn builtin_str_contains(args: &[NativeValue]) -> Result<NativeValue, String> {
+    check_arg_count(args, 2)?;
+    let s = expect_str(&args[0])?;
+    let sub = expect_str(&args[1])?;
+    Ok(NativeValue::Bool(s.contains(sub.as_str())))
+}
+
+fn builtin_str_starts_with(args: &[NativeValue]) -> Result<NativeValue, String> {
+    check_arg_count(args, 2)?;
+    let s = expect_str(&args[0])?;
+    let prefix = expect_str(&args[1])?;
+    Ok(NativeValue::Bool(s.starts_with(prefix.as_str())))
+}
+
+fn builtin_str_parse_int(args: &[NativeValue]) -> Result<NativeValue, String> {
+    check_arg_count(args, 1)?;
+    let s = expect_str(&args[0])?;
+    s.trim()
+        .parse::<i64>()
+        .map(NativeValue::Int)
+        .map_err(|e| format!("parse_int: {}", e))
+}
+
+fn builtin_str_split(args: &[NativeValue]) -> Result<NativeValue, String> {
+    check_arg_count(args, 2)?;
+    let s = expect_str(&args[0])?;
+    let sep = expect_str(&args[1])?;
+    let parts: Vec<NativeValue> = if sep.is_empty() {
+        s.chars()
+            .map(|c| NativeValue::Str(c.to_string()))
+            .collect()
+    } else {
+        s.split(sep.as_str())
+            .map(|p| NativeValue::Str(p.to_string()))
+            .collect()
+    };
+    Ok(NativeValue::Array(parts))
+}
+
+fn builtin_abs(args: &[NativeValue]) -> Result<NativeValue, String> {
+    check_arg_count(args, 1)?;
+    let n = expect_int(&args[0])?;
+    Ok(NativeValue::Int(n.abs()))
+}
+
+fn builtin_min(args: &[NativeValue]) -> Result<NativeValue, String> {
+    check_arg_count(args, 2)?;
+    let a = expect_int(&args[0])?;
+    let b = expect_int(&args[1])?;
+    Ok(NativeValue::Int(a.min(b)))
+}
+
+fn builtin_max(args: &[NativeValue]) -> Result<NativeValue, String> {
+    check_arg_count(args, 2)?;
+    let a = expect_int(&args[0])?;
+    let b = expect_int(&args[1])?;
+    Ok(NativeValue::Int(a.max(b)))
+}
+
+fn builtin_sqrt(args: &[NativeValue]) -> Result<NativeValue, String> {
+    check_arg_count(args, 1)?;
+    let n = expect_float(&args[0])?;
+    Ok(NativeValue::Float(n.sqrt()))
+}
+
+fn builtin_pow(args: &[NativeValue]) -> Result<NativeValue, String> {
+    check_arg_count(args, 2)?;
+    let base = expect_float(&args[0])?;
+    let exp = expect_float(&args[1])?;
+    Ok(NativeValue::Float(base.powf(exp)))
+}
+
+fn builtin_floor(args: &[NativeValue]) -> Result<NativeValue, String> {
+    check_arg_count(args, 1)?;
+    let n = expect_float(&args[0])?;
+    Ok(NativeValue::Int(n.floor() as i64))
+}
+
+fn builtin_ceil(args: &[NativeValue]) -> Result<NativeValue, String> {
+    check_arg_count(args, 1)?;
+    let n = expect_float(&args[0])?;
+    Ok(NativeValue::Int(n.ceil() as i64))
+}
+
+fn builtin_read_line(args: &[NativeValue]) -> Result<NativeValue, String> {
+    check_arg_count(args, 0)?;
+    let mut line = String::new();
+    std::io::stdin()
+        .read_line(&mut line)
+        .map_err(|e| format!("read_line: {}", e))?;
+    while line.ends_with('\n') || line.ends_with('\r') {
+        line.pop();
+    }
+    Ok(NativeValue::Str(line))
+}
+
 // ============================================================================
 // Standard Library Registration
 // ============================================================================
@@ -313,6 +437,23 @@ pub fn register_stdlib(registry: &mut NativeRegistry, interner: &mut ferric_comm
     // the symbol via `Interner::lookup(SHELL_EXEC_NATIVE)`.
     let shell_exec_sym = interner.intern(SHELL_EXEC_NATIVE);
     registry.register(shell_exec_sym, builtin_shell_exec);
+
+    // M6: arrays / strings / math / io
+    registry.register(interner.intern("array_len"),       builtin_array_len);
+    registry.register(interner.intern("str_len"),         builtin_str_len);
+    registry.register(interner.intern("str_trim"),        builtin_str_trim);
+    registry.register(interner.intern("str_contains"),    builtin_str_contains);
+    registry.register(interner.intern("str_starts_with"), builtin_str_starts_with);
+    registry.register(interner.intern("str_parse_int"),   builtin_str_parse_int);
+    registry.register(interner.intern("str_split"),       builtin_str_split);
+    registry.register(interner.intern("abs"),             builtin_abs);
+    registry.register(interner.intern("min"),             builtin_min);
+    registry.register(interner.intern("max"),             builtin_max);
+    registry.register(interner.intern("sqrt"),            builtin_sqrt);
+    registry.register(interner.intern("pow"),             builtin_pow);
+    registry.register(interner.intern("floor"),           builtin_floor);
+    registry.register(interner.intern("ceil"),            builtin_ceil);
+    registry.register(interner.intern("read_line"),       builtin_read_line);
 }
 
 // ============================================================================

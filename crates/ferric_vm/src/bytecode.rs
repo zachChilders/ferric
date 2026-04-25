@@ -279,6 +279,17 @@ impl Executor for BytecodeVM {
                                 slots: args,
                             });
                         }
+                        Value::Closure { fn_idx, captures } => {
+                            // Captures occupy the leading slots of the
+                            // closure's frame, followed by the call args.
+                            let mut slots = captures;
+                            slots.extend(args);
+                            self.call_stack.push(CallFrame {
+                                chunk_idx: fn_idx,
+                                ip: 0,
+                                slots,
+                            });
+                        }
                         Value::NativeFn(sym) => {
                             let native = self.natives.get(sym).copied().ok_or_else(|| {
                                 RuntimeError::UndefinedFunction {
@@ -404,6 +415,62 @@ impl Executor for BytecodeVM {
                         v => return Err(type_mismatch("Tuple", &v)),
                     }
                 }
+
+                // ---------------- M6: arrays / closures ------------------
+                Op::MakeArray(n) => {
+                    let n = n as usize;
+                    if self.stack.len() < n {
+                        return Err(underflow());
+                    }
+                    let start = self.stack.len() - n;
+                    let elements: Vec<Value> = self.stack.drain(start..).collect();
+                    self.stack.push(Value::new_array(elements));
+                }
+                Op::ArrayGet => {
+                    let index = self.pop_int()?;
+                    let array = self.pop()?;
+                    match array {
+                        Value::Array(elements) => {
+                            if index < 0 || (index as usize) >= elements.len() {
+                                return Err(RuntimeError::IndexOutOfBounds {
+                                    index,
+                                    len: elements.len(),
+                                    span: dummy_span(),
+                                });
+                            }
+                            self.stack.push(elements[index as usize].clone());
+                        }
+                        v => {
+                            return Err(RuntimeError::NotAnArray {
+                                found: type_name(&v).to_string(),
+                                span: dummy_span(),
+                            });
+                        }
+                    }
+                }
+                Op::ArrayLen => {
+                    let array = self.pop()?;
+                    match array {
+                        Value::Array(elements) => {
+                            self.stack.push(Value::new_int(elements.len() as i64));
+                        }
+                        v => {
+                            return Err(RuntimeError::NotAnArray {
+                                found: type_name(&v).to_string(),
+                                span: dummy_span(),
+                            });
+                        }
+                    }
+                }
+                Op::MakeClosure(fn_idx, capture_count) => {
+                    let n = capture_count as usize;
+                    if self.stack.len() < n {
+                        return Err(underflow());
+                    }
+                    let start = self.stack.len() - n;
+                    let captures: Vec<Value> = self.stack.drain(start..).collect();
+                    self.stack.push(Value::new_closure(fn_idx, captures));
+                }
             }
         }
 
@@ -469,14 +536,18 @@ fn value_to_native(v: &Value) -> NativeValue {
         Value::Str(s) => NativeValue::Str(s.clone()),
         Value::Unit => NativeValue::Unit,
         Value::ShellOutput(out) => NativeValue::ShellOutput(out.clone()),
-        // Compound and function values cannot cross the native boundary;
-        // surface them as Unit so a wrong-type native call produces a
-        // descriptive error inside the native rather than a panic here.
+        Value::Array(elems) => {
+            NativeValue::Array(elems.iter().map(value_to_native).collect())
+        }
+        // Functions, structs, enums, and closures don't cross the native
+        // boundary; surface them as Unit so a wrong-type native call produces
+        // a descriptive error inside the native rather than a panic here.
         Value::Fn(_)
         | Value::NativeFn(_)
         | Value::Struct(_)
         | Value::Variant(_, _)
-        | Value::Tuple(_) => NativeValue::Unit,
+        | Value::Tuple(_)
+        | Value::Closure { .. } => NativeValue::Unit,
     }
 }
 
@@ -488,6 +559,9 @@ fn native_to_value(v: NativeValue) -> Value {
         NativeValue::Str(s) => Value::new_str(s),
         NativeValue::Unit => Value::new_unit(),
         NativeValue::ShellOutput(out) => Value::ShellOutput(out),
+        NativeValue::Array(elems) => {
+            Value::new_array(elems.into_iter().map(native_to_value).collect())
+        }
     }
 }
 
@@ -517,6 +591,8 @@ fn type_name(v: &Value) -> &'static str {
         Value::Struct(_) => "Struct",
         Value::Variant(_, _) => "Variant",
         Value::Tuple(_) => "Tuple",
+        Value::Array(_) => "Array",
+        Value::Closure { .. } => "Closure",
     }
 }
 

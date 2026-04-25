@@ -320,7 +320,80 @@ impl<'a> Compiler<'a> {
                 self.emit(Op::Pop);
             }
             Stmt::Require(req) => self.compile_require(req),
+            Stmt::For { var, iter, body, .. } => self.compile_for(*var, iter, body),
         }
+    }
+
+    /// Compiles `for x in arr { body }` as a counting loop:
+    ///
+    /// ```text
+    /// let __arr = iter
+    /// let mut __i = 0
+    /// loop:
+    ///     if __i >= __arr.len() { break }
+    ///     let x = __arr[__i]
+    ///     body; pop
+    ///     __i = __i + 1
+    /// ```
+    fn compile_for(&mut self, var: Symbol, iter: &Expr, body: &Expr) {
+        // Fresh scope for the loop's locals.
+        self.push_scope();
+
+        // arr_slot ← iter
+        self.compile_expr(iter);
+        let arr_slot = self.bind_anon_slot();
+        self.emit(Op::StoreSlot(arr_slot));
+
+        // i_slot ← 0
+        let zero = self.add_constant(Constant::Int(0));
+        self.emit(Op::LoadConst(zero));
+        let i_slot = self.bind_anon_slot();
+        self.emit(Op::StoreSlot(i_slot));
+
+        // Loop top.
+        let loop_start = self.current_offset();
+
+        // i < len(arr)?  (push i, push arr, ArrayLen, LtInt → cond)
+        self.emit(Op::LoadSlot(i_slot));
+        self.emit(Op::LoadSlot(arr_slot));
+        self.emit(Op::ArrayLen);
+        self.emit(Op::LtInt);
+        let exit_jump = self.emit_jump(Op::JumpIfFalse(0));
+
+        self.loop_stack.push(LoopContext {
+            start_offset: loop_start,
+            break_jumps: Vec::new(),
+        });
+
+        // Bind `var` in a body scope so each iteration sees a fresh binding.
+        self.push_scope();
+        self.emit(Op::LoadSlot(arr_slot));
+        self.emit(Op::LoadSlot(i_slot));
+        self.emit(Op::ArrayGet);
+        let var_slot = self.bind_local(var);
+        self.emit(Op::StoreSlot(var_slot));
+
+        // Compile body and discard its value.
+        self.compile_expr(body);
+        self.emit(Op::Pop);
+        self.pop_scope();
+
+        // i = i + 1
+        self.emit(Op::LoadSlot(i_slot));
+        let one = self.add_constant(Constant::Int(1));
+        self.emit(Op::LoadConst(one));
+        self.emit(Op::AddInt);
+        self.emit(Op::StoreSlot(i_slot));
+
+        self.emit_backward_jump(loop_start);
+        self.patch_jump(exit_jump);
+
+        let ctx = self.loop_stack.pop().unwrap();
+        for addr in ctx.break_jumps {
+            self.patch_jump(addr);
+        }
+
+        self.pop_scope();
     }
 
     fn compile_require(&mut self, req: &RequireStmt) {
@@ -485,17 +558,8 @@ impl<'a> Compiler<'a> {
                 let target = self.loop_stack.last().map(|c| c.start_offset).unwrap_or(0);
                 self.emit_backward_jump(target);
             }
-            Expr::Closure { span, .. } => {
-                // First-class closures (`let f = || ...; f()`) are not
-                // supported in M3. The only legal closure in Ferric today is
-                // the `set:` callback of a `require` statement, which
-                // `compile_require` inlines directly — it never reaches here.
-                panic!(
-                    "first-class closures are not supported in bytecode \
-                     compilation (span {:?}); closures may only appear as \
-                     the `set:` argument of a require statement",
-                    span
-                );
+            Expr::Closure { params, body, id, .. } => {
+                self.compile_closure_expr(*id, params, body);
             }
             Expr::Shell { parts, span, .. } => self.compile_shell(parts, *span),
             Expr::StructLit { name, fields, .. } => {
@@ -546,7 +610,90 @@ impl<'a> Compiler<'a> {
             Expr::MethodCall { receiver, args, id, span, .. } => {
                 self.compile_method_call(receiver, args, *id, *span);
             }
+            Expr::ArrayLit { elements, .. } => {
+                for e in elements {
+                    self.compile_expr(e);
+                }
+                let n = u8::try_from(elements.len()).expect("array literal too large");
+                self.emit(Op::MakeArray(n));
+            }
+            Expr::Index { array, index, .. } => {
+                self.compile_expr(array);
+                self.compile_expr(index);
+                self.emit(Op::ArrayGet);
+            }
         }
+    }
+
+    /// Compiles a user-syntax closure expression. The closure body becomes
+    /// a fresh chunk; its leading slots hold the captured values, followed
+    /// by the parameter slots. The caller emits `LoadSlot` for each capture
+    /// (in capture-list order) followed by `MakeClosure(fn_idx, n)`.
+    fn compile_closure_expr(
+        &mut self,
+        closure_id: NodeId,
+        params: &[ferric_common::Param],
+        body: &Expr,
+    ) {
+        // Look up the captures the resolver recorded for this closure. Empty
+        // for the synthetic require-set closure (which compile_require inlines
+        // directly and never reaches this path).
+        let captures: Vec<(DefId, Symbol)> = self
+            .resolve
+            .captures
+            .get(&closure_id)
+            .cloned()
+            .unwrap_or_default();
+
+        // 1. In the *outer* chunk, push each captured value onto the stack so
+        //    the runtime MakeClosure can pack them into the closure value.
+        for (_def_id, name) in &captures {
+            if let Some(slot) = self.lookup_local(*name) {
+                self.emit(Op::LoadSlot(slot));
+            } else {
+                // Captured a top-level function or unknown — fall back to
+                // Unit. The type checker should reject this case.
+                self.emit(Op::Unit);
+            }
+        }
+
+        // 2. Allocate a chunk for the closure body. Symbol(0) is the
+        //    sentinel "anonymous" name (also used for the entry chunk).
+        let chunk_idx = self.chunks.len() as u16;
+        self.chunks.push(Chunk::new(Symbol::new(0)));
+
+        // 3. Save the outer chunk's compilation state and switch to the new
+        //    chunk so we can emit the closure body in isolation.
+        let saved_current = self.current;
+        let saved_scopes = std::mem::take(&mut self.scopes);
+        let saved_next_local = self.next_local;
+        let saved_loop_stack = std::mem::take(&mut self.loop_stack);
+
+        self.enter_chunk(chunk_idx as usize);
+        self.push_scope();
+
+        // Captures occupy the leading slots, in capture-list order.
+        for (_def_id, name) in &captures {
+            self.bind_local(*name);
+        }
+        // Params follow.
+        for param in params {
+            self.bind_local(param.name);
+        }
+
+        self.compile_expr(body);
+        self.emit(Op::Return);
+        self.pop_scope();
+
+        // 4. Restore the outer state.
+        self.current = saved_current;
+        self.scopes = saved_scopes;
+        self.next_local = saved_next_local;
+        self.loop_stack = saved_loop_stack;
+
+        // 5. Build the closure value at runtime.
+        let n = u8::try_from(captures.len()).expect("too many captured variables");
+        self.emit(Op::MakeClosure(chunk_idx, n));
     }
 
     /// Compiles a method call by looking up the resolved impl-method DefId

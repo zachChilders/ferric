@@ -1,1 +1,5 @@
-error at line 2: undefined variable `14`
+error: undefined variable `y`
+  --> input:2:9
+  |
+2 | let x = y + 1
+  |         ^ not in scope

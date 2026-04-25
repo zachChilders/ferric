@@ -1,1 +1,5 @@
-error at line 2: unclosed shell interpolation: missing `}`
+error: unclosed shell interpolation: missing `}`
+  --> input:2:18
+  |
+2 | let bad = $ echo @{x
+  |                  ^^^

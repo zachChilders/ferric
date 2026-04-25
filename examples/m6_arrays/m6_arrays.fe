@@ -1,0 +1,6 @@
+// M6: array literals + indexing
+let nums = [10, 20, 30, 40, 50]
+println(s: int_to_str(n: nums[0]))
+println(s: int_to_str(n: nums[2]))
+println(s: int_to_str(n: nums[4]))
+println(s: int_to_str(n: array_len(arr: nums)))

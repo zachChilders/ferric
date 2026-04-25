@@ -133,4 +133,18 @@ pub enum Op {
     MakeTuple(u8),
     /// Pop a tuple, push its element at the given index.
     GetTupleField(u8),
+
+    // ---------------- M6: arrays / closures ----------------------------------
+    /// Pop `n` values from the stack and push an array value with those
+    /// elements (leftmost-first).
+    MakeArray(u8),
+    /// Pop an index (Int) and an array, push the element at that index.
+    /// Raises `IndexOutOfBounds` at runtime if the index is invalid.
+    ArrayGet,
+    /// Pop an array, push its length as an Int.
+    ArrayLen,
+    /// Build a closure: pop `capture_count` values from the stack (in the
+    /// reverse order they were pushed), then push a closure value referencing
+    /// the chunk at `fn_idx` with those captures.
+    MakeClosure(u16, u8),
 }

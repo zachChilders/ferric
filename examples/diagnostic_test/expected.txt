@@ -1,3 +1,17 @@
-error at line 3: unexpected character '@'
-error at line 4: expected expression, found keyword 'let'
-error at line 4: duplicate definition of `13` (first defined at line 2)
+error: unexpected character '@'
+  --> input:3:9
+  |
+3 | let y = @  // Unexpected character error
+  |         ^
+error: expected expression, found keyword 'let'
+  --> input:4:1
+   |
+ 4 | let x = 10  // Duplicate definition error
+   | ^^^
+error: duplicate definition of `x`
+  --> input:4:1
+   |
+ 4 | let x = 10  // Duplicate definition error
+   | ^^^^^^^^^^ redefined here
+ 2 | let x = 5
+   | --------- first defined here

@@ -59,6 +59,12 @@ pub enum Ty {
     /// Type variable produced by the inferencer. Concrete types are obtained
     /// by applying the inferencer's substitution.
     Var(TyVar),
+    /// Homogeneous array type, e.g. `[Int]`.
+    Array(Box<Ty>),
+    /// `Option<T>` — built-in nullable type.
+    Option(Box<Ty>),
+    /// `Result<T, E>` — built-in success/error type.
+    Result(Box<Ty>, Box<Ty>),
 }
 
 impl Ty {
@@ -111,6 +117,11 @@ impl Ty {
                 format!("enum [ {} ]", parts)
             }
             Ty::Var(v) => format!("?T{}", v.0),
+            Ty::Array(elem) => format!("[{}]", elem.description()),
+            Ty::Option(inner) => format!("Option<{}>", inner.description()),
+            Ty::Result(ok, err) => {
+                format!("Result<{}, {}>", ok.description(), err.description())
+            }
         }
     }
 

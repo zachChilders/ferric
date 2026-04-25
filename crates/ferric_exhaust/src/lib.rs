@@ -63,6 +63,10 @@ impl<'a> Checker<'a> {
                     self.check_expr(s);
                 }
             }
+            Stmt::For { iter, body, .. } => {
+                self.check_expr(iter);
+                self.check_expr(body);
+            }
         }
     }
 
@@ -144,6 +148,15 @@ impl<'a> Checker<'a> {
                 for a in args {
                     self.check_expr(&a.value);
                 }
+            }
+            Expr::ArrayLit { elements, .. } => {
+                for e in elements {
+                    self.check_expr(e);
+                }
+            }
+            Expr::Index { array, index, .. } => {
+                self.check_expr(array);
+                self.check_expr(index);
             }
         }
     }

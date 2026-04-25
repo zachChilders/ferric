@@ -67,6 +67,9 @@ struct Binding {
     def_id: DefId,
     mutable: bool,
     span: Span,
+    /// `true` for native pre-registrations: user code may shadow the binding
+    /// without producing a `DuplicateDefinition` error.
+    shadowable: bool,
 }
 
 /// A scope containing variable bindings.
@@ -82,10 +85,28 @@ impl Scope {
     }
 }
 
+/// One frame for each closure currently being resolved. Lets the resolver
+/// detect when a `Variable` lookup crosses into a captured outer scope.
+struct ClosureFrame {
+    id: NodeId,
+    /// Number of scopes on the stack at the moment the closure was entered.
+    /// A binding found in scopes [0, scope_floor) is a capture.
+    scope_floor: usize,
+    /// Captured (DefId, source name) pairs in the order they were first
+    /// referenced. Deduplicated via `captured_set`.
+    captures: Vec<(DefId, Symbol)>,
+    captured_set: std::collections::HashSet<DefId>,
+}
+
 /// The name resolver.
 struct Resolver {
     /// Stack of scopes (innermost is last)
     scopes: Vec<Scope>,
+    /// Stack of in-progress closures (innermost last).
+    closure_stack: Vec<ClosureFrame>,
+    /// Output: for each closure NodeId, the captured (DefId, name) pairs in
+    /// the order they were first referenced inside the closure body.
+    captures: HashMap<NodeId, Vec<(DefId, Symbol)>>,
 
     /// DefId generator
     def_id_gen: DefIdGen,
@@ -136,6 +157,8 @@ impl Resolver {
     fn new() -> Self {
         Self {
             scopes: Vec::new(),
+            closure_stack: Vec::new(),
+            captures: HashMap::new(),
             def_id_gen: DefIdGen::new(),
             next_slot: 0,
             next_fn_slot: 0,
@@ -169,6 +192,7 @@ impl Resolver {
         result.enum_variants = self.enum_variants;
         result.method_def_ids = self.method_def_ids;
         result.method_params = self.method_params;
+        result.captures = self.captures;
         result
     }
 
@@ -192,6 +216,16 @@ impl Resolver {
         // Check for duplicate definition in the current scope only
         if let Some(scope) = self.scopes.last_mut() {
             if let Some(existing) = scope.bindings.get(&name) {
+                // Native pre-registrations are marked shadowable. Allow user
+                // code to override them silently — otherwise adding a new
+                // stdlib function could break unrelated user programs.
+                if existing.shadowable {
+                    scope.bindings.insert(
+                        name,
+                        Binding { def_id, mutable, span, shadowable: false },
+                    );
+                    return def_id;
+                }
                 // Duplicate definition error
                 self.errors.push(ResolveError::DuplicateDefinition {
                     name,
@@ -204,6 +238,7 @@ impl Resolver {
                     def_id,
                     mutable,
                     span,
+                    shadowable: false,
                 });
             }
         }
@@ -221,6 +256,28 @@ impl Resolver {
         None
     }
 
+    /// Like `lookup`, but also returns the index in `self.scopes` where the
+    /// binding was found. Used to detect captured variables in closures.
+    fn lookup_with_scope(&self, name: Symbol) -> Option<(&Binding, usize)> {
+        for (idx, scope) in self.scopes.iter().enumerate().rev() {
+            if let Some(binding) = scope.bindings.get(&name) {
+                return Some((binding, idx));
+            }
+        }
+        None
+    }
+
+    /// If we're currently resolving inside one or more closures, record `def_id`
+    /// as a capture for every enclosing closure whose `scope_floor` is greater
+    /// than `binding_scope`. This handles nested closures correctly.
+    fn note_capture(&mut self, def_id: DefId, name: Symbol, binding_scope: usize) {
+        for frame in self.closure_stack.iter_mut() {
+            if binding_scope < frame.scope_floor && frame.captured_set.insert(def_id) {
+                frame.captures.push((def_id, name));
+            }
+        }
+    }
+
     /// Registers a native function as a pre-defined name with its parameter names.
     fn register_native(&mut self, name: Symbol, param_names: Vec<Symbol>) {
         // Ensure global scope exists
@@ -230,12 +287,14 @@ impl Resolver {
 
         let def_id = self.def_id_gen.next();
 
-        // Add to global scope (first scope in the stack)
+        // Add to global scope (first scope in the stack). Mark shadowable so
+        // a user-defined `fn name(...)` overrides it silently.
         if let Some(scope) = self.scopes.first_mut() {
             scope.bindings.insert(name, Binding {
                 def_id,
                 mutable: false,
                 span: Span::new(0, 0),
+                shadowable: true,
             });
         }
 
@@ -449,6 +508,24 @@ impl Resolver {
             Stmt::Require(req) => {
                 self.resolve_require(req);
             }
+            Stmt::For { var, var_id, iter, body, span, .. } => {
+                // Iterable is resolved in the outer scope.
+                self.resolve_expr(iter);
+
+                // The loop body sees a fresh scope binding `var`.
+                self.push_scope();
+                let def_id = self.define(*var, false, *span);
+                let slot = self.next_slot;
+                self.next_slot += 1;
+                self.def_slots.insert(def_id, slot);
+                self.resolutions.insert(*var_id, def_id);
+
+                self.loop_depth += 1;
+                self.resolve_expr(body);
+                self.loop_depth -= 1;
+
+                self.pop_scope();
+            }
         }
     }
 
@@ -480,9 +557,13 @@ impl Resolver {
             }
             Expr::Variable { name, id, span } => {
                 // Look up the variable in the scope stack
-                if let Some(binding) = self.lookup(*name) {
+                if let Some((binding, scope_idx)) = self.lookup_with_scope(*name) {
                     // Record the resolution
-                    self.resolutions.insert(*id, binding.def_id);
+                    let def_id = binding.def_id;
+                    self.resolutions.insert(*id, def_id);
+                    // If we're inside a closure and the binding lives in an
+                    // outer scope, add it to the closure's capture list.
+                    self.note_capture(def_id, *name, scope_idx);
                 } else {
                     // Undefined variable error
                     self.errors.push(ResolveError::UndefinedVariable {
@@ -605,11 +686,19 @@ impl Resolver {
                     });
                 }
             }
-            Expr::Closure { params, body, .. } => {
-                // Push a scope for the closure body so any local vars are scoped
+            Expr::Closure { params, body, id, .. } => {
+                // Push a scope for the closure body. Anything resolved against
+                // a binding in scopes < scope_floor is a capture.
                 self.push_scope();
+                let scope_floor = self.scopes.len();
+                self.closure_stack.push(ClosureFrame {
+                    id: *id,
+                    scope_floor,
+                    captures: Vec::new(),
+                    captured_set: std::collections::HashSet::new(),
+                });
 
-                // Define any parameters (for M2.5 set_fn closures these will be empty)
+                // Define any parameters (for M2.5 set_fn closures these will be empty).
                 for param in params {
                     let param_def_id = self.define(param.name, false, param.span);
                     let slot = self.next_slot;
@@ -620,6 +709,8 @@ impl Resolver {
                 // Resolve the closure body in the closure's scope
                 self.resolve_expr(body);
 
+                let frame = self.closure_stack.pop().expect("closure frame popped");
+                self.captures.insert(frame.id, frame.captures);
                 self.pop_scope();
             }
             Expr::Shell { parts, .. } => {
@@ -698,6 +789,15 @@ impl Resolver {
                 for a in args {
                     self.resolve_expr(&a.value);
                 }
+            }
+            Expr::ArrayLit { elements, .. } => {
+                for e in elements {
+                    self.resolve_expr(e);
+                }
+            }
+            Expr::Index { array, index, .. } => {
+                self.resolve_expr(array);
+                self.resolve_expr(index);
             }
         }
     }
