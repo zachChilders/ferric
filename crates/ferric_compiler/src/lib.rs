@@ -26,9 +26,9 @@
 use std::collections::HashMap;
 
 use ferric_common::{
-    BinOp, Chunk, Constant, Expr, Interner, Item, Literal, MatchArm, NamedArg, NodeId,
-    Op, ParseResult, Param, Pattern, Program, RequireMode, RequireStmt, ResolveResult,
-    ShellPart, Stmt, Symbol, Ty, TypeResult, UnOp,
+    BinOp, Chunk, Constant, DefId, Expr, ImplMethod, Interner, Item, Literal, MatchArm,
+    NamedArg, NodeId, Op, ParseResult, Param, Pattern, Program, RequireMode, RequireStmt,
+    ResolveResult, ShellPart, Stmt, Symbol, Ty, TypeResult, UnOp,
 };
 
 /// Name of the compiler-internal native that executes a shell command.
@@ -75,6 +75,10 @@ struct Compiler<'a> {
     /// references and recursion resolve before any body is compiled.
     fn_chunks: HashMap<Symbol, u16>,
 
+    /// Impl method DefId → chunk index. Methods do not have free-standing
+    /// names, so the compiler must reference them through their `DefId`.
+    method_chunks: HashMap<DefId, u16>,
+
     /// Per-function scope stack of `name → local slot`. Reset on each chunk.
     scopes: Vec<HashMap<Symbol, u8>>,
 
@@ -108,6 +112,7 @@ impl<'a> Compiler<'a> {
             chunks: Vec::new(),
             current: 0,
             fn_chunks: HashMap::new(),
+            method_chunks: HashMap::new(),
             scopes: Vec::new(),
             next_local: 0,
             loop_stack: Vec::new(),
@@ -121,31 +126,49 @@ impl<'a> Compiler<'a> {
         self.chunks.push(Chunk::new(Symbol::new(0)));
         let entry_idx: u16 = 0;
 
-        // Pre-pass: assign chunk indices to user functions.
+        // Pre-pass: assign chunk indices to user functions and impl methods.
         for item in &self.ast.items {
-            if let Item::FnDef { name, .. } = item {
-                let chunk_idx = self.chunks.len() as u16;
-                self.chunks.push(Chunk::new(*name));
-                self.fn_chunks.insert(*name, chunk_idx);
+            match item {
+                Item::FnDef { name, .. } => {
+                    let chunk_idx = self.chunks.len() as u16;
+                    self.chunks.push(Chunk::new(*name));
+                    self.fn_chunks.insert(*name, chunk_idx);
+                }
+                Item::ImplBlock { methods, .. } => {
+                    for m in methods {
+                        let def_id = match self.resolve.method_def_ids.get(&m.id) {
+                            Some(d) => *d,
+                            None => continue,
+                        };
+                        let chunk_idx = self.chunks.len() as u16;
+                        self.chunks.push(Chunk::new(m.name));
+                        self.method_chunks.insert(def_id, chunk_idx);
+                    }
+                }
+                _ => {}
             }
         }
 
         // Compile each function body.
         for item in &self.ast.items {
-            if let Item::FnDef { name, params, body, .. } = item {
-                let chunk_idx = self.fn_chunks[name] as usize;
-                self.enter_chunk(chunk_idx);
-                self.push_scope();
-
-                // Parameters occupy slots 0..n in declaration order.
-                for param in params {
-                    self.bind_local(param.name);
+            match item {
+                Item::FnDef { name, params, body, .. } => {
+                    let chunk_idx = self.fn_chunks[name] as usize;
+                    self.enter_chunk(chunk_idx);
+                    self.push_scope();
+                    for param in params {
+                        self.bind_local(param.name);
+                    }
+                    self.compile_expr(body);
+                    self.emit(Op::Return);
+                    self.pop_scope();
                 }
-
-                self.compile_expr(body);
-                self.emit(Op::Return);
-
-                self.pop_scope();
+                Item::ImplBlock { methods, .. } => {
+                    for m in methods {
+                        self.compile_impl_method(m);
+                    }
+                }
+                _ => {}
             }
         }
 
@@ -520,7 +543,67 @@ impl<'a> Compiler<'a> {
             Expr::Match { scrutinee, arms, .. } => {
                 self.compile_match(scrutinee, arms);
             }
+            Expr::MethodCall { receiver, args, id, span, .. } => {
+                self.compile_method_call(receiver, args, *id, *span);
+            }
         }
+    }
+
+    /// Compiles a method call by looking up the resolved impl-method DefId
+    /// (recorded by the type checker) and lowering to a regular function
+    /// call where the receiver is the first argument.
+    fn compile_method_call(
+        &mut self,
+        receiver: &Expr,
+        args: &[NamedArg],
+        id: NodeId,
+        _span: ferric_common::Span,
+    ) {
+        // Push the receiver as the first argument.
+        self.compile_expr(receiver);
+        for arg in args {
+            self.compile_expr(&arg.value);
+        }
+
+        // The type checker records which impl method to invoke.
+        let def_id = self.types.method_dispatch.get(&id).copied();
+        match def_id.and_then(|d| self.method_chunks.get(&d).copied()) {
+            Some(chunk_idx) => {
+                let cidx = self.add_constant(Constant::Fn(chunk_idx));
+                self.emit(Op::LoadConst(cidx));
+                let argc =
+                    u8::try_from(args.len() + 1).expect("method call argc exceeds u8");
+                self.emit(Op::Call(argc));
+            }
+            None => {
+                // No dispatch info — type checker should have rejected this.
+                // Pop pushed values to keep the stack balanced and push Unit.
+                for _ in 0..(args.len() + 1) {
+                    self.emit(Op::Pop);
+                }
+                self.emit(Op::Unit);
+            }
+        }
+    }
+
+    /// Compiles a single impl block method into its pre-allocated chunk.
+    fn compile_impl_method(&mut self, m: &ImplMethod) {
+        let def_id = match self.resolve.method_def_ids.get(&m.id) {
+            Some(d) => *d,
+            None => return,
+        };
+        let chunk_idx = match self.method_chunks.get(&def_id) {
+            Some(c) => *c as usize,
+            None => return,
+        };
+        self.enter_chunk(chunk_idx);
+        self.push_scope();
+        for param in &m.params {
+            self.bind_local(param.name);
+        }
+        self.compile_expr(&m.body);
+        self.emit(Op::Return);
+        self.pop_scope();
     }
 
     // ---- M4 helpers ---------------------------------------------------------
@@ -913,7 +996,8 @@ mod tests {
         assert!(parse_result.errors.is_empty(), "parse errors: {:?}", parse_result.errors);
         let resolve_result = resolve_with_natives(&parse_result, &native_fns);
         assert!(resolve_result.errors.is_empty(), "resolve errors: {:?}", resolve_result.errors);
-        let type_result = typecheck(&parse_result, &resolve_result, &interner);
+        let registry = ferric_common::TraitRegistry::new();
+        let type_result = typecheck(&parse_result, &resolve_result, &interner, &registry);
         assert!(type_result.errors.is_empty(), "type errors: {:?}", type_result.errors);
         let program = compile(&parse_result, &resolve_result, &type_result, &interner);
         (program, interner)

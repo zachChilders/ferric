@@ -77,6 +77,12 @@ pub struct ResolveResult {
     pub struct_fields: HashMap<DefId, Vec<(Symbol, crate::TypeAnnotation)>>,
     /// Map from enum DefId → ordered list of variants.
     pub enum_variants: HashMap<DefId, Vec<(Symbol, Vec<crate::TypeAnnotation>)>>,
+    /// Map from each impl-method NodeId to the DefId allocated for it.
+    pub method_def_ids: HashMap<NodeId, DefId>,
+    /// Map from each impl-method NodeId to its declared parameter list.
+    /// Stored separately from `fn_params` (which is keyed by Symbol) because
+    /// methods share names across types.
+    pub method_params: HashMap<NodeId, Vec<crate::Param>>,
     /// Any errors encountered during resolution
     pub errors: Vec<ResolveError>,
 }
@@ -98,6 +104,8 @@ impl ResolveResult {
             type_defs: HashMap::new(),
             struct_fields: HashMap::new(),
             enum_variants: HashMap::new(),
+            method_def_ids: HashMap::new(),
+            method_params: HashMap::new(),
             errors,
         }
     }
@@ -132,6 +140,9 @@ impl ExhaustivenessResult {
 pub struct TypeResult {
     /// Maps each NodeId to its type
     pub node_types: HashMap<NodeId, Ty>,
+    /// For each `MethodCall` NodeId, the `DefId` of the impl method to invoke.
+    /// The compiler reads this to lower a method call to a regular function call.
+    pub method_dispatch: HashMap<NodeId, DefId>,
     /// Any errors encountered during type checking
     pub errors: Vec<TypeError>,
 }
@@ -139,7 +150,11 @@ pub struct TypeResult {
 impl TypeResult {
     /// Creates a new TypeResult.
     pub fn new(node_types: HashMap<NodeId, Ty>, errors: Vec<TypeError>) -> Self {
-        Self { node_types, errors }
+        Self {
+            node_types,
+            method_dispatch: HashMap::new(),
+            errors,
+        }
     }
 
     /// Returns true if there were any errors during type checking.

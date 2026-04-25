@@ -381,6 +381,38 @@ pub enum TypeError {
         found: Ty,
         span: Span,
     },
+    /// A method was called on a type that doesn't implement any trait
+    /// providing it.
+    NoSuchMethod {
+        ty: Ty,
+        method: Symbol,
+        span: Span,
+    },
+    /// A trait bound on a generic call site was not satisfied: the type
+    /// substituted for `type_param` doesn't implement `bound`.
+    TraitBoundNotSatisfied {
+        type_param: Symbol,
+        bound: Symbol,
+        ty: Ty,
+        span: Span,
+    },
+    /// A trait was used as a bound but no such trait is defined.
+    UnknownTrait {
+        name: Symbol,
+        span: Span,
+    },
+    /// An impl block referred to a trait that doesn't exist.
+    ImplOfUnknownTrait {
+        trait_name: Symbol,
+        span: Span,
+    },
+    /// An impl block declared a method whose signature doesn't match the
+    /// trait's declared signature.
+    ImplMethodSignatureMismatch {
+        trait_name: Symbol,
+        method: Symbol,
+        span: Span,
+    },
 }
 
 impl TypeError {
@@ -400,6 +432,11 @@ impl TypeError {
             TypeError::NotAStruct { span, .. } => *span,
             TypeError::NoSuchField { span, .. } => *span,
             TypeError::FieldTypeMismatch { span, .. } => *span,
+            TypeError::NoSuchMethod { span, .. } => *span,
+            TypeError::TraitBoundNotSatisfied { span, .. } => *span,
+            TypeError::UnknownTrait { span, .. } => *span,
+            TypeError::ImplOfUnknownTrait { span, .. } => *span,
+            TypeError::ImplMethodSignatureMismatch { span, .. } => *span,
         }
     }
 
@@ -461,6 +498,22 @@ impl TypeError {
                     expected.description(),
                     found.description()
                 )
+            }
+            TypeError::NoSuchMethod { ty, .. } => {
+                format!("no method found for type {}", ty.description())
+            }
+            TypeError::TraitBoundNotSatisfied { ty, .. } => {
+                format!(
+                    "trait bound not satisfied for type {}",
+                    ty.description()
+                )
+            }
+            TypeError::UnknownTrait { .. } => "unknown trait".to_string(),
+            TypeError::ImplOfUnknownTrait { .. } => {
+                "impl block targets an undefined trait".to_string()
+            }
+            TypeError::ImplMethodSignatureMismatch { .. } => {
+                "impl method signature does not match trait declaration".to_string()
             }
         }
     }

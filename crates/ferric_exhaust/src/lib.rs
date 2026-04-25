@@ -37,7 +37,12 @@ impl<'a> Checker<'a> {
         match item {
             Item::FnDef { body, .. } => self.check_expr(body),
             Item::Script { stmt, .. } => self.check_stmt(stmt),
-            Item::StructDef { .. } | Item::EnumDef { .. } => {}
+            Item::StructDef { .. } | Item::EnumDef { .. } | Item::TraitDef { .. } => {}
+            Item::ImplBlock { methods, .. } => {
+                for m in methods {
+                    self.check_expr(&m.body);
+                }
+            }
         }
     }
 
@@ -133,6 +138,12 @@ impl<'a> Checker<'a> {
                     self.check_expr(&arm.body);
                 }
                 self.check_match(scrutinee, arms, *span);
+            }
+            Expr::MethodCall { receiver, args, .. } => {
+                self.check_expr(receiver);
+                for a in args {
+                    self.check_expr(&a.value);
+                }
             }
         }
     }

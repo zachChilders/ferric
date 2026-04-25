@@ -12,9 +12,9 @@
 //! All other implementation details are private.
 
 use ferric_common::{
-    BinOp, Expr, Item, LexResult, Literal, MatchArm, NamedArg, NodeId, Param, ParseError,
-    ParseResult, Pattern, RequireMode, RequireStmt, ShellPart, ShellTokenPart, Stmt, Symbol,
-    Token, TokenKind, TypeAnnotation, UnOp,
+    BinOp, Expr, ImplMethod, Item, LexResult, Literal, MatchArm, NamedArg, NodeId, Param,
+    ParseError, ParseResult, Pattern, RequireMode, RequireStmt, ShellPart, ShellTokenPart,
+    Stmt, Symbol, Token, TokenKind, TraitMethod, TypeAnnotation, TypeParam, UnOp,
 };
 
 /// Generates unique NodeIds for AST nodes.
@@ -169,7 +169,11 @@ impl<'a> Parser<'a> {
             // Stop at the start of a new item
             if matches!(
                 self.peek().kind,
-                TokenKind::Fn | TokenKind::Struct | TokenKind::Enum
+                TokenKind::Fn
+                    | TokenKind::Struct
+                    | TokenKind::Enum
+                    | TokenKind::Trait
+                    | TokenKind::Impl
             ) {
                 return;
             }
@@ -183,6 +187,8 @@ impl<'a> Parser<'a> {
             TokenKind::Fn => self.parse_fn_def(),
             TokenKind::Struct => self.parse_struct_def(),
             TokenKind::Enum => self.parse_enum_def(),
+            TokenKind::Trait => self.parse_trait_def(),
+            TokenKind::Impl => self.parse_impl_block(),
             TokenKind::Let => self.parse_script_let(),
             TokenKind::Require => self.parse_script_require(),
             _ if self.is_expr_start() => self.parse_script_expr(),
@@ -376,7 +382,7 @@ impl<'a> Parser<'a> {
         Some(Item::Script { stmt, id, span })
     }
 
-    /// Parses a function definition: `fn name(params) -> ret_type block`
+    /// Parses a function definition: `fn name<T: Bound>(params) -> ret_type block`
     fn parse_fn_def(&mut self) -> Option<Item> {
         let start_span = self.peek().span;
 
@@ -399,6 +405,13 @@ impl<'a> Parser<'a> {
                 });
                 return None;
             }
+        };
+
+        // Optional generic parameter list: `<T, U: Bound + Other>`
+        let type_params = if self.check(&TokenKind::Lt) {
+            self.parse_type_params()
+        } else {
+            Vec::new()
         };
 
         // Parse parameter list
@@ -495,11 +508,353 @@ impl<'a> Parser<'a> {
         Some(Item::FnDef {
             id,
             name,
+            type_params,
             params,
             ret_ty,
             body,
             span,
         })
+    }
+
+    /// Parses a generic parameter list: `<T, U: Trait, V: A + B>`.
+    fn parse_type_params(&mut self) -> Vec<TypeParam> {
+        let _ = self.expect(TokenKind::Lt, "'<'");
+        let mut params: Vec<TypeParam> = Vec::new();
+
+        while !self.check(&TokenKind::Gt) && !self.is_at_end() {
+            let start_span = self.peek().span;
+            let name = match &self.peek().kind {
+                TokenKind::Ident(sym) => {
+                    let sym = *sym;
+                    self.advance();
+                    sym
+                }
+                _ => {
+                    let token = self.peek().clone();
+                    self.errors.push(ParseError::UnexpectedToken {
+                        expected: "type parameter name".to_string(),
+                        found: token.kind,
+                        span: token.span,
+                    });
+                    break;
+                }
+            };
+
+            let mut bounds: Vec<Symbol> = Vec::new();
+            let mut end_span = self.tokens[self.current - 1].span;
+            if self.match_token(&TokenKind::Colon) {
+                loop {
+                    match &self.peek().kind {
+                        TokenKind::Ident(sym) => {
+                            let sym = *sym;
+                            end_span = self.peek().span;
+                            self.advance();
+                            bounds.push(sym);
+                        }
+                        _ => {
+                            let token = self.peek().clone();
+                            self.errors.push(ParseError::UnexpectedToken {
+                                expected: "trait bound name".to_string(),
+                                found: token.kind,
+                                span: token.span,
+                            });
+                            break;
+                        }
+                    }
+                    if !self.match_token(&TokenKind::Plus) {
+                        break;
+                    }
+                }
+            }
+
+            params.push(TypeParam {
+                name,
+                bounds,
+                span: start_span.to(end_span),
+            });
+
+            if !self.match_token(&TokenKind::Comma) {
+                break;
+            }
+        }
+
+        let _ = self.expect(TokenKind::Gt, "'>'");
+        params
+    }
+
+    /// Parses a trait definition: `trait Name { fn method(self, params) -> Ret; ... }`
+    fn parse_trait_def(&mut self) -> Option<Item> {
+        let start_span = self.peek().span;
+        self.advance(); // consume 'trait'
+
+        let name = match &self.peek().kind {
+            TokenKind::Ident(sym) => {
+                let sym = *sym;
+                self.advance();
+                sym
+            }
+            _ => {
+                let token = self.peek().clone();
+                self.errors.push(ParseError::UnexpectedToken {
+                    expected: "trait name".to_string(),
+                    found: token.kind,
+                    span: token.span,
+                });
+                return None;
+            }
+        };
+
+        if self.expect(TokenKind::LBrace, "'{'").is_err() {
+            return None;
+        }
+
+        let mut methods: Vec<TraitMethod> = Vec::new();
+        while !self.check(&TokenKind::RBrace) && !self.is_at_end() {
+            let m_start = self.peek().span;
+            if self.expect(TokenKind::Fn, "'fn'").is_err() {
+                break;
+            }
+            let m_name = match &self.peek().kind {
+                TokenKind::Ident(sym) => {
+                    let sym = *sym;
+                    self.advance();
+                    sym
+                }
+                _ => {
+                    let token = self.peek().clone();
+                    self.errors.push(ParseError::UnexpectedToken {
+                        expected: "method name".to_string(),
+                        found: token.kind,
+                        span: token.span,
+                    });
+                    break;
+                }
+            };
+
+            let params = match self.parse_method_params() {
+                Some(p) => p,
+                None => break,
+            };
+
+            let ret_ty = if self.match_token(&TokenKind::Arrow) {
+                match self.parse_type() {
+                    Some(t) => t,
+                    None => break,
+                }
+            } else {
+                TypeAnnotation::Named(Symbol::new(0))
+            };
+
+            // Optional ; or , between methods
+            let _ = self.match_token(&TokenKind::Semi)
+                || self.match_token(&TokenKind::Comma);
+
+            let m_span = m_start.to(self.tokens[self.current - 1].span);
+            let id = self.node_id_gen.next();
+            methods.push(TraitMethod {
+                id,
+                name: m_name,
+                params,
+                ret_ty,
+                span: m_span,
+            });
+        }
+
+        let end_span = if let Ok(tok) = self.expect(TokenKind::RBrace, "'}'") {
+            tok.span
+        } else {
+            self.peek().span
+        };
+
+        let span = start_span.to(end_span);
+        let id = self.node_id_gen.next();
+        Some(Item::TraitDef { id, name, methods, span })
+    }
+
+    /// Parses an impl block: `impl Trait for Type { fn method(self, ...) { body } ... }`.
+    fn parse_impl_block(&mut self) -> Option<Item> {
+        let start_span = self.peek().span;
+        self.advance(); // consume 'impl'
+
+        let trait_name = match &self.peek().kind {
+            TokenKind::Ident(sym) => {
+                let sym = *sym;
+                self.advance();
+                sym
+            }
+            _ => {
+                let token = self.peek().clone();
+                self.errors.push(ParseError::UnexpectedToken {
+                    expected: "trait name".to_string(),
+                    found: token.kind,
+                    span: token.span,
+                });
+                return None;
+            }
+        };
+
+        if self.expect(TokenKind::For, "'for'").is_err() {
+            return None;
+        }
+
+        let type_name = match &self.peek().kind {
+            TokenKind::Ident(sym) => {
+                let sym = *sym;
+                self.advance();
+                sym
+            }
+            _ => {
+                let token = self.peek().clone();
+                self.errors.push(ParseError::UnexpectedToken {
+                    expected: "type name".to_string(),
+                    found: token.kind,
+                    span: token.span,
+                });
+                return None;
+            }
+        };
+
+        if self.expect(TokenKind::LBrace, "'{'").is_err() {
+            return None;
+        }
+
+        let mut methods: Vec<ImplMethod> = Vec::new();
+        while !self.check(&TokenKind::RBrace) && !self.is_at_end() {
+            match self.parse_impl_method() {
+                Some(m) => methods.push(m),
+                None => break,
+            }
+        }
+
+        let end_span = if let Ok(tok) = self.expect(TokenKind::RBrace, "'}'") {
+            tok.span
+        } else {
+            self.peek().span
+        };
+
+        let span = start_span.to(end_span);
+        let id = self.node_id_gen.next();
+        Some(Item::ImplBlock {
+            id,
+            trait_name,
+            type_name,
+            methods,
+            span,
+        })
+    }
+
+    /// Parses one impl method: `fn name(params) -> Ret { body }`. Identical
+    /// to a free-standing `fn` except it lives inside an impl block and is
+    /// represented by an `ImplMethod`, not `Item::FnDef`.
+    fn parse_impl_method(&mut self) -> Option<ImplMethod> {
+        let start_span = self.peek().span;
+        if self.expect(TokenKind::Fn, "'fn'").is_err() {
+            return None;
+        }
+        let name = match &self.peek().kind {
+            TokenKind::Ident(sym) => {
+                let sym = *sym;
+                self.advance();
+                sym
+            }
+            _ => {
+                let token = self.peek().clone();
+                self.errors.push(ParseError::UnexpectedToken {
+                    expected: "method name".to_string(),
+                    found: token.kind,
+                    span: token.span,
+                });
+                return None;
+            }
+        };
+        let params = self.parse_method_params()?;
+        let ret_ty = if self.match_token(&TokenKind::Arrow) {
+            self.parse_type()?
+        } else {
+            TypeAnnotation::Named(Symbol::new(0))
+        };
+        let body = if self.check(&TokenKind::LBrace) {
+            self.parse_block()
+        } else {
+            let token = self.peek().clone();
+            self.errors.push(ParseError::UnexpectedToken {
+                expected: "method body (block)".to_string(),
+                found: token.kind,
+                span: token.span,
+            });
+            return None;
+        };
+        let span = start_span.to(body.span());
+        let id = self.node_id_gen.next();
+        Some(ImplMethod {
+            id,
+            name,
+            params,
+            ret_ty,
+            body,
+            span,
+        })
+    }
+
+    /// Parses `(self [: Ty], param: Ty, ...)` for a method. The `self`
+    /// parameter is treated as if it had the impl's enclosing type, but
+    /// for parsing simplicity its declared type is the literal name `Self`.
+    /// Trait-method signatures and impl-method bodies share this format.
+    fn parse_method_params(&mut self) -> Option<Vec<Param>> {
+        if self.expect(TokenKind::LParen, "'('").is_err() {
+            return None;
+        }
+
+        let mut params: Vec<Param> = Vec::new();
+        if !self.check(&TokenKind::RParen) {
+            loop {
+                let p_start = self.peek().span;
+                let name = match &self.peek().kind {
+                    TokenKind::Ident(sym) => {
+                        let sym = *sym;
+                        self.advance();
+                        sym
+                    }
+                    _ => {
+                        let token = self.peek().clone();
+                        self.errors.push(ParseError::UnexpectedToken {
+                            expected: "parameter name".to_string(),
+                            found: token.kind,
+                            span: token.span,
+                        });
+                        return None;
+                    }
+                };
+
+                // For non-self params, expect `: Ty`. For `self`, the type is
+                // implicit (equal to `Self`); allow either an explicit
+                // annotation or just the bare name.
+                let ty = if self.match_token(&TokenKind::Colon) {
+                    self.parse_type()?
+                } else {
+                    // Bare `self` — annotate with the literal `Self` symbol
+                    // so the resolver/type-checker can substitute it later.
+                    TypeAnnotation::Named(name)
+                };
+                let p_end_span = self.tokens[self.current - 1].span;
+                let p_span = p_start.to(p_end_span);
+                params.push(Param {
+                    span: p_span,
+                    name,
+                    ty,
+                    default: None,
+                });
+
+                if !self.match_token(&TokenKind::Comma) {
+                    break;
+                }
+            }
+        }
+
+        if self.expect(TokenKind::RParen, "')'").is_err() {
+            return None;
+        }
+        Some(params)
     }
 
     /// Parses a type annotation (M1: only named types like Int, Str, Bool, Unit).
@@ -1329,20 +1684,75 @@ impl<'a> Parser<'a> {
                         break;
                     }
                 };
-                let span = expr.span().to(field_tok.span);
-                let id = self.node_id_gen.next();
-                expr = Expr::FieldAccess {
-                    expr: Box::new(expr),
-                    field,
-                    id,
-                    span,
-                };
+                if self.match_token(&TokenKind::LParen) {
+                    // Method call: receiver.method(args)
+                    let args = self.parse_method_args();
+                    let end_span = if let Ok(tok) = self.expect(TokenKind::RParen, "')'") {
+                        tok.span
+                    } else {
+                        self.peek().span
+                    };
+                    let span = expr.span().to(end_span);
+                    let id = self.node_id_gen.next();
+                    expr = Expr::MethodCall {
+                        receiver: Box::new(expr),
+                        method: field,
+                        args,
+                        id,
+                        span,
+                    };
+                } else {
+                    let span = expr.span().to(field_tok.span);
+                    let id = self.node_id_gen.next();
+                    expr = Expr::FieldAccess {
+                        expr: Box::new(expr),
+                        field,
+                        id,
+                        span,
+                    };
+                }
             } else {
                 break;
             }
         }
 
         expr
+    }
+
+    /// Parses a method-call argument list. Behaves like `parse_call_expr`'s
+    /// argument loop: positional args are an error; named args are stored
+    /// verbatim. The receiver is supplied separately, so this only parses
+    /// the comma-separated tail.
+    fn parse_method_args(&mut self) -> Vec<NamedArg> {
+        let mut args: Vec<NamedArg> = Vec::new();
+        if self.check(&TokenKind::RParen) {
+            return args;
+        }
+        loop {
+            let arg_start = self.peek().span;
+            if self.is_named_arg_start() {
+                let name = if let TokenKind::Ident(sym) = self.peek().kind {
+                    let sym = sym;
+                    self.advance();
+                    self.advance();
+                    sym
+                } else {
+                    unreachable!()
+                };
+                let value = self.with_struct_literal_allowed(|p| p.parse_expr());
+                let span = arg_start.to(value.span());
+                args.push(NamedArg { span, name, value: Box::new(value) });
+            } else {
+                self.errors.push(ParseError::PositionalArg { span: arg_start });
+                let value = self.with_struct_literal_allowed(|p| p.parse_expr());
+                let span = arg_start.to(value.span());
+                args.push(NamedArg { span, name: Symbol::new(0), value: Box::new(value) });
+            }
+            if !self.match_token(&TokenKind::Comma) {
+                break;
+            }
+        }
+        args
     }
 
     /// Parses primary expressions: literals, variables, parenthesized expressions, blocks.

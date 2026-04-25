@@ -360,6 +360,54 @@ impl Renderer {
                     found.description()
                 )
             }
+            TypeError::NoSuchMethod { ty, method, span } => {
+                format!(
+                    "error at line {}: type {} has no method `{}`",
+                    self.span_to_line(*span),
+                    ty.description(),
+                    method.0
+                )
+            }
+            TypeError::TraitBoundNotSatisfied {
+                type_param,
+                bound,
+                ty,
+                span,
+            } => {
+                format!(
+                    "error at line {}: trait bound `{}: {}` not satisfied for type {}",
+                    self.span_to_line(*span),
+                    type_param.0,
+                    bound.0,
+                    ty.description()
+                )
+            }
+            TypeError::UnknownTrait { name, span } => {
+                format!(
+                    "error at line {}: unknown trait `{}`",
+                    self.span_to_line(*span),
+                    name.0
+                )
+            }
+            TypeError::ImplOfUnknownTrait { trait_name, span } => {
+                format!(
+                    "error at line {}: impl block targets undefined trait `{}`",
+                    self.span_to_line(*span),
+                    trait_name.0
+                )
+            }
+            TypeError::ImplMethodSignatureMismatch {
+                trait_name,
+                method,
+                span,
+            } => {
+                format!(
+                    "error at line {}: impl method `{}::{}` does not match trait declaration",
+                    self.span_to_line(*span),
+                    trait_name.0,
+                    method.0
+                )
+            }
         }
     }
 

@@ -1,0 +1,15 @@
+trait Describable {
+    fn describe(self) -> Str
+}
+
+impl Describable for Int {
+    fn describe(self) -> Str {
+        "I am an integer: " + int_to_str(n: self)
+    }
+}
+
+fn print_description<T: Describable>(val: T) {
+    println(s: val.describe())
+}
+
+print_description(val: 42)

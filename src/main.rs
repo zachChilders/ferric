@@ -6,6 +6,7 @@ use ferric_lexer::lex;
 use ferric_parser::parse;
 use ferric_resolve::resolve_with_natives;
 use ferric_infer::typecheck;
+use ferric_traits::build_registry;
 use ferric_exhaust::check_exhaustiveness;
 use ferric_vm::{BytecodeVM, Executor, Value};
 use ferric_stdlib::{NativeRegistry, register_stdlib};
@@ -101,8 +102,11 @@ fn run_file(filename: &str) {
     // Resolve (with knowledge of native functions and their param names)
     let resolve_result = resolve_with_natives(&parse_result, &native_fns);
 
+    // Build trait registry (M5).
+    let trait_registry = build_registry(&parse_result, &resolve_result, &interner);
+
     // Type check
-    let type_result = typecheck(&parse_result, &resolve_result, &interner);
+    let type_result = typecheck(&parse_result, &resolve_result, &interner, &trait_registry);
 
     // Exhaustiveness check (M4 — runs even if earlier stages had errors so that
     // pattern-related issues are reported alongside type errors).
@@ -214,7 +218,8 @@ fn run_repl() {
             continue;
         }
 
-        let type_result = typecheck(&parse_result, &resolve_result, &interner);
+        let trait_registry = build_registry(&parse_result, &resolve_result, &interner);
+        let type_result = typecheck(&parse_result, &resolve_result, &interner, &trait_registry);
 
         if !type_result.errors.is_empty() {
             for error in &type_result.errors {

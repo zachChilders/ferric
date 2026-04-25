@@ -52,6 +52,26 @@ pub struct Param {
     pub default: Option<Box<Expr>>,
 }
 
+/// A generic type parameter, e.g. `T` or `T: Describable`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TypeParam {
+    pub name: Symbol,
+    pub bounds: Vec<Symbol>,
+    pub span: Span,
+}
+
+/// One method signature in a `trait` definition. Trait methods do not have
+/// bodies — only a name, declared parameters (the first being `self`), and
+/// a return type annotation.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TraitMethod {
+    pub id: NodeId,
+    pub name: Symbol,
+    pub params: Vec<Param>,
+    pub ret_ty: TypeAnnotation,
+    pub span: Span,
+}
+
 /// Mode for a require statement.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum RequireMode {
@@ -80,6 +100,8 @@ pub enum Item {
         id: NodeId,
         /// Function name
         name: Symbol,
+        /// Generic type parameters (`<T, U: Bound>`). Empty for non-generic fns.
+        type_params: Vec<TypeParam>,
         /// Parameters
         params: Vec<Param>,
         /// Return type
@@ -103,6 +125,24 @@ pub enum Item {
         variants: Vec<(Symbol, Vec<TypeAnnotation>)>,
         span: Span,
     },
+    /// Trait definition: a collection of method signatures.
+    TraitDef {
+        id: NodeId,
+        name: Symbol,
+        methods: Vec<TraitMethod>,
+        span: Span,
+    },
+    /// Impl block: a trait implementation for a specific type.
+    /// Each impl method is a fully-defined function with a body; downstream
+    /// stages treat each as if it were a top-level `FnDef` for naming and
+    /// slot-allocation purposes.
+    ImplBlock {
+        id: NodeId,
+        trait_name: Symbol,
+        type_name: Symbol,
+        methods: Vec<ImplMethod>,
+        span: Span,
+    },
     /// Top-level script statement (let binding or expression)
     /// These are executed in order when the program runs
     Script {
@@ -115,6 +155,18 @@ pub enum Item {
     },
 }
 
+/// A function inside an `impl` block. Same shape as a top-level FnDef, but
+/// scoped to the impl. The `id` uniquely names this method across the AST.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ImplMethod {
+    pub id: NodeId,
+    pub name: Symbol,
+    pub params: Vec<Param>,
+    pub ret_ty: TypeAnnotation,
+    pub body: Expr,
+    pub span: Span,
+}
+
 impl Item {
     /// Returns the NodeId of this item.
     pub fn id(&self) -> NodeId {
@@ -122,6 +174,8 @@ impl Item {
             Item::FnDef { id, .. } => *id,
             Item::StructDef { id, .. } => *id,
             Item::EnumDef { id, .. } => *id,
+            Item::TraitDef { id, .. } => *id,
+            Item::ImplBlock { id, .. } => *id,
             Item::Script { id, .. } => *id,
         }
     }
@@ -132,6 +186,8 @@ impl Item {
             Item::FnDef { span, .. } => *span,
             Item::StructDef { span, .. } => *span,
             Item::EnumDef { span, .. } => *span,
+            Item::TraitDef { span, .. } => *span,
+            Item::ImplBlock { span, .. } => *span,
             Item::Script { span, .. } => *span,
         }
     }
@@ -267,6 +323,16 @@ pub enum Expr {
         id: NodeId,
         span: Span,
     },
+    /// Method call: `receiver.method(args)`. Lowered by the type checker /
+    /// compiler to a regular function call where the receiver is the first
+    /// argument.
+    MethodCall {
+        receiver: Box<Expr>,
+        method: Symbol,
+        args: Vec<NamedArg>,
+        id: NodeId,
+        span: Span,
+    },
 }
 
 /// A single arm of a `match` expression.
@@ -341,6 +407,7 @@ impl Expr {
             Expr::Match { id, .. } => *id,
             Expr::Tuple { id, .. } => *id,
             Expr::VariantCtor { id, .. } => *id,
+            Expr::MethodCall { id, .. } => *id,
         }
     }
 
@@ -366,6 +433,7 @@ impl Expr {
             Expr::Match { span, .. } => *span,
             Expr::Tuple { span, .. } => *span,
             Expr::VariantCtor { span, .. } => *span,
+            Expr::MethodCall { span, .. } => *span,
         }
     }
 }

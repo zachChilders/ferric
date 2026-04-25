@@ -16,6 +16,7 @@ pub use errors::*;
 pub use results::*;
 pub use ast::*;
 pub use bytecode::*;
+pub use traits::*;
 
 mod span;
 mod identifiers;
@@ -26,6 +27,7 @@ mod errors;
 mod results;
 mod ast;
 mod bytecode;
+mod traits;
 
 /// Serialises a `ParseResult` as pretty-printed JSON.
 ///
@@ -70,6 +72,14 @@ const _: fn() = || {
     check::<RequireMode>();
     check::<ShellPart>();
     check::<ShellOutput>();
+    check::<TypeParam>();
+    check::<TraitMethod>();
+    check::<ImplMethod>();
+    check::<TraitRegistry>();
+    check::<TraitDef>();
+    check::<ImplDef>();
+    check::<MethodSignature>();
+    check::<ImplTy>();
     check::<LexError>();
     check::<ParseError>();
     check::<ResolveError>();

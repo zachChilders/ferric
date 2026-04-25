@@ -9,9 +9,9 @@
 use std::collections::{HashMap, HashSet};
 
 use ferric_common::{
-    BinOp, Expr, Interner, Item, Literal, MatchArm, NamedArg, NodeId, Param, ParseResult,
-    Pattern, RequireStmt, ResolveResult, ShellPart, Span, Stmt, Symbol, Ty, TyVar,
-    TypeAnnotation, TypeError, TypeResult, TypeScheme, UnOp,
+    BinOp, DefId, Expr, ImplMethod, Interner, Item, Literal, MatchArm, NamedArg, NodeId,
+    Param, ParseResult, Pattern, RequireStmt, ResolveResult, ShellPart, Span, Stmt, Symbol,
+    TraitRegistry, Ty, TyVar, TypeAnnotation, TypeError, TypeResult, TypeScheme, UnOp,
 };
 
 /// Type-checks (and infers) a parsed AST with resolution information.
@@ -19,14 +19,29 @@ use ferric_common::{
 /// This is the single public entry point for the inference stage. It mirrors
 /// the M1 `ferric_typecheck::typecheck` signature so swapping the crate is a
 /// one-line change in `main.rs`.
+///
+/// `registry` carries the program's traits and impls. It is consulted to
+/// dispatch method calls and to verify trait bounds on generic functions.
 pub fn typecheck(
     ast: &ParseResult,
     resolve: &ResolveResult,
     interner: &Interner,
+    registry: &TraitRegistry,
 ) -> TypeResult {
-    let mut infer = TypeInfer::new(ast, resolve, interner);
+    let mut infer = TypeInfer::new(ast, resolve, interner, registry);
     infer.infer_program();
     infer.finish()
+}
+
+/// Backwards-compatible wrapper used by tests and crates that don't yet
+/// thread a registry through. Equivalent to passing an empty registry.
+pub fn typecheck_no_traits(
+    ast: &ParseResult,
+    resolve: &ResolveResult,
+    interner: &Interner,
+) -> TypeResult {
+    let registry = TraitRegistry::new();
+    typecheck(ast, resolve, interner, &registry)
 }
 
 // ============================================================================
@@ -218,6 +233,7 @@ struct TypeInfer<'a> {
     ast: &'a ParseResult,
     resolve: &'a ResolveResult,
     interner: &'a Interner,
+    registry: &'a TraitRegistry,
 
     next_tyvar: u32,
     subst: Substitution,
@@ -231,8 +247,20 @@ struct TypeInfer<'a> {
     /// fresh type variable, scoped to the function being processed.
     generic_aliases: HashMap<Symbol, TyVar>,
 
+    /// Trait bounds attached to the type variables in scope (one entry per
+    /// generic parameter that has any bounds). Read by `MethodCall` to find
+    /// a callable trait method when the receiver is a still-unbound type
+    /// variable.
+    bound_constraints: HashMap<TyVar, Vec<Symbol>>,
+
     /// Output: every node's resolved type.
     node_types: HashMap<NodeId, Ty>,
+    /// Output: each method-call NodeId → resolved impl method DefId.
+    method_dispatch: HashMap<NodeId, DefId>,
+    /// Pending method-call resolutions: receiver NodeId, method name,
+    /// the call's MethodCall NodeId, and source span. Resolved post-pass
+    /// after the substitution settles.
+    pending_methods: Vec<(NodeId, Symbol, NodeId, Span)>,
     /// Shell interpolation expression IDs that need a Str-or-Int post-check.
     shell_interp_nodes: Vec<(NodeId, Span)>,
     /// Output: type errors encountered.
@@ -244,17 +272,22 @@ impl<'a> TypeInfer<'a> {
         ast: &'a ParseResult,
         resolve: &'a ResolveResult,
         interner: &'a Interner,
+        registry: &'a TraitRegistry,
     ) -> Self {
         Self {
             ast,
             resolve,
             interner,
+            registry,
             next_tyvar: 0,
             subst: Substitution::new(),
             env: InferEnv::new(),
             current_fn_ret: None,
             generic_aliases: HashMap::new(),
+            bound_constraints: HashMap::new(),
             node_types: HashMap::new(),
+            method_dispatch: HashMap::new(),
+            pending_methods: Vec::new(),
             shell_interp_nodes: Vec::new(),
             errors: Vec::new(),
         }
@@ -285,8 +318,21 @@ impl<'a> TypeInfer<'a> {
         //    forward references and recursion type-check correctly.
         let mut fn_aliases: Vec<HashMap<Symbol, TyVar>> = Vec::new();
         for item in &self.ast.items {
-            if let Item::FnDef { name, params, ret_ty, .. } = item {
+            if let Item::FnDef { name, type_params, params, ret_ty, .. } = item {
                 let mut aliases = HashMap::new();
+                // Pre-seed aliases for declared generic parameters so they
+                // resolve to a stable TyVar across param/ret types — and so
+                // any trait bounds can be attached to that TyVar.
+                for tp in type_params {
+                    let var = self.fresh_var_only();
+                    aliases.insert(tp.name, var);
+                    if !tp.bounds.is_empty() {
+                        self.bound_constraints
+                            .entry(var)
+                            .or_default()
+                            .extend(tp.bounds.iter().copied());
+                    }
+                }
                 let param_tys: Vec<Ty> = params
                     .iter()
                     .map(|p| self.resolve_type_annotation(&p.ty, &mut aliases))
@@ -296,10 +342,20 @@ impl<'a> TypeInfer<'a> {
                     params: param_tys,
                     ret: Box::new(ret_ty_resolved),
                 };
-                let scheme = TypeScheme {
-                    forall: aliases.values().copied().collect(),
-                    ty: fn_ty,
+                // Generic functions: do NOT quantify the type parameters.
+                // This sidesteps freshening at call sites so the function's
+                // body and call site share the same TyVar, which lets
+                // method-call dispatch and bound checking resolve through
+                // the global substitution. The trade-off is that a generic
+                // function can only be called with one concrete type per
+                // type parameter — adequate for M5's one-specialization
+                // model.
+                let forall = if type_params.is_empty() {
+                    aliases.values().copied().collect()
+                } else {
+                    Vec::new()
                 };
+                let scheme = TypeScheme { forall, ty: fn_ty };
                 self.env.define(*name, scheme);
                 fn_aliases.push(aliases);
             }
@@ -314,14 +370,112 @@ impl<'a> TypeInfer<'a> {
                     fn_idx += 1;
                     self.check_fn_def(*id, params, ret_ty, body, aliases);
                 }
-                Item::StructDef { .. } | Item::EnumDef { .. } => {
-                    // Type-only definition; nothing to type-check in the body.
+                Item::StructDef { .. } | Item::EnumDef { .. } | Item::TraitDef { .. } => {
+                    // Type-only definitions; bodies (if any) are signatures
+                    // only. Trait method signatures are picked up via the
+                    // registry, not type-checked here.
+                }
+                Item::ImplBlock { trait_name, type_name, methods, span, .. } => {
+                    // Verify the trait exists. If not, emit an error and skip
+                    // the body checks — downstream consumers ignore unknown
+                    // impls.
+                    if !self.registry.traits.contains_key(trait_name) {
+                        self.errors.push(TypeError::ImplOfUnknownTrait {
+                            trait_name: *trait_name,
+                            span: *span,
+                        });
+                    }
+                    let for_ty = self.resolve_for_type(*type_name);
+                    for m in methods {
+                        self.check_impl_method(m, &for_ty);
+                    }
                 }
                 Item::Script { stmt, .. } => {
                     self.check_stmt(stmt);
                 }
             }
         }
+    }
+
+    /// Maps the impl's "for type" name (e.g. `Int`) to a `Ty`. Used to bind
+    /// the `self` parameter to the concrete impl receiver type.
+    fn resolve_for_type(&mut self, name: Symbol) -> Ty {
+        let s = self.interner.resolve(name);
+        match s {
+            "Int" => Ty::Int,
+            "Float" => Ty::Float,
+            "Bool" => Ty::Bool,
+            "Str" => Ty::Str,
+            "Unit" | "" => Ty::Unit,
+            "ShellOutput" => Ty::ShellOutput,
+            _ => self.lookup_user_type(name).unwrap_or(Ty::Unit),
+        }
+    }
+
+    /// Type-checks a single impl block method. Treats the method like a
+    /// regular function definition but does not generalise (impl methods
+    /// are monomorphic in their receiver type — there are no per-method
+    /// type parameters in this milestone). The `self` parameter (whether
+    /// it carries an explicit `Self` annotation or just the bare name
+    /// `self`) is bound to `for_type`.
+    fn check_impl_method(&mut self, m: &ImplMethod, for_type: &Ty) {
+        let mut aliases: HashMap<Symbol, TyVar> = HashMap::new();
+        // Resolve params, but swap the `self` parameter's annotation with
+        // the impl's concrete `for_type`.
+        let self_sym = self.interner.lookup("self");
+        let self_type_name = self.interner.lookup("Self");
+        let param_tys: Vec<Ty> = m
+            .params
+            .iter()
+            .enumerate()
+            .map(|(i, p)| {
+                let is_self = i == 0
+                    && (Some(p.name) == self_sym
+                        || matches!(&p.ty, TypeAnnotation::Named(sym) if Some(*sym) == self_type_name)
+                        || matches!(&p.ty, TypeAnnotation::Named(sym) if Some(*sym) == self_sym));
+                if is_self {
+                    for_type.clone()
+                } else {
+                    self.resolve_type_annotation(&p.ty, &mut aliases)
+                }
+            })
+            .collect();
+        let ret_ty_resolved = self.resolve_type_annotation(&m.ret_ty, &mut aliases);
+
+        for (param, declared) in m.params.iter().zip(param_tys.iter()) {
+            if let Some(default) = &param.default {
+                let default_ty = self.infer_expr(default);
+                self.unify(declared, &default_ty, default.span());
+            }
+        }
+
+        self.env.push_scope();
+        for p in &param_tys {
+            let mut fv = HashSet::new();
+            free_vars_in(p, &self.subst, &mut fv);
+            self.env.pin_monomorphic_vars(fv);
+        }
+        for (param, declared) in m.params.iter().zip(param_tys.iter()) {
+            self.env
+                .define(param.name, TypeScheme::monomorphic(declared.clone()));
+        }
+
+        let prev_ret = self.current_fn_ret.take();
+        self.current_fn_ret = Some(ret_ty_resolved.clone());
+        let prev_aliases = std::mem::replace(&mut self.generic_aliases, aliases);
+
+        let body_ty = self.infer_expr(&m.body);
+        self.unify(&ret_ty_resolved, &body_ty, m.body.span());
+
+        self.generic_aliases = prev_aliases;
+        self.current_fn_ret = prev_ret;
+        self.env.pop_scope();
+
+        let fn_ty = Ty::Fn {
+            params: param_tys,
+            ret: Box::new(ret_ty_resolved),
+        };
+        self.node_types.insert(m.id, fn_ty);
     }
 
     /// Registers the stdlib native signatures (looked up by name in the
@@ -661,6 +815,14 @@ impl<'a> TypeInfer<'a> {
                     }
                 }
 
+                // If the callee is a direct reference to a generic function,
+                // verify that any concrete type substituted for a bounded
+                // type parameter implements every required trait. Run this
+                // check after unification so the substitution is up to date.
+                if let Expr::Variable { name, .. } = callee.as_ref() {
+                    self.check_call_bounds(*name, *span);
+                }
+
                 self.node_types.insert(*id, ret_ty.clone());
                 ret_ty
             }
@@ -875,6 +1037,90 @@ impl<'a> TypeInfer<'a> {
                 let tuple_ty = Ty::Tuple(elem_tys);
                 self.node_types.insert(*id, tuple_ty.clone());
                 tuple_ty
+            }
+
+            Expr::MethodCall { receiver, method, args, id, span } => {
+                let receiver_ty = self.infer_expr(receiver);
+
+                // Type-check arg expressions up front so any errors land
+                // even if dispatch resolution fails.
+                let arg_tys: Vec<Ty> = args.iter().map(|a| self.infer_expr(&a.value)).collect();
+
+                // Try to resolve dispatch immediately if the receiver type
+                // is concrete; otherwise defer to the post-pass.
+                let resolved = self.subst.apply(&receiver_ty);
+                let mut method_sig: Option<(Vec<Ty>, Ty)> = None;
+
+                // 1) Concrete receiver: look up an impl directly.
+                if ferric_common::ImplTy::from_ty(&resolved).is_some() {
+                    if let Some((trait_name, def_id)) =
+                        self.registry.find_method(&resolved, *method)
+                    {
+                        self.method_dispatch.insert(*id, def_id);
+                        if let Some(trait_def) = self.registry.traits.get(&trait_name) {
+                            if let Some(sig) = trait_def.methods.get(method) {
+                                method_sig = Some((sig.params.clone(), sig.ret.clone()));
+                            }
+                        }
+                    }
+                }
+
+                // 2) Receiver is a type variable bound by a trait — use the
+                //    trait's method signature for type-checking; dispatch is
+                //    resolved monomorphically at compile time.
+                if method_sig.is_none() {
+                    if let Ty::Var(v) = &resolved {
+                        if let Some(bounds) = self.bound_constraints.get(v).cloned() {
+                            for bound in &bounds {
+                                if let Some(trait_def) = self.registry.traits.get(bound) {
+                                    if let Some(sig) = trait_def.methods.get(method) {
+                                        method_sig = Some((sig.params.clone(), sig.ret.clone()));
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Always schedule a post-pass dispatch attempt for
+                // method_dispatch resolution. The post-pass also reports
+                // NoSuchMethod if the receiver type stays unbound.
+                if !self.method_dispatch.contains_key(id) {
+                    self.pending_methods
+                        .push((receiver.id(), *method, *id, *span));
+                }
+
+                let ret_ty = if let Some((sig_params, sig_ret)) = method_sig {
+                    // sig_params[0] is the trait-method's `self`; we don't
+                    // unify it (the trait registry uses a sentinel TyVar(0)
+                    // which would collide with the inferer's allocations).
+                    // Match argument count and unify the remaining params.
+                    let rest = if sig_params.is_empty() {
+                        &[][..]
+                    } else {
+                        &sig_params[1..]
+                    };
+                    if rest.len() == arg_tys.len() {
+                        for (sig_t, arg_t) in rest.iter().zip(arg_tys.iter()) {
+                            self.unify(sig_t, arg_t, *span);
+                        }
+                    } else {
+                        self.errors.push(TypeError::WrongArgumentCount {
+                            expected: rest.len(),
+                            found: arg_tys.len(),
+                            span: *span,
+                        });
+                    }
+                    sig_ret
+                } else {
+                    // No signature available. The post-pass will report
+                    // NoSuchMethod if the receiver remains unbound.
+                    self.fresh_tyvar()
+                };
+
+                self.node_types.insert(*id, ret_ty.clone());
+                ret_ty
             }
 
             Expr::VariantCtor { enum_name, variant, args, id, span } => {
@@ -1209,6 +1455,88 @@ impl<'a> TypeInfer<'a> {
     // Finalisation
     // ------------------------------------------------------------------
 
+    /// At a Call site, verify that any concrete type substituted for a
+    /// generic parameter satisfies its declared trait bounds. Walks the
+    /// AST to find the function definition by name.
+    fn check_call_bounds(&mut self, fn_name: Symbol, span: Span) {
+        let bounds_to_check: Vec<(Symbol, Vec<Symbol>)> = self
+            .ast
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Item::FnDef { name, type_params, .. } if *name == fn_name => Some(
+                    type_params
+                        .iter()
+                        .filter(|tp| !tp.bounds.is_empty())
+                        .map(|tp| (tp.name, tp.bounds.clone()))
+                        .collect(),
+                ),
+                _ => None,
+            })
+            .unwrap_or_default();
+
+        if bounds_to_check.is_empty() {
+            return;
+        }
+
+        // The pre-pass stored the function's aliases in `fn_aliases` but we
+        // don't keep that around. Instead, look up the scheme to recover
+        // each generic param's TyVar position. Since the scheme stores the
+        // function type with TyVars, we walk it.
+        let scheme = match self.env.lookup(fn_name).cloned() {
+            Some(s) => s,
+            None => return,
+        };
+        let fn_ty = scheme.ty;
+        let param_tys = match &fn_ty {
+            Ty::Fn { params, .. } => params.clone(),
+            _ => return,
+        };
+
+        // Map each generic-param Symbol to its TyVar by re-resolving the
+        // declared param types of the FnDef. We rely on the original type
+        // annotations being identifiers like "T".
+        let fn_def = self.ast.items.iter().find_map(|item| match item {
+            Item::FnDef { name, params, .. } if *name == fn_name => Some(params.clone()),
+            _ => None,
+        });
+        let formal_params = match fn_def {
+            Some(p) => p,
+            None => return,
+        };
+
+        let mut name_to_var: HashMap<Symbol, TyVar> = HashMap::new();
+        for (formal, ty) in formal_params.iter().zip(param_tys.iter()) {
+            let TypeAnnotation::Named(sym) = &formal.ty;
+            if let Ty::Var(v) = ty {
+                name_to_var.insert(*sym, *v);
+            }
+        }
+
+        for (param_name, bounds) in bounds_to_check {
+            let v = match name_to_var.get(&param_name) {
+                Some(v) => *v,
+                None => continue,
+            };
+            let resolved = self.subst.apply(&Ty::Var(v));
+            // Skip if not yet concrete — the post-pass will catch unresolved
+            // type vars elsewhere.
+            if matches!(&resolved, Ty::Var(_)) {
+                continue;
+            }
+            for bound in &bounds {
+                if !self.registry.has_impl(*bound, &resolved) {
+                    self.errors.push(TypeError::TraitBoundNotSatisfied {
+                        type_param: param_name,
+                        bound: *bound,
+                        ty: resolved.clone(),
+                        span,
+                    });
+                }
+            }
+        }
+    }
+
     fn finish(mut self) -> TypeResult {
         // Apply final substitution to every recorded node type. Any node still
         // containing a type variable becomes a CannotInfer error — except
@@ -1255,7 +1583,31 @@ impl<'a> TypeInfer<'a> {
             }
         }
 
-        TypeResult::new(resolved, self.errors)
+        // Late-bound method dispatch. For any method call whose receiver
+        // type wasn't concrete during inference, retry resolution now that
+        // the substitution has settled and defaults have been applied.
+        for (recv_id, method, call_id, span) in &self.pending_methods {
+            if self.method_dispatch.contains_key(call_id) {
+                continue;
+            }
+            let recv_ty = resolved
+                .get(recv_id)
+                .cloned()
+                .unwrap_or(Ty::Unit);
+            if let Some((_, def_id)) = self.registry.find_method(&recv_ty, *method) {
+                self.method_dispatch.insert(*call_id, def_id);
+            } else if !matches!(recv_ty, Ty::Var(_)) {
+                self.errors.push(TypeError::NoSuchMethod {
+                    ty: recv_ty,
+                    method: *method,
+                    span: *span,
+                });
+            }
+        }
+
+        let mut result = TypeResult::new(resolved, self.errors);
+        result.method_dispatch = self.method_dispatch;
+        result
     }
 }
 
@@ -1340,7 +1692,13 @@ fn span_in_item(item: &Item, target: NodeId) -> Option<Span> {
     match item {
         Item::FnDef { body, .. } => span_in_expr(body, target),
         Item::Script { stmt, .. } => span_in_stmt(stmt, target),
-        Item::StructDef { .. } | Item::EnumDef { .. } => None,
+        Item::ImplBlock { methods, .. } => methods.iter().find_map(|m| {
+            if m.id == target {
+                return Some(m.span);
+            }
+            span_in_expr(&m.body, target)
+        }),
+        Item::StructDef { .. } | Item::EnumDef { .. } | Item::TraitDef { .. } => None,
     }
 }
 
@@ -1404,6 +1762,8 @@ fn span_in_expr(expr: &Expr, target: NodeId) -> Option<Span> {
         }),
         Expr::Tuple { elements, .. } => elements.iter().find_map(|e| span_in_expr(e, target)),
         Expr::VariantCtor { args, .. } => args.iter().find_map(|e| span_in_expr(e, target)),
+        Expr::MethodCall { receiver, args, .. } => span_in_expr(receiver, target)
+            .or_else(|| args.iter().find_map(|a| span_in_expr(&a.value, target))),
     }
 }
 
@@ -1414,7 +1774,7 @@ fn span_in_expr(expr: &Expr, target: NodeId) -> Option<Span> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ferric_common::{Interner, NodeId, ParseResult, ResolveResult};
+    use ferric_common::{Interner, NodeId, ParseResult, ResolveResult, TraitRegistry};
 
     fn empty_resolve() -> ResolveResult {
         ResolveResult::new(
@@ -1426,18 +1786,27 @@ mod tests {
         )
     }
 
+    fn empty_registry() -> TraitRegistry {
+        TraitRegistry::new()
+    }
+
     #[test]
     fn unify_primitives_succeeds() {
+        let registry = empty_registry();
         let mut infer = TypeInfer {
             ast: &ParseResult::new(vec![], vec![]),
             resolve: &empty_resolve(),
             interner: &Interner::new(),
+            registry: &registry,
             next_tyvar: 0,
             subst: Substitution::new(),
             env: InferEnv::new(),
             current_fn_ret: None,
             generic_aliases: HashMap::new(),
+            bound_constraints: HashMap::new(),
             node_types: HashMap::new(),
+            method_dispatch: HashMap::new(),
+            pending_methods: Vec::new(),
             shell_interp_nodes: vec![],
             errors: vec![],
         };
@@ -1447,16 +1816,21 @@ mod tests {
 
     #[test]
     fn unify_var_with_concrete_extends_substitution() {
+        let registry = empty_registry();
         let mut infer = TypeInfer {
             ast: &ParseResult::new(vec![], vec![]),
             resolve: &empty_resolve(),
             interner: &Interner::new(),
+            registry: &registry,
             next_tyvar: 0,
             subst: Substitution::new(),
             env: InferEnv::new(),
             current_fn_ret: None,
             generic_aliases: HashMap::new(),
+            bound_constraints: HashMap::new(),
             node_types: HashMap::new(),
+            method_dispatch: HashMap::new(),
+            pending_methods: Vec::new(),
             shell_interp_nodes: vec![],
             errors: vec![],
         };
@@ -1468,16 +1842,21 @@ mod tests {
 
     #[test]
     fn occurs_check_rejects_infinite_type() {
+        let registry = empty_registry();
         let mut infer = TypeInfer {
             ast: &ParseResult::new(vec![], vec![]),
             resolve: &empty_resolve(),
             interner: &Interner::new(),
+            registry: &registry,
             next_tyvar: 0,
             subst: Substitution::new(),
             env: InferEnv::new(),
             current_fn_ret: None,
             generic_aliases: HashMap::new(),
+            bound_constraints: HashMap::new(),
             node_types: HashMap::new(),
+            method_dispatch: HashMap::new(),
+            pending_methods: Vec::new(),
             shell_interp_nodes: vec![],
             errors: vec![],
         };
@@ -1493,16 +1872,21 @@ mod tests {
 
     #[test]
     fn instantiate_freshens_quantified_vars() {
+        let registry = empty_registry();
         let mut infer = TypeInfer {
             ast: &ParseResult::new(vec![], vec![]),
             resolve: &empty_resolve(),
             interner: &Interner::new(),
+            registry: &registry,
             next_tyvar: 0,
             subst: Substitution::new(),
             env: InferEnv::new(),
             current_fn_ret: None,
             generic_aliases: HashMap::new(),
+            bound_constraints: HashMap::new(),
             node_types: HashMap::new(),
+            method_dispatch: HashMap::new(),
+            pending_methods: Vec::new(),
             shell_interp_nodes: vec![],
             errors: vec![],
         };
@@ -1521,7 +1905,8 @@ mod tests {
         let ast = ParseResult::new(vec![], vec![]);
         let resolve = empty_resolve();
         let interner = Interner::new();
-        let result = typecheck(&ast, &resolve, &interner);
+        let registry = empty_registry();
+        let result = typecheck(&ast, &resolve, &interner, &registry);
         assert!(!result.has_errors());
     }
 

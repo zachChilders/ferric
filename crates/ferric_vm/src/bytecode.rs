@@ -564,7 +564,8 @@ mod tests {
         assert!(parse_result.errors.is_empty(), "parse: {:?}", parse_result.errors);
         let resolve_result = resolve_with_natives(&parse_result, &native_fns);
         assert!(resolve_result.errors.is_empty(), "resolve: {:?}", resolve_result.errors);
-        let type_result = typecheck(&parse_result, &resolve_result, &interner);
+        let registry = ferric_common::TraitRegistry::new();
+        let type_result = typecheck(&parse_result, &resolve_result, &interner, &registry);
         assert!(type_result.errors.is_empty(), "types: {:?}", type_result.errors);
         let program = ferric_compiler::compile(&parse_result, &resolve_result, &type_result, &interner);
 

@@ -76,6 +76,12 @@ pub enum TokenKind {
     Enum,
     /// `match` keyword for match expressions
     Match,
+    /// `trait` keyword for trait definitions
+    Trait,
+    /// `impl` keyword for impl blocks
+    Impl,
+    /// `for` keyword for impl blocks (`impl Trait for Type`)
+    For,
 
     // Identifiers and operators
     /// Identifier (variable/function name)
@@ -179,6 +185,9 @@ impl TokenKind {
             TokenKind::Struct => "keyword 'struct'".to_string(),
             TokenKind::Enum => "keyword 'enum'".to_string(),
             TokenKind::Match => "keyword 'match'".to_string(),
+            TokenKind::Trait => "keyword 'trait'".to_string(),
+            TokenKind::Impl => "keyword 'impl'".to_string(),
+            TokenKind::For => "keyword 'for'".to_string(),
             TokenKind::Ident(_) => "identifier".to_string(),
             TokenKind::Plus => "'+'".to_string(),
             TokenKind::Minus => "'-'".to_string(),

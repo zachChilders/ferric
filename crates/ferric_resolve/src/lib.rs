@@ -8,7 +8,7 @@
 
 use std::collections::HashMap;
 use ferric_common::{
-    ParseResult, ResolveResult, ResolveError, Item, Stmt, Expr,
+    ParseResult, ResolveResult, ResolveError, Item, ImplMethod, Stmt, Expr,
     NamedArg, Param, Pattern, ShellPart, Symbol, Span, NodeId, DefId, TypeAnnotation,
     RequireStmt,
 };
@@ -117,6 +117,10 @@ struct Resolver {
     struct_fields: HashMap<DefId, Vec<(Symbol, TypeAnnotation)>>,
     /// Output: for each enum DefId, its declared variants in order.
     enum_variants: HashMap<DefId, Vec<(Symbol, Vec<TypeAnnotation>)>>,
+    /// Output: each impl method's DefId, keyed by the method's NodeId.
+    method_def_ids: HashMap<NodeId, DefId>,
+    /// Output: each impl method's declared params, keyed by the method's NodeId.
+    method_params: HashMap<NodeId, Vec<Param>>,
 
     /// Accumulated errors
     errors: Vec<ResolveError>,
@@ -143,6 +147,8 @@ impl Resolver {
             type_defs: HashMap::new(),
             struct_fields: HashMap::new(),
             enum_variants: HashMap::new(),
+            method_def_ids: HashMap::new(),
+            method_params: HashMap::new(),
             errors: Vec::new(),
             loop_depth: 0,
             fn_depth: 0,
@@ -161,6 +167,8 @@ impl Resolver {
         result.type_defs = self.type_defs;
         result.struct_fields = self.struct_fields;
         result.enum_variants = self.enum_variants;
+        result.method_def_ids = self.method_def_ids;
+        result.method_params = self.method_params;
         result
     }
 
@@ -272,6 +280,29 @@ impl Resolver {
                     self.type_defs.insert(*name, def_id);
                     self.enum_variants.insert(def_id, variants.clone());
                 }
+                Item::TraitDef { name, .. } => {
+                    // Reserve a DefId for the trait so name lookups can route
+                    // through `type_defs` when needed.
+                    let def_id = self.def_id_gen.next();
+                    self.type_defs.insert(*name, def_id);
+                }
+                Item::ImplBlock { methods, .. } => {
+                    // Each impl method gets its own DefId + fn_slot, plus the
+                    // canonical-arg machinery used for named-call validation.
+                    // Methods are not added to the global scope (they aren't
+                    // free-standing names) — `Resolver::method_def_ids` indexes
+                    // them by the method's NodeId so the type checker /
+                    // compiler can find them later.
+                    for m in methods {
+                        let def_id = self.def_id_gen.next();
+                        self.method_def_ids.insert(m.id, def_id);
+                        let fn_slot = self.next_fn_slot;
+                        self.next_fn_slot += 1;
+                        self.fn_slots.insert(def_id, fn_slot);
+                        self.method_params
+                            .insert(m.id, m.params.clone());
+                    }
+                }
                 Item::Script { .. } => {}
             }
         }
@@ -326,14 +357,42 @@ impl Resolver {
                 // Pop function scope
                 self.pop_scope();
             }
-            Item::StructDef { .. } | Item::EnumDef { .. } => {
+            Item::StructDef { .. } | Item::EnumDef { .. } | Item::TraitDef { .. } => {
                 // Type-level definitions: nothing to resolve in the body. The
                 // pre-pass already registered the DefId and field/variant data.
+            }
+            Item::ImplBlock { methods, .. } => {
+                for m in methods {
+                    self.resolve_impl_method(m);
+                }
             }
             Item::Script { stmt, .. } => {
                 self.resolve_stmt(stmt);
             }
         }
+    }
+
+    /// Resolves an `impl` block method body. The method has already been
+    /// allocated a DefId + fn_slot in the pre-pass; this just walks the body
+    /// and assigns parameter slots.
+    fn resolve_impl_method(&mut self, m: &ImplMethod) {
+        self.push_scope();
+        self.fn_depth += 1;
+
+        for param in &m.params {
+            let pid = self.define(param.name, false, param.span);
+            let slot = self.next_slot;
+            self.next_slot += 1;
+            self.def_slots.insert(pid, slot);
+            if let Some(default) = &param.default {
+                self.resolve_expr(default);
+            }
+        }
+
+        self.resolve_expr(&m.body);
+
+        self.fn_depth -= 1;
+        self.pop_scope();
     }
 
     /// Resolves a statement.
@@ -631,6 +690,15 @@ impl Resolver {
                     self.resolve_expr(a);
                 }
             }
+            Expr::MethodCall { receiver, args, .. } => {
+                self.resolve_expr(receiver);
+                // Method-name → impl resolution is deferred to the type
+                // checker (it depends on the receiver type). Here we just
+                // resolve each argument expression.
+                for a in args {
+                    self.resolve_expr(&a.value);
+                }
+            }
         }
     }
 
@@ -806,6 +874,7 @@ mod tests {
                 Item::FnDef {
                     id: make_node_id(0),
                     name: make_sym(0), // foo
+                    type_params: vec![],
                     params: vec![make_param(make_sym(1), TypeAnnotation::Named(make_sym(2)))],
                     ret_ty: TypeAnnotation::Named(make_sym(2)), // Int
                     body: Expr::Variable {
@@ -1076,6 +1145,7 @@ mod tests {
                 Item::FnDef {
                     id: make_node_id(0),
                     name: make_sym(0), // foo
+                    type_params: vec![],
                     params: vec![make_param(make_sym(1), TypeAnnotation::Named(make_sym(2)))],
                     ret_ty: TypeAnnotation::Named(make_sym(2)), // Int
                     body: Expr::Block {

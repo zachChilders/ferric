@@ -15,6 +15,7 @@ dependencies = [
  "ferric_parser",
  "ferric_resolve",
  "ferric_stdlib",
+ "ferric_traits",
  "ferric_vm",
 ]
 
@@ -83,6 +84,13 @@ dependencies = [
 
 [[package]]
 name = "ferric_stdlib"
+version = "0.1.0"
+dependencies = [
+ "ferric_common",
+]
+
+[[package]]
+name = "ferric_traits"
 version = "0.1.0"
 dependencies = [
  "ferric_common",
