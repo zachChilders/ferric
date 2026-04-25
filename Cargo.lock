@@ -9,11 +9,11 @@ dependencies = [
  "ferric_common",
  "ferric_compiler",
  "ferric_diagnostics",
+ "ferric_infer",
  "ferric_lexer",
  "ferric_parser",
  "ferric_resolve",
  "ferric_stdlib",
- "ferric_typecheck",
  "ferric_vm",
 ]
 
@@ -30,10 +30,10 @@ name = "ferric_compiler"
 version = "0.1.0"
 dependencies = [
  "ferric_common",
+ "ferric_infer",
  "ferric_lexer",
  "ferric_parser",
  "ferric_resolve",
- "ferric_typecheck",
 ]
 
 [[package]]
@@ -42,6 +42,13 @@ version = "0.1.0"
 dependencies = [
  "ferric_common",
  "ferric_vm",
+]
+
+[[package]]
+name = "ferric_infer"
+version = "0.1.0"
+dependencies = [
+ "ferric_common",
 ]
 
 [[package]]
@@ -74,23 +81,16 @@ dependencies = [
 ]
 
 [[package]]
-name = "ferric_typecheck"
-version = "0.1.0"
-dependencies = [
- "ferric_common",
-]
-
-[[package]]
 name = "ferric_vm"
 version = "0.1.0"
 dependencies = [
  "ferric_common",
  "ferric_compiler",
+ "ferric_infer",
  "ferric_lexer",
  "ferric_parser",
  "ferric_resolve",
  "ferric_stdlib",
- "ferric_typecheck",
 ]
 
 [[package]]

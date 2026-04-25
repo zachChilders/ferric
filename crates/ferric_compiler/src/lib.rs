@@ -502,7 +502,7 @@ impl<'a> Compiler<'a> {
                             .node_types
                             .get(&expr.id())
                             .cloned()
-                            .unwrap_or(Ty::Unknown);
+                            .unwrap_or(Ty::Int);
                         if matches!(ty, Ty::Int) {
                             self.emit_native_call(INT_TO_STR_NATIVE, 1);
                         }
@@ -567,7 +567,7 @@ impl<'a> Compiler<'a> {
             .node_types
             .get(&left_id)
             .cloned()
-            .unwrap_or(Ty::Unknown);
+            .unwrap_or(Ty::Int);
         match op {
             BinOp::Add => match left_ty {
                 Ty::Float => self.emit(Op::AddFloat),
@@ -626,7 +626,7 @@ impl<'a> Compiler<'a> {
             .node_types
             .get(&expr_id)
             .cloned()
-            .unwrap_or(Ty::Unknown);
+            .unwrap_or(Ty::Int);
         match op {
             UnOp::Neg => match ty {
                 Ty::Float => self.emit(Op::NegFloat),
@@ -667,7 +667,7 @@ mod tests {
     use ferric_lexer::lex;
     use ferric_parser::parse;
     use ferric_resolve::resolve_with_natives;
-    use ferric_typecheck::typecheck;
+    use ferric_infer::typecheck;
 
     /// Drives the full pipeline (lex→parse→resolve→typecheck→compile) and
     /// returns the compiled `Program`.

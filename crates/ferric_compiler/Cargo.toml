@@ -10,4 +10,4 @@ ferric_common = { path = "../ferric_common" }
 ferric_lexer    = { path = "../ferric_lexer" }
 ferric_parser   = { path = "../ferric_parser" }
 ferric_resolve  = { path = "../ferric_resolve" }
-ferric_typecheck = { path = "../ferric_typecheck" }
+ferric_infer    = { path = "../ferric_infer" }

@@ -2,7 +2,7 @@ use ferric_common::{Interner, LexResult, ParseResult, ResolveResult, TypeResult,
 use ferric_lexer::lex;
 use ferric_parser::parse;
 use ferric_resolve::resolve_with_natives;
-use ferric_typecheck::typecheck;
+use ferric_infer::typecheck;
 use ferric_vm::{BytecodeVM, Executor, Value};
 use ferric_stdlib::{NativeRegistry, register_stdlib};
 use ferric_diagnostics::Renderer;

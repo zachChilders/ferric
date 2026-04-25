@@ -2,10 +2,22 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Ferric type representation.
+/// A type variable used during Hindley-Milner inference.
 ///
-/// This is the M1 baseline type system with an Unknown escape hatch
-/// to allow partial implementation. Unknown will be removed in M3.
+/// Each fresh variable allocated by the inferencer carries a unique numeric id.
+/// After inference completes, every type variable in `node_types` should have
+/// been resolved to a concrete type via the substitution.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct TyVar(pub u32);
+
+impl TyVar {
+    /// Creates a new type variable with the given id.
+    pub fn new(id: u32) -> Self {
+        Self(id)
+    }
+}
+
+/// Ferric type representation.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Ty {
     /// Integer type
@@ -27,8 +39,9 @@ pub enum Ty {
     },
     /// Result of a `$` shell expression (struct with `stdout` and `exit_code`).
     ShellOutput,
-    /// Unknown type - escape hatch for M1, will be removed in M3
-    Unknown,
+    /// Type variable produced by the inferencer. Concrete types are obtained
+    /// by applying the inferencer's substitution.
+    Var(TyVar),
 }
 
 impl Ty {
@@ -49,7 +62,7 @@ impl Ty {
                 format!("fn({}) -> {}", params_str, ret.description())
             }
             Ty::ShellOutput => "ShellOutput".to_string(),
-            Ty::Unknown => "?".to_string(),
+            Ty::Var(v) => format!("?T{}", v.0),
         }
     }
 
@@ -57,9 +70,23 @@ impl Ty {
     pub fn is_unit(&self) -> bool {
         matches!(self, Ty::Unit)
     }
+}
 
-    /// Checks if this type is Unknown.
-    pub fn is_unknown(&self) -> bool {
-        matches!(self, Ty::Unknown)
+/// A polymorphic type scheme: `∀a₁…aₙ. τ`.
+///
+/// `forall` lists the type variables that are universally quantified;
+/// instantiation replaces each of them with a fresh variable.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TypeScheme {
+    /// Universally quantified variables.
+    pub forall: Vec<TyVar>,
+    /// The body of the scheme.
+    pub ty: Ty,
+}
+
+impl TypeScheme {
+    /// A monomorphic scheme — no quantified variables.
+    pub fn monomorphic(ty: Ty) -> Self {
+        Self { forall: Vec::new(), ty }
     }
 }

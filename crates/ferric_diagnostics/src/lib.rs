@@ -253,6 +253,35 @@ impl Renderer {
                     found.description()
                 )
             }
+            TypeError::InfiniteType { var, ty, span } => {
+                format!(
+                    "error at line {}: occurs check failed: cannot construct the infinite type ?T{} = {}",
+                    self.span_to_line(*span),
+                    var.0,
+                    ty.description()
+                )
+            }
+            TypeError::CannotInfer { span } => {
+                format!(
+                    "error at line {}: cannot infer a concrete type for this expression",
+                    self.span_to_line(*span)
+                )
+            }
+            TypeError::WrongArgumentCount { expected, found, span } => {
+                format!(
+                    "error at line {}: expected {} argument(s), found {}",
+                    self.span_to_line(*span),
+                    expected,
+                    found
+                )
+            }
+            TypeError::NotCallable { ty, span } => {
+                format!(
+                    "error at line {}: cannot call value of type {}",
+                    self.span_to_line(*span),
+                    ty.description()
+                )
+            }
         }
     }
 

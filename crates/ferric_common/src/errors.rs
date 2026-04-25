@@ -4,7 +4,7 @@
 //! This enables precise error reporting and future renderer replacement.
 
 use serde::{Deserialize, Serialize};
-use crate::{Span, Symbol, TokenKind, Ty};
+use crate::{Span, Symbol, TokenKind, Ty, TyVar};
 
 /// Errors that can occur during lexing.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -288,6 +288,37 @@ pub enum TypeError {
         found: Ty,
         span: Span,
     },
+    /// Unification produced an infinite type (failed occurs check).
+    InfiniteType {
+        /// The variable that would recursively contain itself.
+        var: TyVar,
+        /// The type that contains `var`.
+        ty: Ty,
+        /// Location of the offending unification.
+        span: Span,
+    },
+    /// An expression's type could not be fully resolved to a concrete type
+    /// — a type variable remains in the substitution after inference.
+    CannotInfer {
+        /// Location of the expression whose type is ambiguous.
+        span: Span,
+    },
+    /// A function call had the wrong number of arguments.
+    WrongArgumentCount {
+        /// Expected number of arguments.
+        expected: usize,
+        /// Actual number of arguments supplied.
+        found: usize,
+        /// Location of the call.
+        span: Span,
+    },
+    /// An expression in callee position is not a function.
+    NotCallable {
+        /// The non-function type that was applied.
+        ty: Ty,
+        /// Location of the call.
+        span: Span,
+    },
 }
 
 impl TypeError {
@@ -300,6 +331,10 @@ impl TypeError {
             TypeError::RequireMessageNonStr { span, .. } => *span,
             TypeError::RequireSetType { span, .. } => *span,
             TypeError::ShellInterpType { span, .. } => *span,
+            TypeError::InfiniteType { span, .. } => *span,
+            TypeError::CannotInfer { span } => *span,
+            TypeError::WrongArgumentCount { span, .. } => *span,
+            TypeError::NotCallable { span, .. } => *span,
         }
     }
 
@@ -332,6 +367,22 @@ impl TypeError {
             }
             TypeError::ShellInterpType { found, .. } => {
                 format!("shell interpolation must be Str or Int, found {}", found.description())
+            }
+            TypeError::InfiniteType { var, ty, .. } => {
+                format!(
+                    "occurs check failed: cannot construct the infinite type ?T{} = {}",
+                    var.0,
+                    ty.description()
+                )
+            }
+            TypeError::CannotInfer { .. } => {
+                "cannot infer a concrete type for this expression".to_string()
+            }
+            TypeError::WrongArgumentCount { expected, found, .. } => {
+                format!("expected {} argument(s), found {}", expected, found)
+            }
+            TypeError::NotCallable { ty, .. } => {
+                format!("cannot call value of type {}", ty.description())
             }
         }
     }

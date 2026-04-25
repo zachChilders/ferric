@@ -453,7 +453,7 @@ mod tests {
     use ferric_lexer::lex;
     use ferric_parser::parse;
     use ferric_resolve::resolve_with_natives;
-    use ferric_typecheck::typecheck;
+    use ferric_infer::typecheck;
     use ferric_stdlib::register_stdlib;
 
     fn run_source(src: &str) -> Result<Value, RuntimeError> {

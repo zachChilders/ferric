@@ -55,6 +55,8 @@ const _: fn() = || {
     check::<TokenKind>();
     check::<ShellTokenPart>();
     check::<Ty>();
+    check::<TyVar>();
+    check::<TypeScheme>();
     check::<TypeAnnotation>();
     check::<Literal>();
     check::<BinOp>();

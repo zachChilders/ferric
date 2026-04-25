@@ -1,5 +1,5 @@
 [package]
-name = "ferric_typecheck"
+name = "ferric_infer"
 version = "0.1.0"
 edition = "2024"
 
