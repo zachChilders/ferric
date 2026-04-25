@@ -1,0 +1,3 @@
+error at line 3: unexpected character '@'
+error at line 4: expected expression, found keyword 'let'
+error at line 4: duplicate definition of `13` (first defined at line 2)

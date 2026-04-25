@@ -1,0 +1,1 @@
+error at line 2: type mismatch: expected int, found str

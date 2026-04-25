@@ -1,5 +1,0 @@
-fn test() -> Int {
-    42
-}
-
-test()

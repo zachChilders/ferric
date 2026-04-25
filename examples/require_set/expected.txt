@@ -1,0 +1,3 @@
+x recovered and require passed
+warning: require failed: y should be positive
+execution continued after warn+set

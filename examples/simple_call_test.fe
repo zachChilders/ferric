@@ -1,6 +1,0 @@
-// Simple function call test
-fn identity(x: Int) -> Int {
-    x
-}
-
-let result = identity("hello")  // Should error: Str instead of Int

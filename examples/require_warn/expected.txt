@@ -1,0 +1,2 @@
+warning: require failed: x should be positive
+execution continued after warn
