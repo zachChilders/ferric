@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
-use crate::{Token, LexError, ParseError, ResolveError, TypeError, NodeId, DefId, Ty, Item, NamedArg, Chunk};
+use crate::{Token, LexError, ParseError, ResolveError, TypeError, ExhaustivenessError, NodeId, DefId, Ty, Item, NamedArg, Chunk, Symbol};
 
 /// Result of the lexing stage.
 ///
@@ -68,6 +68,15 @@ pub struct ResolveResult {
     /// Maps each Call NodeId to its args in parameter-definition order (with defaults inserted).
     /// Downstream stages use this instead of CallExpr::args directly.
     pub canonical_call_args: HashMap<NodeId, Vec<NamedArg>>,
+    /// Map from struct/enum name → DefId. Filled during a pre-pass over
+    /// top-level items.
+    pub type_defs: HashMap<Symbol, DefId>,
+    /// Map from struct DefId → ordered list of (field_name, declared_type).
+    /// Used by the inferencer to type-check field accesses and struct literals,
+    /// and by the compiler to compute field indices.
+    pub struct_fields: HashMap<DefId, Vec<(Symbol, crate::TypeAnnotation)>>,
+    /// Map from enum DefId → ordered list of variants.
+    pub enum_variants: HashMap<DefId, Vec<(Symbol, Vec<crate::TypeAnnotation>)>>,
     /// Any errors encountered during resolution
     pub errors: Vec<ResolveError>,
 }
@@ -86,11 +95,31 @@ impl ResolveResult {
             def_slots,
             fn_slots,
             canonical_call_args,
+            type_defs: HashMap::new(),
+            struct_fields: HashMap::new(),
+            enum_variants: HashMap::new(),
             errors,
         }
     }
 
     /// Returns true if there were any errors during resolution.
+    pub fn has_errors(&self) -> bool {
+        !self.errors.is_empty()
+    }
+}
+
+/// Result of the exhaustiveness checking stage.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ExhaustivenessResult {
+    /// Errors and warnings discovered during exhaustiveness checking.
+    pub errors: Vec<ExhaustivenessError>,
+}
+
+impl ExhaustivenessResult {
+    pub fn new(errors: Vec<ExhaustivenessError>) -> Self {
+        Self { errors }
+    }
+
     pub fn has_errors(&self) -> bool {
         !self.errors.is_empty()
     }

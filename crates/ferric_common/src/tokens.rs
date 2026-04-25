@@ -70,6 +70,12 @@ pub enum TokenKind {
     Continue,
     /// `require` keyword for require statements
     Require,
+    /// `struct` keyword for struct definitions
+    Struct,
+    /// `enum` keyword for enum definitions
+    Enum,
+    /// `match` keyword for match expressions
+    Match,
 
     // Identifiers and operators
     /// Identifier (variable/function name)
@@ -132,6 +138,14 @@ pub enum TokenKind {
     Arrow,
     /// `;` semicolon
     Semi,
+    /// `.` field access
+    Dot,
+    /// `::` path separator (used in `Foo::Bar`)
+    ColonColon,
+    /// `_` wildcard (in patterns)
+    Underscore,
+    /// `=>` match arm separator
+    FatArrow,
 
     /// A shell command line `$ ...` — composite token produced by shell-line
     /// mode. The parts alternate between literal text and interpolated Ferric
@@ -162,6 +176,9 @@ impl TokenKind {
             TokenKind::Break => "keyword 'break'".to_string(),
             TokenKind::Continue => "keyword 'continue'".to_string(),
             TokenKind::Require => "keyword 'require'".to_string(),
+            TokenKind::Struct => "keyword 'struct'".to_string(),
+            TokenKind::Enum => "keyword 'enum'".to_string(),
+            TokenKind::Match => "keyword 'match'".to_string(),
             TokenKind::Ident(_) => "identifier".to_string(),
             TokenKind::Plus => "'+'".to_string(),
             TokenKind::Minus => "'-'".to_string(),
@@ -188,6 +205,10 @@ impl TokenKind {
             TokenKind::Colon => "':'".to_string(),
             TokenKind::Arrow => "'->'".to_string(),
             TokenKind::Semi => "';'".to_string(),
+            TokenKind::Dot => "'.'".to_string(),
+            TokenKind::ColonColon => "'::'".to_string(),
+            TokenKind::Underscore => "'_'".to_string(),
+            TokenKind::FatArrow => "'=>'".to_string(),
             TokenKind::ShellLine(_) => "shell expression".to_string(),
             TokenKind::Eof => "end of file".to_string(),
         }

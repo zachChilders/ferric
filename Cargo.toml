@@ -6,6 +6,7 @@ members = [
     "crates/ferric_parser",
     "crates/ferric_resolve",
     "crates/ferric_infer",
+    "crates/ferric_exhaust",
     "crates/ferric_compiler",
     "crates/ferric_vm",
     "crates/ferric_diagnostics",
@@ -23,6 +24,7 @@ ferric_lexer = { path = "crates/ferric_lexer" }
 ferric_parser = { path = "crates/ferric_parser" }
 ferric_resolve = { path = "crates/ferric_resolve" }
 ferric_infer = { path = "crates/ferric_infer" }
+ferric_exhaust = { path = "crates/ferric_exhaust" }
 ferric_compiler = { path = "crates/ferric_compiler" }
 ferric_vm = { path = "crates/ferric_vm" }
 ferric_diagnostics = { path = "crates/ferric_diagnostics" }

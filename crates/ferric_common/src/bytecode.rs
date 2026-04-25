@@ -113,4 +113,24 @@ pub enum Op {
     // as "no message supplied" (matches the TreeWalker's `Option<String>`).
     RequireFail,
     RequireWarn,
+
+    // ---------------- M4: structs / enums / tuples / patterns ----------------
+    /// Pop `n` values from the stack and push a struct value with those fields
+    /// (declaration order, leftmost-first).
+    MakeStruct(u8),
+    /// Pop a struct, push the value of field at index `idx`.
+    GetField(u8),
+    /// Pop `n` values from the stack and push an enum variant value with the
+    /// given variant index and field count.
+    MakeVariant(u16, u8),
+    /// Pop the top of the stack: if it's an enum variant with the given
+    /// index, push `true`; otherwise push `false`.
+    MatchVariant(u16),
+    /// Pop a variant from the stack and push each of its fields onto the stack
+    /// (leftmost-first; rightmost ends up on top).
+    UnpackVariant,
+    /// Pop `n` values, push a tuple containing them (leftmost-first).
+    MakeTuple(u8),
+    /// Pop a tuple, push its element at the given index.
+    GetTupleField(u8),
 }

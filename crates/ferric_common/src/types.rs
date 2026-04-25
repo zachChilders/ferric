@@ -1,6 +1,7 @@
 //! Type system types.
 
 use serde::{Deserialize, Serialize};
+use crate::{DefId, Symbol};
 
 /// A type variable used during Hindley-Milner inference.
 ///
@@ -39,6 +40,22 @@ pub enum Ty {
     },
     /// Result of a `$` shell expression (struct with `stdout` and `exit_code`).
     ShellOutput,
+    /// Tuple type, e.g. `(Int, Float)`.
+    Tuple(Vec<Ty>),
+    /// User-defined struct type. Identified by `def_id` (assigned by the
+    /// resolver) plus the named field types in declaration order.
+    Struct {
+        def_id: DefId,
+        name: Symbol,
+        fields: Vec<(Symbol, Ty)>,
+    },
+    /// User-defined enum type. Each variant has a name and a list of payload
+    /// types (empty for variants with no payload).
+    Enum {
+        def_id: DefId,
+        name: Symbol,
+        variants: Vec<(Symbol, Vec<Ty>)>,
+    },
     /// Type variable produced by the inferencer. Concrete types are obtained
     /// by applying the inferencer's substitution.
     Var(TyVar),
@@ -62,6 +79,37 @@ impl Ty {
                 format!("fn({}) -> {}", params_str, ret.description())
             }
             Ty::ShellOutput => "ShellOutput".to_string(),
+            Ty::Tuple(elems) => {
+                let parts = elems
+                    .iter()
+                    .map(|t| t.description())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("({})", parts)
+            }
+            Ty::Struct { fields, .. } => {
+                let parts = fields
+                    .iter()
+                    .map(|(_, t)| t.description())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("struct {{ {} }}", parts)
+            }
+            Ty::Enum { variants, .. } => {
+                let parts = variants
+                    .iter()
+                    .map(|(_, ts)| {
+                        let inner = ts
+                            .iter()
+                            .map(|t| t.description())
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        format!("({})", inner)
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" | ");
+                format!("enum [ {} ]", parts)
+            }
             Ty::Var(v) => format!("?T{}", v.0),
         }
     }

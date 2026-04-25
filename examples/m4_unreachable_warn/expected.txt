@@ -1,0 +1,2 @@
+warning at line 6: unreachable match arm
+any

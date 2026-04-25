@@ -324,8 +324,12 @@ impl<'a> Lexer<'a> {
             "break" => TokenKind::Break,
             "continue" => TokenKind::Continue,
             "require" => TokenKind::Require,
+            "struct" => TokenKind::Struct,
+            "enum" => TokenKind::Enum,
+            "match" => TokenKind::Match,
             "true" => TokenKind::True,
             "false" => TokenKind::False,
+            "_" => TokenKind::Underscore,
             _ => {
                 // It's an identifier, intern it
                 let symbol = self.interner.intern(&ident);
@@ -575,7 +579,15 @@ impl<'a> Lexer<'a> {
             '{' => TokenKind::LBrace,
             '}' => TokenKind::RBrace,
             ',' => TokenKind::Comma,
-            ':' => TokenKind::Colon,
+            '.' => TokenKind::Dot,
+            ':' => {
+                if self.peek() == Some(':') {
+                    self.advance();
+                    TokenKind::ColonColon
+                } else {
+                    TokenKind::Colon
+                }
+            }
             ';' => TokenKind::Semi,
 
             // Multi-character operators
@@ -591,6 +603,9 @@ impl<'a> Lexer<'a> {
                 if self.peek() == Some('=') {
                     self.advance();
                     TokenKind::EqEq
+                } else if self.peek() == Some('>') {
+                    self.advance();
+                    TokenKind::FatArrow
                 } else {
                     TokenKind::Eq
                 }

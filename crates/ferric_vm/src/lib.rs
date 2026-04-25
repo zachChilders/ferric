@@ -58,6 +58,12 @@ pub enum Value {
     NativeFn(Symbol),
     /// Captured output of a shell command.
     ShellOutput(ferric_common::ShellOutput),
+    /// Struct value: fields in declaration order.
+    Struct(Vec<Value>),
+    /// Enum variant value: `(variant_index, payload_fields)`.
+    Variant(u16, Vec<Value>),
+    /// Tuple value: elements in declaration order.
+    Tuple(Vec<Value>),
 }
 
 impl Value {
@@ -86,6 +92,17 @@ impl Value {
     pub fn new_shell_output(stdout: String, exit_code: i32) -> Self {
         Value::ShellOutput(ferric_common::ShellOutput { stdout, exit_code })
     }
+
+    /// Creates a struct value with the given fields (declaration order).
+    pub fn new_struct(fields: Vec<Value>) -> Self { Value::Struct(fields) }
+
+    /// Creates an enum variant value.
+    pub fn new_variant(idx: u16, fields: Vec<Value>) -> Self {
+        Value::Variant(idx, fields)
+    }
+
+    /// Creates a tuple value.
+    pub fn new_tuple(elements: Vec<Value>) -> Self { Value::Tuple(elements) }
 }
 
 /// Runtime errors with source location information.

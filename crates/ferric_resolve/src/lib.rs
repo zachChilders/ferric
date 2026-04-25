@@ -9,7 +9,7 @@
 use std::collections::HashMap;
 use ferric_common::{
     ParseResult, ResolveResult, ResolveError, Item, Stmt, Expr,
-    NamedArg, Param, ShellPart, Symbol, Span, NodeId, DefId, TypeAnnotation,
+    NamedArg, Param, Pattern, ShellPart, Symbol, Span, NodeId, DefId, TypeAnnotation,
     RequireStmt,
 };
 
@@ -111,6 +111,13 @@ struct Resolver {
     /// Known function parameter lists (user-defined + native), keyed by function name
     fn_params: HashMap<Symbol, Vec<Param>>,
 
+    /// Output: maps struct/enum name to its DefId.
+    type_defs: HashMap<Symbol, DefId>,
+    /// Output: for each struct DefId, its declared fields in order.
+    struct_fields: HashMap<DefId, Vec<(Symbol, TypeAnnotation)>>,
+    /// Output: for each enum DefId, its declared variants in order.
+    enum_variants: HashMap<DefId, Vec<(Symbol, Vec<TypeAnnotation>)>>,
+
     /// Accumulated errors
     errors: Vec<ResolveError>,
 
@@ -133,6 +140,9 @@ impl Resolver {
             fn_slots: HashMap::new(),
             canonical_call_args: HashMap::new(),
             fn_params: HashMap::new(),
+            type_defs: HashMap::new(),
+            struct_fields: HashMap::new(),
+            enum_variants: HashMap::new(),
             errors: Vec::new(),
             loop_depth: 0,
             fn_depth: 0,
@@ -141,13 +151,17 @@ impl Resolver {
 
     /// Consumes the resolver and produces the final ResolveResult.
     fn into_result(self) -> ResolveResult {
-        ResolveResult::new(
+        let mut result = ResolveResult::new(
             self.resolutions,
             self.def_slots,
             self.fn_slots,
             self.canonical_call_args,
             self.errors,
-        )
+        );
+        result.type_defs = self.type_defs;
+        result.struct_fields = self.struct_fields;
+        result.enum_variants = self.enum_variants;
+        result
     }
 
     /// Pushes a new scope onto the scope stack.
@@ -241,9 +255,24 @@ impl Resolver {
 
         // Pre-pass: collect all user-defined function param info so calls to any
         // function (regardless of textual order) can be validated and canonicalized.
+        // Also collect struct/enum definitions so type references in any function
+        // (regardless of order) can be resolved.
         for item in &ast.items {
-            if let Item::FnDef { name, params, .. } = item {
-                self.fn_params.insert(*name, params.clone());
+            match item {
+                Item::FnDef { name, params, .. } => {
+                    self.fn_params.insert(*name, params.clone());
+                }
+                Item::StructDef { name, fields, .. } => {
+                    let def_id = self.def_id_gen.next();
+                    self.type_defs.insert(*name, def_id);
+                    self.struct_fields.insert(def_id, fields.clone());
+                }
+                Item::EnumDef { name, variants, .. } => {
+                    let def_id = self.def_id_gen.next();
+                    self.type_defs.insert(*name, def_id);
+                    self.enum_variants.insert(def_id, variants.clone());
+                }
+                Item::Script { .. } => {}
             }
         }
 
@@ -296,6 +325,10 @@ impl Resolver {
 
                 // Pop function scope
                 self.pop_scope();
+            }
+            Item::StructDef { .. } | Item::EnumDef { .. } => {
+                // Type-level definitions: nothing to resolve in the body. The
+                // pre-pass already registered the DefId and field/variant data.
             }
             Item::Script { stmt, .. } => {
                 self.resolve_stmt(stmt);
@@ -535,6 +568,167 @@ impl Resolver {
                     if let ShellPart::Interpolated(expr) = part {
                         self.resolve_expr(expr);
                     }
+                }
+            }
+            Expr::StructLit { name, fields, span, .. } => {
+                let def_id = self.type_defs.get(name).copied();
+                if def_id.is_none() {
+                    self.errors.push(ResolveError::UndefinedType {
+                        name: *name,
+                        span: *span,
+                    });
+                }
+                let declared_fields: Vec<Symbol> = def_id
+                    .and_then(|id| self.struct_fields.get(&id))
+                    .map(|fs| fs.iter().map(|(n, _)| *n).collect())
+                    .unwrap_or_default();
+
+                let mut seen: std::collections::HashSet<Symbol> = std::collections::HashSet::new();
+                for (fname, fexpr) in fields {
+                    self.resolve_expr(fexpr);
+                    seen.insert(*fname);
+                    if def_id.is_some() && !declared_fields.contains(fname) {
+                        self.errors.push(ResolveError::UnknownField {
+                            struct_name: *name,
+                            field: *fname,
+                            span: fexpr.span(),
+                        });
+                    }
+                }
+                for declared in &declared_fields {
+                    if !seen.contains(declared) {
+                        self.errors.push(ResolveError::MissingField {
+                            struct_name: *name,
+                            field: *declared,
+                            span: *span,
+                        });
+                    }
+                }
+            }
+            Expr::FieldAccess { expr, .. } => {
+                self.resolve_expr(expr);
+                // Field-existence checking is done in the type checker, where
+                // we know the type of `expr`.
+            }
+            Expr::Match { scrutinee, arms, .. } => {
+                self.resolve_expr(scrutinee);
+                for arm in arms {
+                    // Each arm gets its own scope for pattern bindings.
+                    self.push_scope();
+                    self.resolve_pattern(&arm.pattern);
+                    self.resolve_expr(&arm.body);
+                    self.pop_scope();
+                }
+            }
+            Expr::Tuple { elements, .. } => {
+                for e in elements {
+                    self.resolve_expr(e);
+                }
+            }
+            Expr::VariantCtor { enum_name, variant, args, span, .. } => {
+                self.resolve_variant_ref(*enum_name, *variant, *span, args.len());
+                for a in args {
+                    self.resolve_expr(a);
+                }
+            }
+        }
+    }
+
+    /// Validates that `EnumName::Variant(...)` refers to a real variant with
+    /// the right arity. Pattern matching reuses this same path.
+    fn resolve_variant_ref(
+        &mut self,
+        enum_name: Symbol,
+        variant: Symbol,
+        span: Span,
+        arity: usize,
+    ) {
+        match self.type_defs.get(&enum_name).copied() {
+            None => {
+                self.errors.push(ResolveError::UndefinedType {
+                    name: enum_name,
+                    span,
+                });
+            }
+            Some(def_id) => match self.enum_variants.get(&def_id) {
+                None => {
+                    // Name resolves to a struct (or other type), not an enum.
+                    self.errors.push(ResolveError::UnknownVariant {
+                        enum_name,
+                        variant,
+                        span,
+                    });
+                }
+                Some(variants) => {
+                    match variants.iter().find(|(v, _)| *v == variant) {
+                        None => {
+                            self.errors.push(ResolveError::UnknownVariant {
+                                enum_name,
+                                variant,
+                                span,
+                            });
+                        }
+                        Some((_, payload)) => {
+                            if payload.len() != arity {
+                                self.errors.push(ResolveError::VariantArity {
+                                    enum_name,
+                                    variant,
+                                    expected: payload.len(),
+                                    found: arity,
+                                    span,
+                                });
+                            }
+                        }
+                    }
+                }
+            },
+        }
+    }
+
+    /// Resolves a pattern, defining any variable bindings in the current
+    /// (innermost) scope.
+    fn resolve_pattern(&mut self, pattern: &Pattern) {
+        match pattern {
+            Pattern::Wildcard { .. } | Pattern::Literal { .. } => {}
+            Pattern::Variable { name, id, span } => {
+                let def_id = self.define(*name, false, *span);
+                let slot = self.next_slot;
+                self.next_slot += 1;
+                self.def_slots.insert(def_id, slot);
+                self.resolutions.insert(*id, def_id);
+            }
+            Pattern::Tuple { patterns, .. } => {
+                for p in patterns {
+                    self.resolve_pattern(p);
+                }
+            }
+            Pattern::Struct { name, fields, span } => {
+                let def_id = self.type_defs.get(name).copied();
+                let declared_fields: Vec<Symbol> = def_id
+                    .and_then(|id| self.struct_fields.get(&id))
+                    .map(|fs| fs.iter().map(|(n, _)| *n).collect())
+                    .unwrap_or_default();
+                if def_id.is_none() {
+                    self.errors.push(ResolveError::UndefinedType {
+                        name: *name,
+                        span: *span,
+                    });
+                }
+                for (fname, fpat) in fields {
+                    if def_id.is_some() && !declared_fields.contains(fname) {
+                        self.errors.push(ResolveError::UnknownField {
+                            struct_name: *name,
+                            field: *fname,
+                            span: fpat.span(),
+                        });
+                    }
+                    self.resolve_pattern(fpat);
+                }
+            }
+            Pattern::Variant { enum_name, variant, patterns, span } => {
+                self.resolve_variant_ref(*enum_name, *variant, *span, patterns.len());
+                for p in patterns {
+                    self.resolve_pattern(p);
                 }
             }
         }

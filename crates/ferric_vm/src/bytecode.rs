@@ -325,6 +325,85 @@ impl Executor for BytecodeVM {
                     };
                     eprintln!("warning: require failed: {}", display);
                 }
+
+                // ---------------- M4: structs / enums / tuples ------------
+                Op::MakeStruct(n) => {
+                    let n = n as usize;
+                    if self.stack.len() < n {
+                        return Err(underflow());
+                    }
+                    let start = self.stack.len() - n;
+                    let fields: Vec<Value> = self.stack.drain(start..).collect();
+                    self.stack.push(Value::new_struct(fields));
+                }
+                Op::GetField(idx) => {
+                    let value = self.pop()?;
+                    match value {
+                        Value::Struct(fields) => {
+                            let v = fields.get(idx as usize).cloned().ok_or_else(|| {
+                                RuntimeError::InvalidOperation {
+                                    op: format!("GetField({}) out of range", idx),
+                                    span: dummy_span(),
+                                }
+                            })?;
+                            self.stack.push(v);
+                        }
+                        v => return Err(type_mismatch("Struct", &v)),
+                    }
+                }
+                Op::MakeVariant(variant_idx, n) => {
+                    let n = n as usize;
+                    if self.stack.len() < n {
+                        return Err(underflow());
+                    }
+                    let start = self.stack.len() - n;
+                    let fields: Vec<Value> = self.stack.drain(start..).collect();
+                    self.stack.push(Value::new_variant(variant_idx, fields));
+                }
+                Op::MatchVariant(idx) => {
+                    let value = self.pop()?;
+                    match value {
+                        Value::Variant(v, _) => {
+                            self.stack.push(Value::new_bool(v == idx));
+                        }
+                        v => return Err(type_mismatch("Variant", &v)),
+                    }
+                }
+                Op::UnpackVariant => {
+                    let value = self.pop()?;
+                    match value {
+                        Value::Variant(_, fields) => {
+                            for f in fields {
+                                self.stack.push(f);
+                            }
+                        }
+                        v => return Err(type_mismatch("Variant", &v)),
+                    }
+                }
+                Op::MakeTuple(n) => {
+                    let n = n as usize;
+                    if self.stack.len() < n {
+                        return Err(underflow());
+                    }
+                    let start = self.stack.len() - n;
+                    let elements: Vec<Value> = self.stack.drain(start..).collect();
+                    self.stack.push(Value::new_tuple(elements));
+                }
+                Op::GetTupleField(idx) => {
+                    let value = self.pop()?;
+                    match value {
+                        Value::Tuple(elems) => {
+                            let v = elems.get(idx as usize).cloned().ok_or_else(|| {
+                                RuntimeError::InvalidOperation {
+                                    op: format!("GetTupleField({}) out of range", idx),
+                                    span: dummy_span(),
+                                }
+                            })?;
+                            self.stack.push(v);
+                        }
+                        v => return Err(type_mismatch("Tuple", &v)),
+                    }
+                }
             }
         }
 
@@ -390,10 +469,14 @@ fn value_to_native(v: &Value) -> NativeValue {
         Value::Str(s) => NativeValue::Str(s.clone()),
         Value::Unit => NativeValue::Unit,
         Value::ShellOutput(out) => NativeValue::ShellOutput(out.clone()),
-        // Function values cannot cross the native boundary; surface them as
-        // Unit so a wrong-type native call produces a descriptive error
-        // inside the native rather than a panic here.
-        Value::Fn(_) | Value::NativeFn(_) => NativeValue::Unit,
+        // Compound and function values cannot cross the native boundary;
+        // surface them as Unit so a wrong-type native call produces a
+        // descriptive error inside the native rather than a panic here.
+        Value::Fn(_)
+        | Value::NativeFn(_)
+        | Value::Struct(_)
+        | Value::Variant(_, _)
+        | Value::Tuple(_) => NativeValue::Unit,
     }
 }
 
@@ -431,6 +514,9 @@ fn type_name(v: &Value) -> &'static str {
         Value::Fn(_) => "Fn",
         Value::NativeFn(_) => "NativeFn",
         Value::ShellOutput(_) => "ShellOutput",
+        Value::Struct(_) => "Struct",
+        Value::Variant(_, _) => "Variant",
+        Value::Tuple(_) => "Tuple",
     }
 }
 
@@ -602,6 +688,84 @@ require x > 0, \"x must be positive\"
             }
             other => panic!("expected RequireError, got {:?}", other),
         }
+    }
+
+    // ============================================================
+    // M4 — structs / enums / tuples / patterns
+    // ============================================================
+
+    #[test]
+    fn struct_literal_and_field_access() {
+        let src = "\
+struct Point { x: Int, y: Int }
+let p = Point { x: 7, y: 9 }
+p.x + p.y
+";
+        assert_eq!(run_source(src).unwrap(), Value::Int(16));
+    }
+
+    #[test]
+    fn enum_match_picks_correct_arm() {
+        let src = "\
+enum Shape { Circle(Int), Rectangle(Int, Int) }
+fn area(s: Shape) -> Int {
+    match s {
+        Shape::Circle(r) => r * r * 3,
+        Shape::Rectangle(w, h) => w * h,
+    }
+}
+area(s: Shape::Rectangle(3, 4))
+";
+        assert_eq!(run_source(src).unwrap(), Value::Int(12));
+    }
+
+    #[test]
+    fn match_wildcard_covers_remaining_variants() {
+        let src = "\
+enum Color { Red, Green, Blue }
+fn name(c: Color) -> Str {
+    match c {
+        Color::Red => \"red\",
+        _ => \"other\",
+    }
+}
+name(c: Color::Blue)
+";
+        assert_eq!(
+            run_source(src).unwrap(),
+            Value::Str("other".to_string())
+        );
+    }
+
+    #[test]
+    fn tuple_pattern_destructures() {
+        let src = "\
+let t = (10, 20)
+match t {
+    (a, b) => a + b,
+}
+";
+        assert_eq!(run_source(src).unwrap(), Value::Int(30));
+    }
+
+    #[test]
+    fn struct_pattern_with_literal_subpattern() {
+        let src = "\
+struct Pt { x: Int, y: Int }
+fn classify(p: Pt) -> Str {
+    match p {
+        Pt { x: 0, y: 0 } => \"origin\",
+        Pt { x, y: 0 } => \"x-axis\",
+        Pt { x: 0, y } => \"y-axis\",
+        Pt { x, y } => \"plane\",
+    }
+}
+classify(p: Pt { x: 3, y: 0 })
+";
+        assert_eq!(
+            run_source(src).unwrap(),
+            Value::Str("x-axis".to_string())
+        );
     }
 
     #[test]

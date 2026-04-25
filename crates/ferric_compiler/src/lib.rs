@@ -26,8 +26,8 @@
 use std::collections::HashMap;
 
 use ferric_common::{
-    BinOp, Chunk, Constant, Expr, Interner, Item, Literal, NamedArg, NodeId,
-    Op, ParseResult, Param, Program, RequireMode, RequireStmt, ResolveResult,
+    BinOp, Chunk, Constant, Expr, Interner, Item, Literal, MatchArm, NamedArg, NodeId,
+    Op, ParseResult, Param, Pattern, Program, RequireMode, RequireStmt, ResolveResult,
     ShellPart, Stmt, Symbol, Ty, TypeResult, UnOp,
 };
 
@@ -157,7 +157,10 @@ impl<'a> Compiler<'a> {
             .ast
             .items
             .iter()
-            .filter_map(|i| if let Item::Script { stmt, .. } = i { Some(stmt) } else { None })
+            .filter_map(|i| match i {
+                Item::Script { stmt, .. } => Some(stmt),
+                _ => None,
+            })
             .collect();
         let last = scripts.len().saturating_sub(1);
 
@@ -472,6 +475,224 @@ impl<'a> Compiler<'a> {
                 );
             }
             Expr::Shell { parts, span, .. } => self.compile_shell(parts, *span),
+            Expr::StructLit { name, fields, .. } => {
+                // Push field values in declared (struct definition) order so
+                // the runtime layout is stable regardless of the source order.
+                let order = self.field_order(*name);
+                for fname in &order {
+                    let (_, fexpr) = fields
+                        .iter()
+                        .find(|(n, _)| n == fname)
+                        .expect("missing field caught by resolver");
+                    self.compile_expr(fexpr);
+                }
+                let n = u8::try_from(order.len()).expect("too many struct fields");
+                self.emit(Op::MakeStruct(n));
+            }
+            Expr::FieldAccess { expr, field, .. } => {
+                let recv_id = expr.id();
+                self.compile_expr(expr);
+                let recv_ty = self.types.node_types.get(&recv_id).cloned();
+                if let Some(Ty::Struct { name, .. }) = recv_ty {
+                    let idx = self.field_index(name, *field).unwrap_or(0);
+                    self.emit(Op::GetField(idx));
+                } else {
+                    // Type checker should have rejected this; emit a no-op so
+                    // codegen does not panic.
+                    self.emit(Op::GetField(0));
+                }
+            }
+            Expr::Tuple { elements, .. } => {
+                for e in elements {
+                    self.compile_expr(e);
+                }
+                let n = u8::try_from(elements.len()).expect("too many tuple elements");
+                self.emit(Op::MakeTuple(n));
+            }
+            Expr::VariantCtor { enum_name, variant, args, .. } => {
+                for a in args {
+                    self.compile_expr(a);
+                }
+                let idx = self.variant_index(*enum_name, *variant).unwrap_or(0);
+                let n = u8::try_from(args.len()).expect("too many variant fields");
+                self.emit(Op::MakeVariant(idx, n));
+            }
+            Expr::Match { scrutinee, arms, .. } => {
+                self.compile_match(scrutinee, arms);
+            }
+        }
+    }
+
+    // ---- M4 helpers ---------------------------------------------------------
+
+    /// Returns the declared field names for a struct in source order.
+    fn field_order(&self, struct_name: Symbol) -> Vec<Symbol> {
+        let def_id = match self.resolve.type_defs.get(&struct_name) {
+            Some(d) => *d,
+            None => return Vec::new(),
+        };
+        self.resolve
+            .struct_fields
+            .get(&def_id)
+            .map(|fs| fs.iter().map(|(n, _)| *n).collect())
+            .unwrap_or_default()
+    }
+
+    /// Returns the index of `field` within `struct_name`'s declared fields.
+    fn field_index(&self, struct_name: Symbol, field: Symbol) -> Option<u8> {
+        let def_id = *self.resolve.type_defs.get(&struct_name)?;
+        let fields = self.resolve.struct_fields.get(&def_id)?;
+        let idx = fields.iter().position(|(n, _)| *n == field)?;
+        u8::try_from(idx).ok()
+    }
+
+    /// Returns the index of `variant` within `enum_name`'s declared variants.
+    fn variant_index(&self, enum_name: Symbol, variant: Symbol) -> Option<u16> {
+        let def_id = *self.resolve.type_defs.get(&enum_name)?;
+        let variants = self.resolve.enum_variants.get(&def_id)?;
+        let idx = variants.iter().position(|(n, _)| *n == variant)?;
+        u16::try_from(idx).ok()
+    }
+
+    /// Allocates an anonymous local slot (no name binding). Used for
+    /// match-scrutinee temporaries and unpacked variant fields.
+    fn bind_anon_slot(&mut self) -> u8 {
+        let slot = self.next_local;
+        self.next_local = self.next_local.checked_add(1).expect("local slot overflow");
+        slot
+    }
+
+    /// Compiles a match expression. Each arm is tested in source order;
+    /// a successful match runs the arm body, an unsuccessful one falls
+    /// through to the next arm. If no arm matches, Unit is left on the
+    /// stack — exhaustiveness checking should ensure this is unreachable.
+    fn compile_match(&mut self, scrutinee: &Expr, arms: &[MatchArm]) {
+        self.compile_expr(scrutinee);
+        let scrut_slot = self.bind_anon_slot();
+        self.emit(Op::StoreSlot(scrut_slot));
+
+        let mut end_jumps: Vec<usize> = Vec::new();
+
+        for arm in arms {
+            self.push_scope();
+            let mut fail_jumps: Vec<usize> = Vec::new();
+            self.compile_pattern(scrut_slot, &arm.pattern, &mut fail_jumps);
+            self.compile_expr(&arm.body);
+            let end_jump = self.emit_jump(Op::Jump(0));
+            end_jumps.push(end_jump);
+            for j in fail_jumps {
+                self.patch_jump(j);
+            }
+            self.pop_scope();
+        }
+
+        // Fallthrough — no arm matched. Push Unit. Exhaustiveness checking
+        // should prevent this from being reachable in correct programs.
+        self.emit(Op::Unit);
+
+        for j in end_jumps {
+            self.patch_jump(j);
+        }
+    }
+
+    /// Emits code to test `pat` against the value in slot `slot`. On match,
+    /// any sub-bindings are stored in newly allocated locals. On mismatch,
+    /// emits a `JumpIfFalse` whose patch address is appended to `fail_jumps`.
+    fn compile_pattern(&mut self, slot: u8, pat: &Pattern, fail_jumps: &mut Vec<usize>) {
+        match pat {
+            Pattern::Wildcard { .. } => {
+                // Always succeeds, no binding.
+            }
+            Pattern::Variable { name, .. } => {
+                // Bind the value in `slot` to a local under `name`. The
+                // compiler tracks pattern-bound locals in its own scope stack
+                // — distinct from `slot`, which holds the matched value.
+                self.emit(Op::LoadSlot(slot));
+                let var_slot = self.bind_local(*name);
+                self.emit(Op::StoreSlot(var_slot));
+            }
+            Pattern::Literal { value, .. } => {
+                self.emit(Op::LoadSlot(slot));
+                self.compile_literal(value);
+                self.emit_literal_eq(value);
+                fail_jumps.push(self.emit_jump(Op::JumpIfFalse(0)));
+            }
+            Pattern::Tuple { patterns, .. } => {
+                // Tuples have a fixed shape, so no test is needed — just
+                // destructure into per-element slots and recurse.
+                let elem_slots: Vec<u8> = (0..patterns.len())
+                    .map(|_| self.bind_anon_slot())
+                    .collect();
+                for (i, &es) in elem_slots.iter().enumerate() {
+                    self.emit(Op::LoadSlot(slot));
+                    let idx = u8::try_from(i).expect("tuple element index out of range");
+                    self.emit(Op::GetTupleField(idx));
+                    self.emit(Op::StoreSlot(es));
+                }
+                for (sub, &es) in patterns.iter().zip(elem_slots.iter()) {
+                    self.compile_pattern(es, sub, fail_jumps);
+                }
+            }
+            Pattern::Struct { name, fields, .. } => {
+                // Bind each named field to a fresh slot, then recurse.
+                let mut sub_slots: Vec<(u8, &Pattern)> = Vec::new();
+                for (fname, fpat) in fields {
+                    let idx = self.field_index(*name, *fname).unwrap_or(0);
+                    let s = self.bind_anon_slot();
+                    self.emit(Op::LoadSlot(slot));
+                    self.emit(Op::GetField(idx));
+                    self.emit(Op::StoreSlot(s));
+                    sub_slots.push((s, fpat));
+                }
+                for (s, sub) in sub_slots {
+                    self.compile_pattern(s, sub, fail_jumps);
+                }
+            }
+            Pattern::Variant {
+                enum_name,
+                variant,
+                patterns,
+                ..
+            } => {
+                let v_idx = self.variant_index(*enum_name, *variant).unwrap_or(0);
+                self.emit(Op::LoadSlot(slot));
+                self.emit(Op::MatchVariant(v_idx));
+                fail_jumps.push(self.emit_jump(Op::JumpIfFalse(0)));
+
+                if !patterns.is_empty() {
+                    // Allocate one slot per payload field, then unpack
+                    // (rightmost ends up on top of the stack, so store
+                    // backwards).
+                    let payload_slots: Vec<u8> = (0..patterns.len())
+                        .map(|_| self.bind_anon_slot())
+                        .collect();
+                    self.emit(Op::LoadSlot(slot));
+                    self.emit(Op::UnpackVariant);
+                    for &s in payload_slots.iter().rev() {
+                        self.emit(Op::StoreSlot(s));
+                    }
+                    for (sub, &s) in patterns.iter().zip(payload_slots.iter()) {
+                        self.compile_pattern(s, sub, fail_jumps);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Emits the typed equality op corresponding to a literal pattern.
+    fn emit_literal_eq(&mut self, lit: &Literal) {
+        match lit {
+            Literal::Int(_) => self.emit(Op::EqInt),
+            Literal::Float(_) => self.emit(Op::EqFloat),
+            Literal::Bool(_) => self.emit(Op::EqBool),
+            Literal::Str(_) => self.emit(Op::EqStr),
+            Literal::Unit => {
+                // Unit can only ever equal Unit; pop both, push true.
+                self.emit(Op::Pop);
+                self.emit(Op::Pop);
+                let idx = self.add_constant(Constant::Bool(true));
+                self.emit(Op::LoadConst(idx));
+            }
         }
     }
 

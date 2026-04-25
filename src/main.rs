@@ -1,8 +1,12 @@
-use ferric_common::{Interner, LexResult, ParseResult, ResolveResult, TypeResult, Symbol};
+use ferric_common::{
+    ExhaustivenessError, ExhaustivenessResult, Interner, LexResult, ParseResult,
+    ResolveResult, Symbol, TypeResult,
+};
 use ferric_lexer::lex;
 use ferric_parser::parse;
 use ferric_resolve::resolve_with_natives;
 use ferric_infer::typecheck;
+use ferric_exhaust::check_exhaustiveness;
 use ferric_vm::{BytecodeVM, Executor, Value};
 use ferric_stdlib::{NativeRegistry, register_stdlib};
 use ferric_diagnostics::Renderer;
@@ -100,8 +104,19 @@ fn run_file(filename: &str) {
     // Type check
     let type_result = typecheck(&parse_result, &resolve_result, &interner);
 
+    // Exhaustiveness check (M4 — runs even if earlier stages had errors so that
+    // pattern-related issues are reported alongside type errors).
+    let exhaust_result = check_exhaustiveness(&parse_result, &type_result);
+
     // Report errors
-    if report_errors(&source, &lex_result, &parse_result, &resolve_result, &type_result) {
+    if report_errors(
+        &source,
+        &lex_result,
+        &parse_result,
+        &resolve_result,
+        &type_result,
+        &exhaust_result,
+    ) {
         process::exit(1);
     }
 
@@ -209,6 +224,19 @@ fn run_repl() {
             continue;
         }
 
+        let exhaust_result = check_exhaustiveness(&parse_result, &type_result);
+        let mut had_exhaust_error = false;
+        for error in &exhaust_result.errors {
+            let renderer = Renderer::new(input.to_string());
+            eprintln!("{}", renderer.render_exhaustiveness_error(error));
+            if matches!(error, ExhaustivenessError::NonExhaustive { .. }) {
+                had_exhaust_error = true;
+            }
+        }
+        if had_exhaust_error {
+            continue;
+        }
+
         // Compile + execute
         let program = ferric_compiler::compile(&parse_result, &resolve_result, &type_result, &interner);
         let mut vm: Box<dyn Executor> = Box::new(BytecodeVM::new());
@@ -226,6 +254,11 @@ fn run_repl() {
                     Value::ShellOutput(out) => {
                         println!("ShellOutput {{ exit_code: {}, stdout: {:?} }}", out.exit_code, out.stdout)
                     }
+                    Value::Struct(fields) => println!("Struct({:?})", fields),
+                    Value::Variant(idx, fields) => {
+                        println!("Variant({}, {:?})", idx, fields)
+                    }
+                    Value::Tuple(elems) => println!("Tuple({:?})", elems),
                 }
             }
             Err(e) => {
@@ -242,6 +275,7 @@ fn report_errors(
     parse: &ParseResult,
     resolve: &ResolveResult,
     types: &TypeResult,
+    exhaust: &ExhaustivenessResult,
 ) -> bool {
     let renderer = Renderer::new(source.to_string());
     let mut has_errors = false;
@@ -264,6 +298,15 @@ fn report_errors(
     for error in &types.errors {
         eprintln!("{}", renderer.render_type_error(error));
         has_errors = true;
+    }
+
+    for error in &exhaust.errors {
+        eprintln!("{}", renderer.render_exhaustiveness_error(error));
+        // Unreachable arms are warnings, not errors — they don't fail the
+        // build.
+        if matches!(error, ExhaustivenessError::NonExhaustive { .. }) {
+            has_errors = true;
+        }
     }
 
     has_errors

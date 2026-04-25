@@ -12,9 +12,9 @@
 //! All other implementation details are private.
 
 use ferric_common::{
-    BinOp, Expr, Item, LexResult, Literal, NamedArg, NodeId, Param, ParseError, ParseResult,
-    RequireMode, RequireStmt, ShellPart, ShellTokenPart, Stmt, Symbol, Token, TokenKind,
-    TypeAnnotation, UnOp,
+    BinOp, Expr, Item, LexResult, Literal, MatchArm, NamedArg, NodeId, Param, ParseError,
+    ParseResult, Pattern, RequireMode, RequireStmt, ShellPart, ShellTokenPart, Stmt, Symbol,
+    Token, TokenKind, TypeAnnotation, UnOp,
 };
 
 /// Generates unique NodeIds for AST nodes.
@@ -46,6 +46,11 @@ struct Parser<'a> {
     node_id_gen: NodeIdGen,
     /// Accumulated errors
     errors: Vec<ParseError>,
+    /// When true, an `Ident { ... }` expression is NOT parsed as a struct
+    /// literal — it's left for an outer construct (e.g. `if cond { ... }`,
+    /// `while cond { ... }`, `match scrutinee { ... }`) to consume the `{`.
+    /// Mirrors rustc's `Restrictions::NO_STRUCT_LITERAL`.
+    no_struct_literal: bool,
 }
 
 impl<'a> Parser<'a> {
@@ -56,7 +61,29 @@ impl<'a> Parser<'a> {
             current: 0,
             node_id_gen: NodeIdGen::new(),
             errors: Vec::new(),
+            no_struct_literal: false,
         }
+    }
+
+    /// Runs `f` with `no_struct_literal` set, restoring the previous state on
+    /// return. Used when parsing the head of `if`/`while`/`match` so that
+    /// `Ident { ... }` is not greedily consumed as a struct literal.
+    fn with_no_struct_literal<R>(&mut self, f: impl FnOnce(&mut Self) -> R) -> R {
+        let prev = self.no_struct_literal;
+        self.no_struct_literal = true;
+        let result = f(self);
+        self.no_struct_literal = prev;
+        result
+    }
+
+    /// Runs `f` with struct literals re-allowed (e.g. inside parens, `match`
+    /// arm bodies, function arguments).
+    fn with_struct_literal_allowed<R>(&mut self, f: impl FnOnce(&mut Self) -> R) -> R {
+        let prev = self.no_struct_literal;
+        self.no_struct_literal = false;
+        let result = f(self);
+        self.no_struct_literal = prev;
+        result
     }
 
     // ========== Token Traversal ==========
@@ -140,7 +167,10 @@ impl<'a> Parser<'a> {
 
         while !self.is_at_end() {
             // Stop at the start of a new item
-            if matches!(self.peek().kind, TokenKind::Fn) {
+            if matches!(
+                self.peek().kind,
+                TokenKind::Fn | TokenKind::Struct | TokenKind::Enum
+            ) {
                 return;
             }
             self.advance();
@@ -151,6 +181,8 @@ impl<'a> Parser<'a> {
     fn parse_item(&mut self) -> Option<Item> {
         match self.peek().kind {
             TokenKind::Fn => self.parse_fn_def(),
+            TokenKind::Struct => self.parse_struct_def(),
+            TokenKind::Enum => self.parse_enum_def(),
             TokenKind::Let => self.parse_script_let(),
             TokenKind::Require => self.parse_script_require(),
             _ if self.is_expr_start() => self.parse_script_expr(),
@@ -164,6 +196,157 @@ impl<'a> Parser<'a> {
                 None
             }
         }
+    }
+
+    /// Parses a struct definition: `struct Name { field: Type, ... }`
+    fn parse_struct_def(&mut self) -> Option<Item> {
+        let start_span = self.peek().span;
+        self.advance(); // consume 'struct'
+
+        let name = match &self.peek().kind {
+            TokenKind::Ident(sym) => {
+                let sym = *sym;
+                self.advance();
+                sym
+            }
+            _ => {
+                let token = self.peek().clone();
+                self.errors.push(ParseError::UnexpectedToken {
+                    expected: "struct name".to_string(),
+                    found: token.kind,
+                    span: token.span,
+                });
+                return None;
+            }
+        };
+
+        if self.expect(TokenKind::LBrace, "'{'").is_err() {
+            return None;
+        }
+
+        let mut fields: Vec<(Symbol, TypeAnnotation)> = Vec::new();
+        while !self.check(&TokenKind::RBrace) && !self.is_at_end() {
+            let field_name = match &self.peek().kind {
+                TokenKind::Ident(sym) => {
+                    let sym = *sym;
+                    self.advance();
+                    sym
+                }
+                _ => {
+                    let tok = self.peek().clone();
+                    self.errors.push(ParseError::UnexpectedToken {
+                        expected: "field name".to_string(),
+                        found: tok.kind,
+                        span: tok.span,
+                    });
+                    break;
+                }
+            };
+
+            if self.expect(TokenKind::Colon, "':'").is_err() {
+                break;
+            }
+            let ty = match self.parse_type() {
+                Some(t) => t,
+                None => break,
+            };
+            fields.push((field_name, ty));
+
+            if !self.match_token(&TokenKind::Comma) {
+                break;
+            }
+        }
+
+        let end_span = if let Ok(tok) = self.expect(TokenKind::RBrace, "'}'") {
+            tok.span
+        } else {
+            self.peek().span
+        };
+
+        let span = start_span.to(end_span);
+        let id = self.node_id_gen.next();
+        Some(Item::StructDef { id, name, fields, span })
+    }
+
+    /// Parses an enum definition: `enum Name { Variant(Types), ... }`
+    fn parse_enum_def(&mut self) -> Option<Item> {
+        let start_span = self.peek().span;
+        self.advance(); // consume 'enum'
+
+        let name = match &self.peek().kind {
+            TokenKind::Ident(sym) => {
+                let sym = *sym;
+                self.advance();
+                sym
+            }
+            _ => {
+                let token = self.peek().clone();
+                self.errors.push(ParseError::UnexpectedToken {
+                    expected: "enum name".to_string(),
+                    found: token.kind,
+                    span: token.span,
+                });
+                return None;
+            }
+        };
+
+        if self.expect(TokenKind::LBrace, "'{'").is_err() {
+            return None;
+        }
+
+        let mut variants: Vec<(Symbol, Vec<TypeAnnotation>)> = Vec::new();
+        while !self.check(&TokenKind::RBrace) && !self.is_at_end() {
+            let variant_name = match &self.peek().kind {
+                TokenKind::Ident(sym) => {
+                    let sym = *sym;
+                    self.advance();
+                    sym
+                }
+                _ => {
+                    let tok = self.peek().clone();
+                    self.errors.push(ParseError::UnexpectedToken {
+                        expected: "variant name".to_string(),
+                        found: tok.kind,
+                        span: tok.span,
+                    });
+                    break;
+                }
+            };
+
+            let mut payload: Vec<TypeAnnotation> = Vec::new();
+            if self.match_token(&TokenKind::LParen) {
+                if !self.check(&TokenKind::RParen) {
+                    loop {
+                        match self.parse_type() {
+                            Some(t) => payload.push(t),
+                            None => break,
+                        }
+                        if !self.match_token(&TokenKind::Comma) {
+                            break;
+                        }
+                    }
+                }
+                if self.expect(TokenKind::RParen, "')'").is_err() {
+                    break;
+                }
+            }
+
+            variants.push((variant_name, payload));
+
+            if !self.match_token(&TokenKind::Comma) {
+                break;
+            }
+        }
+
+        let end_span = if let Ok(tok) = self.expect(TokenKind::RBrace, "'}'") {
+            tok.span
+        } else {
+            self.peek().span
+        };
+
+        let span = start_span.to(end_span);
+        let id = self.node_id_gen.next();
+        Some(Item::EnumDef { id, name, variants, span })
     }
 
     /// Parses a top-level require statement (script mode).
@@ -450,6 +633,7 @@ impl<'a> Parser<'a> {
                 | TokenKind::Break
                 | TokenKind::Continue
                 | TokenKind::Return
+                | TokenKind::Match
                 | TokenKind::OrOr  // closure: || { body }
                 | TokenKind::ShellLine(_)
         )
@@ -557,6 +741,7 @@ impl<'a> Parser<'a> {
             TokenKind::Loop => self.parse_loop_expr(),
             TokenKind::Break => self.parse_break_expr(),
             TokenKind::Continue => self.parse_continue_expr(),
+            TokenKind::Match => self.parse_match_expr(),
             _ => self.parse_binary_expr(0),
         }
     }
@@ -589,8 +774,8 @@ impl<'a> Parser<'a> {
         let start_span = self.peek().span;
         self.advance(); // consume 'if'
 
-        // Parse condition
-        let cond = Box::new(self.parse_binary_expr(0));
+        // Parse condition (no struct literals — `{` belongs to the then-branch)
+        let cond = Box::new(self.with_no_struct_literal(|p| p.parse_binary_expr(0)));
 
         // Parse then branch (must be a block)
         let then_branch = if self.check(&TokenKind::LBrace) {
@@ -660,8 +845,8 @@ impl<'a> Parser<'a> {
         let start_span = self.peek().span;
         self.advance(); // consume 'while'
 
-        // Parse condition
-        let cond = Box::new(self.parse_binary_expr(0));
+        // Parse condition (no struct literals — `{` belongs to the body)
+        let cond = Box::new(self.with_no_struct_literal(|p| p.parse_binary_expr(0)));
 
         // Parse body (must be a block)
         let body = if self.check(&TokenKind::LBrace) {
@@ -736,6 +921,226 @@ impl<'a> Parser<'a> {
         let id = self.node_id_gen.next();
 
         Expr::Continue { id, span }
+    }
+
+    /// Parses a match expression: `match scrutinee { pattern => body, ... }`
+    fn parse_match_expr(&mut self) -> Expr {
+        let start_span = self.peek().span;
+        self.advance(); // consume 'match'
+
+        // Scrutinee: forbid struct literals so `match x {` doesn't parse `x { ... }`
+        // as a struct literal.
+        let scrutinee = Box::new(self.with_no_struct_literal(|p| p.parse_binary_expr(0)));
+
+        if self.expect(TokenKind::LBrace, "'{'").is_err() {
+            let id = self.node_id_gen.next();
+            return Expr::Match {
+                scrutinee,
+                arms: Vec::new(),
+                id,
+                span: start_span,
+            };
+        }
+
+        let mut arms: Vec<MatchArm> = Vec::new();
+        while !self.check(&TokenKind::RBrace) && !self.is_at_end() {
+            let arm_start = self.peek().span;
+            let pattern = self.parse_pattern();
+            if self.expect(TokenKind::FatArrow, "'=>'").is_err() {
+                break;
+            }
+            let body = self.with_struct_literal_allowed(|p| p.parse_expr());
+            let span = arm_start.to(body.span());
+            arms.push(MatchArm { pattern, body, span });
+
+            if !self.match_token(&TokenKind::Comma) {
+                break;
+            }
+        }
+
+        let end_span = if let Ok(tok) = self.expect(TokenKind::RBrace, "'}'") {
+            tok.span
+        } else {
+            self.peek().span
+        };
+
+        let span = start_span.to(end_span);
+        let id = self.node_id_gen.next();
+        Expr::Match { scrutinee, arms, id, span }
+    }
+
+    /// Parses a single pattern.
+    fn parse_pattern(&mut self) -> Pattern {
+        let token = self.peek().clone();
+        match token.kind {
+            TokenKind::Underscore => {
+                self.advance();
+                Pattern::Wildcard { span: token.span }
+            }
+            TokenKind::IntLit(n) => {
+                self.advance();
+                Pattern::Literal {
+                    value: Literal::Int(n),
+                    span: token.span,
+                }
+            }
+            TokenKind::FloatLit(f) => {
+                self.advance();
+                Pattern::Literal {
+                    value: Literal::Float(f),
+                    span: token.span,
+                }
+            }
+            TokenKind::StrLit(sym) => {
+                self.advance();
+                Pattern::Literal {
+                    value: Literal::Str(sym),
+                    span: token.span,
+                }
+            }
+            TokenKind::True => {
+                self.advance();
+                Pattern::Literal {
+                    value: Literal::Bool(true),
+                    span: token.span,
+                }
+            }
+            TokenKind::False => {
+                self.advance();
+                Pattern::Literal {
+                    value: Literal::Bool(false),
+                    span: token.span,
+                }
+            }
+            TokenKind::LParen => {
+                let start = token.span;
+                self.advance(); // '('
+                let mut patterns: Vec<Pattern> = Vec::new();
+                if !self.check(&TokenKind::RParen) {
+                    loop {
+                        patterns.push(self.parse_pattern());
+                        if !self.match_token(&TokenKind::Comma) {
+                            break;
+                        }
+                    }
+                }
+                let end_span = if let Ok(tok) = self.expect(TokenKind::RParen, "')'") {
+                    tok.span
+                } else {
+                    self.peek().span
+                };
+                Pattern::Tuple {
+                    patterns,
+                    span: start.to(end_span),
+                }
+            }
+            TokenKind::Ident(name) => {
+                self.advance();
+                // Variant pattern: `EnumName::Variant(patterns)` or `EnumName::Variant`
+                if self.match_token(&TokenKind::ColonColon) {
+                    let variant = match self.peek().kind {
+                        TokenKind::Ident(s) => {
+                            self.advance();
+                            s
+                        }
+                        _ => {
+                            let tok = self.peek().clone();
+                            self.errors.push(ParseError::UnexpectedToken {
+                                expected: "variant name".to_string(),
+                                found: tok.kind,
+                                span: tok.span,
+                            });
+                            return Pattern::Wildcard { span: token.span };
+                        }
+                    };
+                    let mut patterns: Vec<Pattern> = Vec::new();
+                    let mut end_span = self.tokens[self.current - 1].span;
+                    if self.match_token(&TokenKind::LParen) {
+                        if !self.check(&TokenKind::RParen) {
+                            loop {
+                                patterns.push(self.parse_pattern());
+                                if !self.match_token(&TokenKind::Comma) {
+                                    break;
+                                }
+                            }
+                        }
+                        if let Ok(tok) = self.expect(TokenKind::RParen, "')'") {
+                            end_span = tok.span;
+                        }
+                    }
+                    return Pattern::Variant {
+                        enum_name: name,
+                        variant,
+                        patterns,
+                        span: token.span.to(end_span),
+                    };
+                }
+                // Struct pattern: `StructName { field: pat, ... }`
+                if self.check(&TokenKind::LBrace) {
+                    self.advance(); // '{'
+                    let mut fields: Vec<(Symbol, Pattern)> = Vec::new();
+                    while !self.check(&TokenKind::RBrace) && !self.is_at_end() {
+                        let field_name = match self.peek().kind {
+                            TokenKind::Ident(s) => {
+                                self.advance();
+                                s
+                            }
+                            _ => {
+                                let tok = self.peek().clone();
+                                self.errors.push(ParseError::UnexpectedToken {
+                                    expected: "field name".to_string(),
+                                    found: tok.kind,
+                                    span: tok.span,
+                                });
+                                break;
+                            }
+                        };
+                        // `field: pat` or shorthand `field` (treated as variable
+                        // pattern with the same name).
+                        let pat = if self.match_token(&TokenKind::Colon) {
+                            self.parse_pattern()
+                        } else {
+                            let id = self.node_id_gen.next();
+                            Pattern::Variable {
+                                name: field_name,
+                                id,
+                                span: self.tokens[self.current - 1].span,
+                            }
+                        };
+                        fields.push((field_name, pat));
+                        if !self.match_token(&TokenKind::Comma) {
+                            break;
+                        }
+                    }
+                    let end_span = if let Ok(tok) = self.expect(TokenKind::RBrace, "'}'") {
+                        tok.span
+                    } else {
+                        self.peek().span
+                    };
+                    return Pattern::Struct {
+                        name,
+                        fields,
+                        span: token.span.to(end_span),
+                    };
+                }
+                // Otherwise, a plain variable binding pattern.
+                let id = self.node_id_gen.next();
+                Pattern::Variable {
+                    name,
+                    id,
+                    span: token.span,
+                }
+            }
+            _ => {
+                self.errors.push(ParseError::UnexpectedToken {
+                    expected: "pattern".to_string(),
+                    found: token.kind,
+                    span: token.span,
+                });
+                self.advance();
+                Pattern::Wildcard { span: token.span }
+            }
+        }
     }
 
     /// Parses binary expressions using precedence climbing.
@@ -825,9 +1230,33 @@ impl<'a> Parser<'a> {
             && matches!(self.tokens[self.current + 1].kind, TokenKind::Colon)
     }
 
-    /// Parses call expressions: `primary ( args )*`
+    /// Checks if the upcoming `{ ... }` is a struct literal body.
     ///
-    /// All arguments must be named (`name: value`). Positional args emit
+    /// Called after we've consumed `Ident` and seen `{`. Disambiguates against
+    /// expression blocks. A struct literal body is:
+    ///   - empty:       `Name {}`
+    ///   - has fields:  `Name { ident: ...`
+    ///
+    /// Anything else (e.g. `{ stmt; ... }` or `{ expr }`) is treated as a block.
+    fn looks_like_struct_lit_body(&self) -> bool {
+        // We expect `self.peek().kind` to be `LBrace`.
+        let next = self.tokens.get(self.current + 1).map(|t| &t.kind);
+        match next {
+            Some(TokenKind::RBrace) => true, // empty `Name {}`
+            Some(TokenKind::Ident(_)) => {
+                // `Name { ident :` — looks like a struct field
+                matches!(
+                    self.tokens.get(self.current + 2).map(|t| &t.kind),
+                    Some(TokenKind::Colon)
+                )
+            }
+            _ => false,
+        }
+    }
+
+    /// Parses call expressions: `primary ( args )*` and field access `expr.ident`.
+    ///
+    /// Function arguments must be named (`name: value`). Positional args emit
     /// `ParseError::PositionalArg` and continue parsing for recovery.
     fn parse_call_expr(&mut self) -> Expr {
         let mut expr = self.parse_primary();
@@ -850,13 +1279,13 @@ impl<'a> Parser<'a> {
                             } else {
                                 unreachable!()
                             };
-                            let value = self.parse_expr();
+                            let value = self.with_struct_literal_allowed(|p| p.parse_expr());
                             let span = arg_start.to(value.span());
                             args.push(NamedArg { span, name, value: Box::new(value) });
                         } else {
                             // Positional arg — error and recover
                             self.errors.push(ParseError::PositionalArg { span: arg_start });
-                            let value = self.parse_expr();
+                            let value = self.with_struct_literal_allowed(|p| p.parse_expr());
                             let span = arg_start.to(value.span());
                             // Use a sentinel name (sym 0) for error recovery
                             args.push(NamedArg { span, name: Symbol::new(0), value: Box::new(value) });
@@ -880,6 +1309,31 @@ impl<'a> Parser<'a> {
                 expr = Expr::Call {
                     callee: Box::new(expr),
                     args,
+                    id,
+                    span,
+                };
+            } else if self.check(&TokenKind::Dot) {
+                self.advance(); // '.'
+                let field_tok = self.peek().clone();
+                let field = match field_tok.kind {
+                    TokenKind::Ident(s) => {
+                        self.advance();
+                        s
+                    }
+                    _ => {
+                        self.errors.push(ParseError::UnexpectedToken {
+                            expected: "field name after '.'".to_string(),
+                            found: field_tok.kind,
+                            span: field_tok.span,
+                        });
+                        break;
+                    }
+                };
+                let span = expr.span().to(field_tok.span);
+                let id = self.node_id_gen.next();
+                expr = Expr::FieldAccess {
+                    expr: Box::new(expr),
+                    field,
                     id,
                     span,
                 };
@@ -939,6 +1393,102 @@ impl<'a> Parser<'a> {
             }
             TokenKind::Ident(name) => {
                 self.advance();
+                // Variant constructor: `EnumName::Variant(args)` or just
+                // `EnumName::Variant` (zero payload).
+                if self.check(&TokenKind::ColonColon) {
+                    self.advance(); // '::'
+                    let variant = match self.peek().kind {
+                        TokenKind::Ident(s) => {
+                            self.advance();
+                            s
+                        }
+                        _ => {
+                            let tok = self.peek().clone();
+                            self.errors.push(ParseError::UnexpectedToken {
+                                expected: "variant name".to_string(),
+                                found: tok.kind,
+                                span: tok.span,
+                            });
+                            return Expr::Literal {
+                                value: Literal::Unit,
+                                id,
+                                span: token.span,
+                            };
+                        }
+                    };
+                    let mut args: Vec<Expr> = Vec::new();
+                    let mut end_span = self.tokens[self.current - 1].span;
+                    if self.match_token(&TokenKind::LParen) {
+                        if !self.check(&TokenKind::RParen) {
+                            loop {
+                                let arg = self.with_struct_literal_allowed(|p| p.parse_expr());
+                                args.push(arg);
+                                if !self.match_token(&TokenKind::Comma) {
+                                    break;
+                                }
+                            }
+                        }
+                        if let Ok(tok) = self.expect(TokenKind::RParen, "')'") {
+                            end_span = tok.span;
+                        }
+                    }
+                    return Expr::VariantCtor {
+                        enum_name: name,
+                        variant,
+                        args,
+                        id,
+                        span: token.span.to(end_span),
+                    };
+                }
+
+                // Struct literal: `Name { field: value, ... }`.
+                // Only when (a) we're not in a "no-struct-literal" context,
+                // and (b) the body is unambiguously a struct literal — i.e.
+                // empty `Name {}` or `Name { ident:`.
+                if !self.no_struct_literal
+                    && self.check(&TokenKind::LBrace)
+                    && self.looks_like_struct_lit_body()
+                {
+                    self.advance(); // '{'
+                    let mut fields: Vec<(Symbol, Expr)> = Vec::new();
+                    while !self.check(&TokenKind::RBrace) && !self.is_at_end() {
+                        let field_name = match self.peek().kind {
+                            TokenKind::Ident(s) => {
+                                self.advance();
+                                s
+                            }
+                            _ => {
+                                let tok = self.peek().clone();
+                                self.errors.push(ParseError::UnexpectedToken {
+                                    expected: "field name".to_string(),
+                                    found: tok.kind,
+                                    span: tok.span,
+                                });
+                                break;
+                            }
+                        };
+                        if self.expect(TokenKind::Colon, "':'").is_err() {
+                            break;
+                        }
+                        let value = self.with_struct_literal_allowed(|p| p.parse_expr());
+                        fields.push((field_name, value));
+                        if !self.match_token(&TokenKind::Comma) {
+                            break;
+                        }
+                    }
+                    let end_span = if let Ok(tok) = self.expect(TokenKind::RBrace, "'}'") {
+                        tok.span
+                    } else {
+                        self.peek().span
+                    };
+                    return Expr::StructLit {
+                        name,
+                        fields,
+                        id,
+                        span: token.span.to(end_span),
+                    };
+                }
+
                 Expr::Variable {
                     name,
                     id,
@@ -958,14 +1508,37 @@ impl<'a> Parser<'a> {
                     };
                 }
 
-                // Otherwise, parse parenthesized expression
-                let expr = self.parse_expr();
+                // Otherwise, parse the first expression. Could be a
+                // parenthesised expression or a tuple.
+                let first = self.with_struct_literal_allowed(|p| p.parse_expr());
+
+                if self.check(&TokenKind::Comma) {
+                    // Tuple: collect remaining elements.
+                    let mut elements = vec![first];
+                    while self.match_token(&TokenKind::Comma) {
+                        if self.check(&TokenKind::RParen) {
+                            break;
+                        }
+                        let next = self.with_struct_literal_allowed(|p| p.parse_expr());
+                        elements.push(next);
+                    }
+                    let end_span = if let Ok(tok) = self.expect(TokenKind::RParen, "')'") {
+                        tok.span
+                    } else {
+                        self.peek().span
+                    };
+                    return Expr::Tuple {
+                        elements,
+                        id,
+                        span: token.span.to(end_span),
+                    };
+                }
 
                 if let Err(()) = self.expect(TokenKind::RParen, "')'") {
                     // Error already recorded, return the expression anyway
                 }
 
-                expr
+                first
             }
             TokenKind::LBrace => self.parse_block(),
             // Zero-parameter closure: || { body }
@@ -1222,7 +1795,7 @@ mod tests {
                     _ => panic!("Expected block"),
                 }
             }
-            Item::Script { .. } => panic!("Expected function definition"),
+            _ => panic!("Expected function definition"),
         }
     }
 
@@ -1270,7 +1843,7 @@ mod tests {
                 assert_eq!(params[1].name, y);
                 assert_eq!(*ret_ty, TypeAnnotation::Named(int_ty));
             }
-            Item::Script { .. } => panic!("Expected function definition"),
+            _ => panic!("Expected function definition"),
         }
     }
 
@@ -1325,7 +1898,7 @@ mod tests {
                     _ => panic!("Expected block with expression"),
                 }
             }
-            Item::Script { .. } => panic!("Expected function definition"),
+            _ => panic!("Expected function definition"),
         }
     }
 
@@ -1441,7 +2014,7 @@ mod tests {
                 },
                 _ => panic!("Expected block with expression"),
             },
-            Item::Script { .. } => panic!("Expected function definition"),
+            _ => panic!("Expected function definition"),
         }
     }
 

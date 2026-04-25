@@ -1,0 +1,17 @@
+enum Shape {
+    Circle(Int),
+    Square(Int),
+    Rectangle(Int, Int),
+}
+
+fn area(s: Shape) -> Int {
+    match s {
+        Shape::Circle(r) => r * r * 3,
+        Shape::Square(side) => side * side,
+        Shape::Rectangle(w, h) => w * h,
+    }
+}
+
+println(s: int_to_str(n: area(s: Shape::Circle(2))))
+println(s: int_to_str(n: area(s: Shape::Square(4))))
+println(s: int_to_str(n: area(s: Shape::Rectangle(3, 5))))

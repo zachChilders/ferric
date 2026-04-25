@@ -89,6 +89,20 @@ pub enum Item {
         /// Source location
         span: Span,
     },
+    /// Struct definition
+    StructDef {
+        id: NodeId,
+        name: Symbol,
+        fields: Vec<(Symbol, TypeAnnotation)>,
+        span: Span,
+    },
+    /// Enum definition
+    EnumDef {
+        id: NodeId,
+        name: Symbol,
+        variants: Vec<(Symbol, Vec<TypeAnnotation>)>,
+        span: Span,
+    },
     /// Top-level script statement (let binding or expression)
     /// These are executed in order when the program runs
     Script {
@@ -106,6 +120,8 @@ impl Item {
     pub fn id(&self) -> NodeId {
         match self {
             Item::FnDef { id, .. } => *id,
+            Item::StructDef { id, .. } => *id,
+            Item::EnumDef { id, .. } => *id,
             Item::Script { id, .. } => *id,
         }
     }
@@ -114,6 +130,8 @@ impl Item {
     pub fn span(&self) -> Span {
         match self {
             Item::FnDef { span, .. } => *span,
+            Item::StructDef { span, .. } => *span,
+            Item::EnumDef { span, .. } => *span,
             Item::Script { span, .. } => *span,
         }
     }
@@ -214,6 +232,90 @@ pub enum Expr {
         id: NodeId,
         span: Span,
     },
+    /// Struct literal: `Point { x: 1.0, y: 2.0 }`
+    StructLit {
+        name: Symbol,
+        fields: Vec<(Symbol, Expr)>,
+        id: NodeId,
+        span: Span,
+    },
+    /// Field access: `p.x`
+    FieldAccess {
+        expr: Box<Expr>,
+        field: Symbol,
+        id: NodeId,
+        span: Span,
+    },
+    /// Match expression: `match x { ... }`
+    Match {
+        scrutinee: Box<Expr>,
+        arms: Vec<MatchArm>,
+        id: NodeId,
+        span: Span,
+    },
+    /// Tuple expression: `(1, 2, 3)`
+    Tuple {
+        elements: Vec<Expr>,
+        id: NodeId,
+        span: Span,
+    },
+    /// Enum variant constructor: `Shape::Circle(r)` or `Color::Red`.
+    VariantCtor {
+        enum_name: Symbol,
+        variant: Symbol,
+        args: Vec<Expr>,
+        id: NodeId,
+        span: Span,
+    },
+}
+
+/// A single arm of a `match` expression.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MatchArm {
+    pub pattern: Pattern,
+    pub body: Expr,
+    pub span: Span,
+}
+
+/// Pattern in a `match` arm or destructuring let (M4: only match arms).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum Pattern {
+    /// `_` — matches any value, no binding.
+    Wildcard { span: Span },
+    /// Binding pattern: a fresh name that captures the matched value.
+    Variable { name: Symbol, id: NodeId, span: Span },
+    /// Literal pattern: matches if the scrutinee is structurally equal.
+    Literal { value: Literal, span: Span },
+    /// Tuple destructuring: `(a, b, c)`.
+    Tuple { patterns: Vec<Pattern>, span: Span },
+    /// Struct destructuring: `Point { x, y }`. Each field pattern may be a
+    /// shorthand variable binding (when the parser fills in `Variable { name }`)
+    /// or an explicit nested pattern.
+    Struct {
+        name: Symbol,
+        fields: Vec<(Symbol, Pattern)>,
+        span: Span,
+    },
+    /// Enum-variant destructuring: `Shape::Circle(r)`.
+    Variant {
+        enum_name: Symbol,
+        variant: Symbol,
+        patterns: Vec<Pattern>,
+        span: Span,
+    },
+}
+
+impl Pattern {
+    pub fn span(&self) -> Span {
+        match self {
+            Pattern::Wildcard { span }
+            | Pattern::Variable { span, .. }
+            | Pattern::Literal { span, .. }
+            | Pattern::Tuple { span, .. }
+            | Pattern::Struct { span, .. }
+            | Pattern::Variant { span, .. } => *span,
+        }
+    }
 }
 
 impl Expr {
@@ -234,6 +336,11 @@ impl Expr {
             Expr::Continue { id, .. } => *id,
             Expr::Closure { id, .. } => *id,
             Expr::Shell { id, .. } => *id,
+            Expr::StructLit { id, .. } => *id,
+            Expr::FieldAccess { id, .. } => *id,
+            Expr::Match { id, .. } => *id,
+            Expr::Tuple { id, .. } => *id,
+            Expr::VariantCtor { id, .. } => *id,
         }
     }
 
@@ -254,6 +361,11 @@ impl Expr {
             Expr::Continue { span, .. } => *span,
             Expr::Closure { span, .. } => *span,
             Expr::Shell { span, .. } => *span,
+            Expr::StructLit { span, .. } => *span,
+            Expr::FieldAccess { span, .. } => *span,
+            Expr::Match { span, .. } => *span,
+            Expr::Tuple { span, .. } => *span,
+            Expr::VariantCtor { span, .. } => *span,
         }
     }
 }

@@ -1,0 +1,6 @@
+let triple = (10, 20, 30)
+match triple {
+    (a, b, c) => {
+        println(s: int_to_str(n: a + b + c))
+    },
+}

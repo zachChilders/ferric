@@ -4,7 +4,7 @@
 //! This enables precise error reporting and future renderer replacement.
 
 use serde::{Deserialize, Serialize};
-use crate::{Span, Symbol, TokenKind, Ty, TyVar};
+use crate::{NodeId, Span, Symbol, TokenKind, Ty, TyVar};
 
 /// Errors that can occur during lexing.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -193,6 +193,37 @@ pub enum ResolveError {
         /// Location of the closure
         span: Span,
     },
+    /// A reference to an undefined struct or enum.
+    UndefinedType {
+        name: Symbol,
+        span: Span,
+    },
+    /// A struct literal mentioned a field name that doesn't belong to the struct.
+    UnknownField {
+        struct_name: Symbol,
+        field: Symbol,
+        span: Span,
+    },
+    /// A struct literal omitted a required field.
+    MissingField {
+        struct_name: Symbol,
+        field: Symbol,
+        span: Span,
+    },
+    /// A reference to an enum variant that doesn't exist.
+    UnknownVariant {
+        enum_name: Symbol,
+        variant: Symbol,
+        span: Span,
+    },
+    /// A variant pattern or constructor had the wrong number of arguments.
+    VariantArity {
+        enum_name: Symbol,
+        variant: Symbol,
+        expected: usize,
+        found: usize,
+        span: Span,
+    },
 }
 
 impl ResolveError {
@@ -208,6 +239,11 @@ impl ResolveError {
             ResolveError::MissingArg { call_span, .. } => *call_span,
             ResolveError::UnknownArg { span, .. } => *span,
             ResolveError::RequireSetArity { span } => *span,
+            ResolveError::UndefinedType { span, .. } => *span,
+            ResolveError::UnknownField { span, .. } => *span,
+            ResolveError::MissingField { span, .. } => *span,
+            ResolveError::UnknownVariant { span, .. } => *span,
+            ResolveError::VariantArity { span, .. } => *span,
         }
     }
 
@@ -240,6 +276,13 @@ impl ResolveError {
             }
             ResolveError::RequireSetArity { .. } => {
                 "require set closure must take zero arguments".to_string()
+            }
+            ResolveError::UndefinedType { .. } => "undefined type".to_string(),
+            ResolveError::UnknownField { .. } => "unknown field".to_string(),
+            ResolveError::MissingField { .. } => "missing struct field".to_string(),
+            ResolveError::UnknownVariant { .. } => "unknown enum variant".to_string(),
+            ResolveError::VariantArity { .. } => {
+                "wrong number of arguments to enum variant".to_string()
             }
         }
     }
@@ -319,6 +362,25 @@ pub enum TypeError {
         /// Location of the call.
         span: Span,
     },
+    /// A field-access expression was applied to a non-struct value.
+    NotAStruct {
+        ty: Ty,
+        span: Span,
+    },
+    /// A struct value did not have the named field.
+    NoSuchField {
+        ty: Ty,
+        field: Symbol,
+        span: Span,
+    },
+    /// A field type didn't match its declared type in a struct literal.
+    FieldTypeMismatch {
+        struct_name: Symbol,
+        field: Symbol,
+        expected: Ty,
+        found: Ty,
+        span: Span,
+    },
 }
 
 impl TypeError {
@@ -335,6 +397,9 @@ impl TypeError {
             TypeError::CannotInfer { span } => *span,
             TypeError::WrongArgumentCount { span, .. } => *span,
             TypeError::NotCallable { span, .. } => *span,
+            TypeError::NotAStruct { span, .. } => *span,
+            TypeError::NoSuchField { span, .. } => *span,
+            TypeError::FieldTypeMismatch { span, .. } => *span,
         }
     }
 
@@ -384,6 +449,59 @@ impl TypeError {
             TypeError::NotCallable { ty, .. } => {
                 format!("cannot call value of type {}", ty.description())
             }
+            TypeError::NotAStruct { ty, .. } => {
+                format!("field access on non-struct type {}", ty.description())
+            }
+            TypeError::NoSuchField { ty, .. } => {
+                format!("type {} has no such field", ty.description())
+            }
+            TypeError::FieldTypeMismatch { expected, found, .. } => {
+                format!(
+                    "field type mismatch: expected {}, found {}",
+                    expected.description(),
+                    found.description()
+                )
+            }
         }
     }
 }
+
+/// Errors that can occur during exhaustiveness checking.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum ExhaustivenessError {
+    /// A `match` expression failed to cover every variant of an enum.
+    NonExhaustive {
+        missing: Vec<Symbol>,
+        span: Span,
+    },
+    /// A `match` arm can never be reached because earlier arms already
+    /// match every value the scrutinee could take.
+    UnreachableArm {
+        span: Span,
+    },
+}
+
+impl ExhaustivenessError {
+    pub fn span(&self) -> Span {
+        match self {
+            ExhaustivenessError::NonExhaustive { span, .. } => *span,
+            ExhaustivenessError::UnreachableArm { span } => *span,
+        }
+    }
+
+    pub fn description(&self) -> String {
+        match self {
+            ExhaustivenessError::NonExhaustive { .. } => {
+                "non-exhaustive match".to_string()
+            }
+            ExhaustivenessError::UnreachableArm { .. } => {
+                "unreachable match arm".to_string()
+            }
+        }
+    }
+}
+
+// `NodeId` is imported above for consistency with other span-bearing types
+// even when it is not currently used in any error variant.
+#[allow(dead_code)]
+type _KeepNodeId = NodeId;

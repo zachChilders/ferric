@@ -10,7 +10,7 @@
 //! Rule 5: All errors carry Spans, so the renderer can work without knowledge
 //! of the pipeline internals.
 
-use ferric_common::{LexError, ParseError, ResolveError, TypeError, Span};
+use ferric_common::{ExhaustivenessError, LexError, ParseError, ResolveError, TypeError, Span};
 
 /// Error renderer for Ferric.
 ///
@@ -191,6 +191,53 @@ impl Renderer {
                     self.span_to_line(*span)
                 )
             }
+            ResolveError::UndefinedType { name, span } => {
+                format!(
+                    "error at line {}: undefined type `{}`",
+                    self.span_to_line(*span),
+                    name.0
+                )
+            }
+            ResolveError::UnknownField { struct_name, field, span } => {
+                format!(
+                    "error at line {}: struct `{}` has no field `{}`",
+                    self.span_to_line(*span),
+                    struct_name.0,
+                    field.0
+                )
+            }
+            ResolveError::MissingField { struct_name, field, span } => {
+                format!(
+                    "error at line {}: missing field `{}` in struct literal of `{}`",
+                    self.span_to_line(*span),
+                    field.0,
+                    struct_name.0
+                )
+            }
+            ResolveError::UnknownVariant { enum_name, variant, span } => {
+                format!(
+                    "error at line {}: enum `{}` has no variant `{}`",
+                    self.span_to_line(*span),
+                    enum_name.0,
+                    variant.0
+                )
+            }
+            ResolveError::VariantArity {
+                enum_name,
+                variant,
+                expected,
+                found,
+                span,
+            } => {
+                format!(
+                    "error at line {}: variant `{}::{}` expected {} argument(s), found {}",
+                    self.span_to_line(*span),
+                    enum_name.0,
+                    variant.0,
+                    expected,
+                    found
+                )
+            }
         }
     }
 
@@ -280,6 +327,57 @@ impl Renderer {
                     "error at line {}: cannot call value of type {}",
                     self.span_to_line(*span),
                     ty.description()
+                )
+            }
+            TypeError::NotAStruct { ty, span } => {
+                format!(
+                    "error at line {}: field access on non-struct type {}",
+                    self.span_to_line(*span),
+                    ty.description()
+                )
+            }
+            TypeError::NoSuchField { ty, field, span } => {
+                format!(
+                    "error at line {}: type {} has no field `{}`",
+                    self.span_to_line(*span),
+                    ty.description(),
+                    field.0
+                )
+            }
+            TypeError::FieldTypeMismatch {
+                struct_name,
+                field,
+                expected,
+                found,
+                span,
+            } => {
+                format!(
+                    "error at line {}: field `{}::{}` expected type {}, found {}",
+                    self.span_to_line(*span),
+                    struct_name.0,
+                    field.0,
+                    expected.description(),
+                    found.description()
+                )
+            }
+        }
+    }
+
+    /// Renders an exhaustiveness checker error.
+    pub fn render_exhaustiveness_error(&self, error: &ExhaustivenessError) -> String {
+        match error {
+            ExhaustivenessError::NonExhaustive { missing, span } => {
+                let names: Vec<String> = missing.iter().map(|s| format!("`{}`", s.0)).collect();
+                format!(
+                    "error at line {}: non-exhaustive match: missing {}",
+                    self.span_to_line(*span),
+                    names.join(", ")
+                )
+            }
+            ExhaustivenessError::UnreachableArm { span } => {
+                format!(
+                    "warning at line {}: unreachable match arm",
+                    self.span_to_line(*span)
                 )
             }
         }

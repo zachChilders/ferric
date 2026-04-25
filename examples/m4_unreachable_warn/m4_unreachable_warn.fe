@@ -1,0 +1,10 @@
+enum Light { Red, Yellow, Green }
+
+fn name(l: Light) -> Str {
+    match l {
+        _ => "any",
+        Light::Red => "red",
+    }
+}
+
+println(s: name(l: Light::Green))

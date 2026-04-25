@@ -9,6 +9,7 @@ dependencies = [
  "ferric_common",
  "ferric_compiler",
  "ferric_diagnostics",
+ "ferric_exhaust",
  "ferric_infer",
  "ferric_lexer",
  "ferric_parser",
@@ -42,6 +43,13 @@ version = "0.1.0"
 dependencies = [
  "ferric_common",
  "ferric_vm",
+]
+
+[[package]]
+name = "ferric_exhaust"
+version = "0.1.0"
+dependencies = [
+ "ferric_common",
 ]
 
 [[package]]

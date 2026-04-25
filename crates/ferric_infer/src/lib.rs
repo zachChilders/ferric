@@ -9,9 +9,9 @@
 use std::collections::{HashMap, HashSet};
 
 use ferric_common::{
-    BinOp, Expr, Interner, Item, Literal, NamedArg, NodeId, Param, ParseResult,
-    RequireStmt, ResolveResult, ShellPart, Span, Stmt, Symbol, Ty, TyVar, TypeAnnotation,
-    TypeError, TypeResult, TypeScheme, UnOp,
+    BinOp, Expr, Interner, Item, Literal, MatchArm, NamedArg, NodeId, Param, ParseResult,
+    Pattern, RequireStmt, ResolveResult, ShellPart, Span, Stmt, Symbol, Ty, TyVar,
+    TypeAnnotation, TypeError, TypeResult, TypeScheme, UnOp,
 };
 
 /// Type-checks (and infers) a parsed AST with resolution information.
@@ -57,6 +57,20 @@ impl Substitution {
                 params: params.iter().map(|p| self.apply(p)).collect(),
                 ret: Box::new(self.apply(ret)),
             },
+            Ty::Tuple(elems) => Ty::Tuple(elems.iter().map(|t| self.apply(t)).collect()),
+            Ty::Struct { def_id, name, fields } => Ty::Struct {
+                def_id: *def_id,
+                name: *name,
+                fields: fields.iter().map(|(n, t)| (*n, self.apply(t))).collect(),
+            },
+            Ty::Enum { def_id, name, variants } => Ty::Enum {
+                def_id: *def_id,
+                name: *name,
+                variants: variants
+                    .iter()
+                    .map(|(n, ts)| (*n, ts.iter().map(|t| self.apply(t)).collect()))
+                    .collect(),
+            },
             other => other.clone(),
         }
     }
@@ -78,6 +92,11 @@ fn occurs_raw(var: TyVar, ty: &Ty) -> bool {
         Ty::Fn { params, ret } => {
             params.iter().any(|t| occurs_raw(var, t)) || occurs_raw(var, ret)
         }
+        Ty::Tuple(elems) => elems.iter().any(|t| occurs_raw(var, t)),
+        Ty::Struct { fields, .. } => fields.iter().any(|(_, t)| occurs_raw(var, t)),
+        Ty::Enum { variants, .. } => variants
+            .iter()
+            .any(|(_, ts)| ts.iter().any(|t| occurs_raw(var, t))),
         _ => false,
     }
 }
@@ -98,6 +117,23 @@ fn free_vars_raw(ty: &Ty, out: &mut HashSet<TyVar>) {
                 free_vars_raw(p, out);
             }
             free_vars_raw(ret, out);
+        }
+        Ty::Tuple(elems) => {
+            for t in elems {
+                free_vars_raw(t, out);
+            }
+        }
+        Ty::Struct { fields, .. } => {
+            for (_, t) in fields {
+                free_vars_raw(t, out);
+            }
+        }
+        Ty::Enum { variants, .. } => {
+            for (_, ts) in variants {
+                for t in ts {
+                    free_vars_raw(t, out);
+                }
+            }
         }
         _ => {}
     }
@@ -278,6 +314,9 @@ impl<'a> TypeInfer<'a> {
                     fn_idx += 1;
                     self.check_fn_def(*id, params, ret_ty, body, aliases);
                 }
+                Item::StructDef { .. } | Item::EnumDef { .. } => {
+                    // Type-only definition; nothing to type-check in the body.
+                }
                 Item::Script { stmt, .. } => {
                     self.check_stmt(stmt);
                 }
@@ -392,6 +431,10 @@ impl<'a> TypeInfer<'a> {
                     "Unit" | "" => Ty::Unit,
                     "ShellOutput" => Ty::ShellOutput,
                     _ => {
+                        // Look up a user-defined struct or enum.
+                        if let Some(ty) = self.lookup_user_type(*sym) {
+                            return ty;
+                        }
                         // Treat any unknown identifier as a generic type
                         // variable, consistent across one function signature.
                         let var = *aliases.entry(*sym).or_insert_with(|| {
@@ -404,6 +447,43 @@ impl<'a> TypeInfer<'a> {
                 }
             }
         }
+    }
+
+    /// Constructs a `Ty::Struct` or `Ty::Enum` for a user-defined type symbol,
+    /// or `None` if the symbol does not name a known user-defined type.
+    fn lookup_user_type(&mut self, name: Symbol) -> Option<Ty> {
+        let def_id = *self.resolve.type_defs.get(&name)?;
+        if let Some(fields) = self.resolve.struct_fields.get(&def_id).cloned() {
+            let mut tmp = HashMap::new();
+            let resolved: Vec<(Symbol, Ty)> = fields
+                .iter()
+                .map(|(n, ann)| (*n, self.resolve_type_annotation(ann, &mut tmp)))
+                .collect();
+            return Some(Ty::Struct {
+                def_id,
+                name,
+                fields: resolved,
+            });
+        }
+        if let Some(variants) = self.resolve.enum_variants.get(&def_id).cloned() {
+            let mut tmp = HashMap::new();
+            let resolved: Vec<(Symbol, Vec<Ty>)> = variants
+                .iter()
+                .map(|(vname, payload)| {
+                    let tys = payload
+                        .iter()
+                        .map(|ann| self.resolve_type_annotation(ann, &mut tmp))
+                        .collect();
+                    (*vname, tys)
+                })
+                .collect();
+            return Some(Ty::Enum {
+                def_id,
+                name,
+                variants: resolved,
+            });
+        }
+        None
     }
 
     // ------------------------------------------------------------------
@@ -698,9 +778,233 @@ impl<'a> TypeInfer<'a> {
                 self.node_types.insert(*id, Ty::ShellOutput);
                 Ty::ShellOutput
             }
+
+            Expr::StructLit { name, fields, id, span } => {
+                let struct_ty = self
+                    .lookup_user_type(*name)
+                    .filter(|t| matches!(t, Ty::Struct { .. }))
+                    .unwrap_or_else(|| {
+                        // Resolver should have already reported UndefinedType.
+                        // Record a fresh var so cascading errors are minimal.
+                        self.fresh_tyvar()
+                    });
+
+                if let Ty::Struct { fields: declared, name: sname, .. } = &struct_ty {
+                    let declared = declared.clone();
+                    let sname = *sname;
+                    for (fname, fexpr) in fields {
+                        let expr_ty = self.infer_expr(fexpr);
+                        if let Some((_, decl_ty)) = declared.iter().find(|(n, _)| *n == *fname)
+                        {
+                            if self.try_unify(decl_ty, &expr_ty).is_err() {
+                                let expected = self.subst.apply(decl_ty);
+                                let found = self.subst.apply(&expr_ty);
+                                self.errors.push(TypeError::FieldTypeMismatch {
+                                    struct_name: sname,
+                                    field: *fname,
+                                    expected,
+                                    found,
+                                    span: fexpr.span(),
+                                });
+                            }
+                        }
+                    }
+                } else {
+                    // Still walk the field expressions so any nested errors are reported.
+                    for (_, fexpr) in fields {
+                        self.infer_expr(fexpr);
+                    }
+                    let _ = span;
+                }
+
+                self.node_types.insert(*id, struct_ty.clone());
+                struct_ty
+            }
+
+            Expr::FieldAccess { expr, field, id, span } => {
+                let recv_ty = self.infer_expr(expr);
+                let resolved = self.subst.apply(&recv_ty);
+                let result_ty = match &resolved {
+                    Ty::Struct { fields, .. } => {
+                        match fields.iter().find(|(n, _)| *n == *field) {
+                            Some((_, t)) => t.clone(),
+                            None => {
+                                self.errors.push(TypeError::NoSuchField {
+                                    ty: resolved.clone(),
+                                    field: *field,
+                                    span: *span,
+                                });
+                                self.fresh_tyvar()
+                            }
+                        }
+                    }
+                    Ty::Var(_) => {
+                        // Could not narrow yet; emit CannotInfer at the end.
+                        self.fresh_tyvar()
+                    }
+                    other => {
+                        self.errors.push(TypeError::NotAStruct {
+                            ty: other.clone(),
+                            span: *span,
+                        });
+                        self.fresh_tyvar()
+                    }
+                };
+                self.node_types.insert(*id, result_ty.clone());
+                result_ty
+            }
+
+            Expr::Match { scrutinee, arms, id, span } => {
+                let scrutinee_ty = self.infer_expr(scrutinee);
+
+                let result_ty = self.fresh_tyvar();
+                if arms.is_empty() {
+                    self.node_types.insert(*id, result_ty.clone());
+                    return result_ty;
+                }
+                for arm in arms {
+                    self.check_match_arm(arm, &scrutinee_ty, &result_ty);
+                }
+                let _ = span;
+                self.node_types.insert(*id, result_ty.clone());
+                result_ty
+            }
+
+            Expr::Tuple { elements, id, .. } => {
+                let elem_tys: Vec<Ty> = elements.iter().map(|e| self.infer_expr(e)).collect();
+                let tuple_ty = Ty::Tuple(elem_tys);
+                self.node_types.insert(*id, tuple_ty.clone());
+                tuple_ty
+            }
+
+            Expr::VariantCtor { enum_name, variant, args, id, span } => {
+                let enum_ty = self
+                    .lookup_user_type(*enum_name)
+                    .filter(|t| matches!(t, Ty::Enum { .. }))
+                    .unwrap_or_else(|| self.fresh_tyvar());
+                if let Ty::Enum { variants, .. } = &enum_ty {
+                    let variants = variants.clone();
+                    if let Some((_, payload_tys)) = variants.iter().find(|(n, _)| *n == *variant) {
+                        if payload_tys.len() == args.len() {
+                            for (arg, expected) in args.iter().zip(payload_tys.iter()) {
+                                let arg_ty = self.infer_expr(arg);
+                                self.unify(expected, &arg_ty, arg.span());
+                            }
+                        } else {
+                            for arg in args {
+                                self.infer_expr(arg);
+                            }
+                        }
+                    } else {
+                        for arg in args {
+                            self.infer_expr(arg);
+                        }
+                    }
+                } else {
+                    for arg in args {
+                        self.infer_expr(arg);
+                    }
+                }
+                let _ = span;
+                self.node_types.insert(*id, enum_ty.clone());
+                enum_ty
+            }
         };
 
         ty
+    }
+
+    /// Type-checks a single match arm: pattern must match scrutinee, body
+    /// type must unify with the overall match result type.
+    fn check_match_arm(&mut self, arm: &MatchArm, scrutinee_ty: &Ty, result_ty: &Ty) {
+        self.env.push_scope();
+        self.check_pattern(&arm.pattern, scrutinee_ty);
+        let body_ty = self.infer_expr(&arm.body);
+        self.unify(result_ty, &body_ty, arm.body.span());
+        self.env.pop_scope();
+    }
+
+    /// Type-checks a pattern against the type of the scrutinee. Each Variable
+    /// pattern adds a binding to the current scope.
+    fn check_pattern(&mut self, pattern: &Pattern, scrutinee_ty: &Ty) {
+        match pattern {
+            Pattern::Wildcard { .. } => {}
+            Pattern::Variable { name, .. } => {
+                self.env
+                    .define(*name, TypeScheme::monomorphic(scrutinee_ty.clone()));
+            }
+            Pattern::Literal { value, span } => {
+                let lit_ty = match value {
+                    Literal::Int(_) => Ty::Int,
+                    Literal::Float(_) => Ty::Float,
+                    Literal::Str(_) => Ty::Str,
+                    Literal::Bool(_) => Ty::Bool,
+                    Literal::Unit => Ty::Unit,
+                };
+                self.unify(scrutinee_ty, &lit_ty, *span);
+            }
+            Pattern::Tuple { patterns, span } => {
+                let elem_tys: Vec<Ty> =
+                    (0..patterns.len()).map(|_| self.fresh_tyvar()).collect();
+                let tuple_ty = Ty::Tuple(elem_tys.clone());
+                self.unify(scrutinee_ty, &tuple_ty, *span);
+                for (sub, ty) in patterns.iter().zip(elem_tys.iter()) {
+                    self.check_pattern(sub, ty);
+                }
+            }
+            Pattern::Struct { name, fields, span } => {
+                let struct_ty = self
+                    .lookup_user_type(*name)
+                    .filter(|t| matches!(t, Ty::Struct { .. }))
+                    .unwrap_or_else(|| self.fresh_tyvar());
+                self.unify(scrutinee_ty, &struct_ty, *span);
+                if let Ty::Struct { fields: declared, .. } = &struct_ty {
+                    let declared = declared.clone();
+                    for (fname, fpat) in fields {
+                        let field_ty = declared
+                            .iter()
+                            .find(|(n, _)| *n == *fname)
+                            .map(|(_, t)| t.clone())
+                            .unwrap_or_else(|| self.fresh_tyvar());
+                        self.check_pattern(fpat, &field_ty);
+                    }
+                } else {
+                    for (_, fpat) in fields {
+                        let any = self.fresh_tyvar();
+                        self.check_pattern(fpat, &any);
+                    }
+                }
+            }
+            Pattern::Variant {
+                enum_name,
+                variant,
+                patterns,
+                span,
+            } => {
+                let enum_ty = self
+                    .lookup_user_type(*enum_name)
+                    .filter(|t| matches!(t, Ty::Enum { .. }))
+                    .unwrap_or_else(|| self.fresh_tyvar());
+                self.unify(scrutinee_ty, &enum_ty, *span);
+                if let Ty::Enum { variants, .. } = &enum_ty {
+                    let variants = variants.clone();
+                    if let Some((_, payload)) = variants.iter().find(|(n, _)| *n == *variant) {
+                        if payload.len() == patterns.len() {
+                            for (sub, ty) in patterns.iter().zip(payload.iter()) {
+                                self.check_pattern(sub, ty);
+                            }
+                            return;
+                        }
+                    }
+                }
+                // Fallback when the variant is unknown or arity mismatches:
+                // still walk subpatterns so binding sites are introduced.
+                for sub in patterns {
+                    let any = self.fresh_tyvar();
+                    self.check_pattern(sub, &any);
+                }
+            }
+        }
     }
 
     fn infer_args(&mut self, args: &[NamedArg]) -> Vec<Ty> {
@@ -840,6 +1144,32 @@ impl<'a> TypeInfer<'a> {
                 self.try_unify(&r1, &r2)
             }
 
+            (Ty::Tuple(a), Ty::Tuple(b)) => {
+                if a.len() != b.len() {
+                    return Err(());
+                }
+                for (t1, t2) in a.iter().zip(b.iter()) {
+                    self.try_unify(t1, t2)?;
+                }
+                Ok(())
+            }
+
+            (Ty::Struct { def_id: d1, .. }, Ty::Struct { def_id: d2, .. }) => {
+                if d1 == d2 {
+                    Ok(())
+                } else {
+                    Err(())
+                }
+            }
+
+            (Ty::Enum { def_id: d1, .. }, Ty::Enum { def_id: d2, .. }) => {
+                if d1 == d2 {
+                    Ok(())
+                } else {
+                    Err(())
+                }
+            }
+
             _ => Err(()),
         }
     }
@@ -939,6 +1269,23 @@ fn rename_vars(ty: &Ty, mapping: &HashMap<TyVar, Ty>) -> Ty {
             params: params.iter().map(|p| rename_vars(p, mapping)).collect(),
             ret: Box::new(rename_vars(ret, mapping)),
         },
+        Ty::Tuple(elems) => Ty::Tuple(elems.iter().map(|t| rename_vars(t, mapping)).collect()),
+        Ty::Struct { def_id, name, fields } => Ty::Struct {
+            def_id: *def_id,
+            name: *name,
+            fields: fields
+                .iter()
+                .map(|(n, t)| (*n, rename_vars(t, mapping)))
+                .collect(),
+        },
+        Ty::Enum { def_id, name, variants } => Ty::Enum {
+            def_id: *def_id,
+            name: *name,
+            variants: variants
+                .iter()
+                .map(|(n, ts)| (*n, ts.iter().map(|t| rename_vars(t, mapping)).collect()))
+                .collect(),
+        },
         other => other.clone(),
     }
 }
@@ -953,6 +1300,23 @@ fn default_remaining_vars(ty: &Ty) -> Ty {
         Ty::Fn { params, ret } => Ty::Fn {
             params: params.iter().map(default_remaining_vars).collect(),
             ret: Box::new(default_remaining_vars(ret)),
+        },
+        Ty::Tuple(elems) => Ty::Tuple(elems.iter().map(default_remaining_vars).collect()),
+        Ty::Struct { def_id, name, fields } => Ty::Struct {
+            def_id: *def_id,
+            name: *name,
+            fields: fields
+                .iter()
+                .map(|(n, t)| (*n, default_remaining_vars(t)))
+                .collect(),
+        },
+        Ty::Enum { def_id, name, variants } => Ty::Enum {
+            def_id: *def_id,
+            name: *name,
+            variants: variants
+                .iter()
+                .map(|(n, ts)| (*n, ts.iter().map(default_remaining_vars).collect()))
+                .collect(),
         },
         other => other.clone(),
     }
@@ -976,6 +1340,7 @@ fn span_in_item(item: &Item, target: NodeId) -> Option<Span> {
     match item {
         Item::FnDef { body, .. } => span_in_expr(body, target),
         Item::Script { stmt, .. } => span_in_stmt(stmt, target),
+        Item::StructDef { .. } | Item::EnumDef { .. } => None,
     }
 }
 
@@ -1030,6 +1395,15 @@ fn span_in_expr(expr: &Expr, target: NodeId) -> Option<Span> {
             ShellPart::Interpolated(e) => span_in_expr(e, target),
             ShellPart::Literal(_) => None,
         }),
+        Expr::StructLit { fields, .. } => {
+            fields.iter().find_map(|(_, e)| span_in_expr(e, target))
+        }
+        Expr::FieldAccess { expr, .. } => span_in_expr(expr, target),
+        Expr::Match { scrutinee, arms, .. } => span_in_expr(scrutinee, target).or_else(|| {
+            arms.iter().find_map(|arm| span_in_expr(&arm.body, target))
+        }),
+        Expr::Tuple { elements, .. } => elements.iter().find_map(|e| span_in_expr(e, target)),
+        Expr::VariantCtor { args, .. } => args.iter().find_map(|e| span_in_expr(e, target)),
     }
 }
 

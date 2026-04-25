@@ -74,14 +74,18 @@ const _: fn() = || {
     check::<ParseError>();
     check::<ResolveError>();
     check::<TypeError>();
+    check::<ExhaustivenessError>();
     check::<LexResult>();
     check::<ParseResult>();
     check::<ResolveResult>();
     check::<TypeResult>();
+    check::<ExhaustivenessResult>();
     check::<Program>();
     check::<Chunk>();
     check::<Op>();
     check::<Constant>();
+    check::<Pattern>();
+    check::<MatchArm>();
 };
 
 #[cfg(test)]

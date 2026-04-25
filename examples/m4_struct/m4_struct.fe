@@ -1,0 +1,8 @@
+struct Point { x: Int, y: Int }
+
+fn sum_coords(p: Point) -> Int {
+    p.x + p.y
+}
+
+let p = Point { x: 3, y: 4 }
+println(s: int_to_str(n: sum_coords(p: p)))
