@@ -1,5 +1,7 @@
 # Ferric
 
+![ferric](./static/ferric.png)
+
 A small, statically-typed scripting language, implemented with a modular interpreter pipeline. The compiler lowers to bytecode that runs on a stack VM.  The type system is a full HM type system that feels familiar to rust, without the overhead of full borrow checking
 
 ## Shell First

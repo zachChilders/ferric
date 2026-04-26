@@ -1364,6 +1364,24 @@ impl<'a> Parser<'a> {
                 continue;
             }
 
+            // `export`, `import`, `type` are top-level only — emit a clear
+            // error if they appear inside a block, then skip the keyword and
+            // continue parsing the inner thing as if the modifier weren't
+            // there. This is more useful than letting the user see a generic
+            // UnexpectedToken.
+            if self.check(&TokenKind::Export) {
+                let span = self.peek().span;
+                self.errors.push(ParseError::InvalidExportPosition { span });
+                self.advance();
+                continue;
+            }
+            if self.check(&TokenKind::Import) {
+                let span = self.peek().span;
+                self.errors.push(ParseError::LateImport { span });
+                let _ = self.skip_import_decl_remainder();
+                continue;
+            }
+
             // Parse what looks like an expression
             if !self.is_expr_start() {
                 // Skip this token and try to continue
@@ -3242,5 +3260,221 @@ mod tests {
 
         // Parser should not panic
         assert_eq!(result.items.len(), 1);
+    }
+
+    // =============== M7 — Imports / Exports / Type aliases / Casts ===============
+
+    /// Lex+parse helper that wires up an interner so import paths classify.
+    fn lex_parse(src: &str) -> (Interner, ParseResult) {
+        let mut interner = Interner::new();
+        let lex_result = ferric_lexer::lex(src, &mut interner);
+        let parsed = parse_with_interner(&lex_result, &interner);
+        (interner, parsed)
+    }
+
+    #[test]
+    fn test_named_import_relative() {
+        let (interner, result) = lex_parse(r#"import { connect, disconnect as d } from "./db""#);
+        assert_eq!(result.errors.len(), 0, "errors: {:?}", result.errors);
+        assert_eq!(result.items.len(), 1);
+        match &result.items[0] {
+            Item::Import(decl) => {
+                assert!(matches!(decl.path, ImportPath::Relative(ref s) if s == "./db"));
+                match &decl.items {
+                    ImportItems::Named(items) => {
+                        assert_eq!(items.len(), 2);
+                        assert_eq!(interner.resolve(items[0].name), "connect");
+                        assert!(items[0].alias.is_none());
+                        assert_eq!(interner.resolve(items[1].name), "disconnect");
+                        assert_eq!(items[1].alias.map(|s| interner.resolve(s).to_string()),
+                                   Some("d".to_string()));
+                    }
+                    other => panic!("expected named imports, got {:?}", other),
+                }
+            }
+            other => panic!("expected import, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_namespace_import() {
+        let (interner, result) = lex_parse(r#"import * as db from "./db""#);
+        assert_eq!(result.errors.len(), 0, "errors: {:?}", result.errors);
+        match &result.items[0] {
+            Item::Import(decl) => match &decl.items {
+                ImportItems::Namespace(sym) => assert_eq!(interner.resolve(*sym), "db"),
+                other => panic!("expected namespace import, got {:?}", other),
+            },
+            _ => panic!("expected import"),
+        }
+    }
+
+    #[test]
+    fn test_workspace_import_path() {
+        let (_, result) = lex_parse(r#"import { Config } from "@/config""#);
+        assert_eq!(result.errors.len(), 0, "errors: {:?}", result.errors);
+        match &result.items[0] {
+            Item::Import(decl) => assert!(matches!(decl.path, ImportPath::Workspace(ref s) if s == "@/config")),
+            _ => panic!("expected import"),
+        }
+    }
+
+    #[test]
+    fn test_cache_import_path() {
+        let (_, result) = lex_parse(r#"import { HttpClient } from "ferric-http""#);
+        assert_eq!(result.errors.len(), 0, "errors: {:?}", result.errors);
+        match &result.items[0] {
+            Item::Import(decl) => assert!(matches!(decl.path, ImportPath::Cache(ref s) if s == "ferric-http")),
+            _ => panic!("expected import"),
+        }
+    }
+
+    #[test]
+    fn test_invalid_import_path() {
+        let (_, result) = lex_parse(r#"import { X } from "not/a/valid/cache/name""#);
+        assert!(result.errors.iter().any(|e| matches!(e, ParseError::InvalidImportPath { .. })));
+    }
+
+    #[test]
+    fn test_default_import_is_error() {
+        let (_, result) = lex_parse(r#"import db from "./db""#);
+        assert!(result.errors.iter().any(|e| matches!(e, ParseError::DefaultImport { .. })));
+    }
+
+    #[test]
+    fn test_late_import_is_error() {
+        let src = "fn foo() { }\nimport { bar } from \"./bar\"\n";
+        let (_, result) = lex_parse(src);
+        assert!(result.errors.iter().any(|e| matches!(e, ParseError::LateImport { .. })));
+        // Only the legal item (the fn) should remain.
+        assert_eq!(result.items.len(), 1);
+        assert!(matches!(result.items[0], Item::FnDef { .. }));
+    }
+
+    #[test]
+    fn test_export_fn() {
+        let (_, result) = lex_parse("export fn connect() { }");
+        assert_eq!(result.errors.len(), 0, "errors: {:?}", result.errors);
+        match &result.items[0] {
+            Item::Export(decl) => assert!(matches!(*decl.item, Item::FnDef { .. })),
+            _ => panic!("expected export"),
+        }
+    }
+
+    #[test]
+    fn test_export_struct() {
+        let (_, result) = lex_parse("export struct Config { host: Str }");
+        assert_eq!(result.errors.len(), 0, "errors: {:?}", result.errors);
+        match &result.items[0] {
+            Item::Export(decl) => assert!(matches!(*decl.item, Item::StructDef { .. })),
+            _ => panic!("expected export"),
+        }
+    }
+
+    #[test]
+    fn test_export_enum() {
+        let (_, result) = lex_parse("export enum Color { Red, Green }");
+        assert_eq!(result.errors.len(), 0, "errors: {:?}", result.errors);
+        match &result.items[0] {
+            Item::Export(decl) => assert!(matches!(*decl.item, Item::EnumDef { .. })),
+            _ => panic!("expected export"),
+        }
+    }
+
+    #[test]
+    fn test_export_type_alias() {
+        let (_, result) = lex_parse("export type Url = Str");
+        assert_eq!(result.errors.len(), 0, "errors: {:?}", result.errors);
+        match &result.items[0] {
+            Item::Export(decl) => assert!(matches!(*decl.item, Item::TypeAlias(_))),
+            _ => panic!("expected export"),
+        }
+    }
+
+    #[test]
+    fn test_export_inside_fn_body_is_error() {
+        let src = "fn foo() { export let x = 1 }";
+        let (_, result) = lex_parse(src);
+        // The body parser doesn't recognise `export`, so it should fall through
+        // to an UnexpectedToken / ExpectedExpression for the keyword. Either
+        // way an error is recorded — we just confirm at least one parse error.
+        assert!(!result.errors.is_empty());
+    }
+
+    #[test]
+    fn test_type_alias_simple() {
+        let (interner, result) = lex_parse("type Url = Str");
+        assert_eq!(result.errors.len(), 0, "errors: {:?}", result.errors);
+        match &result.items[0] {
+            Item::TypeAlias(decl) => {
+                assert_eq!(interner.resolve(decl.name), "Url");
+                assert_eq!(decl.params.len(), 0);
+                assert!(decl.opaque);
+                assert!(matches!(&decl.ty, TypeAnnotation::Named(s) if interner.resolve(*s) == "Str"));
+            }
+            _ => panic!("expected type alias"),
+        }
+    }
+
+    #[test]
+    fn test_type_alias_generic() {
+        let (interner, result) = lex_parse("type Pair<A, B> = Tuple<A, B>");
+        assert_eq!(result.errors.len(), 0, "errors: {:?}", result.errors);
+        match &result.items[0] {
+            Item::TypeAlias(decl) => {
+                assert_eq!(interner.resolve(decl.name), "Pair");
+                assert_eq!(decl.params.len(), 2);
+            }
+            _ => panic!("expected type alias"),
+        }
+    }
+
+    #[test]
+    fn test_cast_expression() {
+        // `let u = "x" as Url`
+        let (_, result) = lex_parse(r#"let u = "x" as Url"#);
+        assert_eq!(result.errors.len(), 0, "errors: {:?}", result.errors);
+        match &result.items[0] {
+            Item::Script { stmt: Stmt::Let { init, .. }, .. } => {
+                assert!(matches!(init, Expr::Cast(_)));
+            }
+            _ => panic!("expected let"),
+        }
+    }
+
+    #[test]
+    fn test_cast_precedence_with_binary() {
+        // `let r = a + b as Int` should parse as `a + (b as Int)`.
+        let (_, result) = lex_parse("let r = a + b as Int");
+        assert_eq!(result.errors.len(), 0, "errors: {:?}", result.errors);
+        match &result.items[0] {
+            Item::Script { stmt: Stmt::Let { init, .. }, .. } => match init {
+                Expr::Binary { op: BinOp::Add, right, .. } => {
+                    assert!(matches!(**right, Expr::Cast(_)));
+                }
+                other => panic!("expected `+` at the root, got {:?}", other),
+            },
+            _ => panic!("expected let"),
+        }
+    }
+
+    #[test]
+    fn test_cast_precedence_with_field_access() {
+        // `let u = obj.field as Url` should parse as `(obj.field) as Url`.
+        let (_, result) = lex_parse("let u = obj.field as Url");
+        assert_eq!(result.errors.len(), 0, "errors: {:?}", result.errors);
+        match &result.items[0] {
+            Item::Script { stmt: Stmt::Let { init, .. }, .. } => match init {
+                Expr::Cast(c) => assert!(matches!(*c.expr, Expr::FieldAccess { .. })),
+                other => panic!("expected cast at the root, got {:?}", other),
+            },
+            _ => panic!("expected let"),
+        }
+    }
+
+    #[test]
+    fn test_chained_cast_is_error() {
+        let (_, result) = lex_parse("let x = y as Foo as Bar");
+        assert!(result.errors.iter().any(|e| matches!(e, ParseError::ChainedCast { .. })));
     }
 }
