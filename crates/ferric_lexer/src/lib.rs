@@ -296,6 +296,12 @@ impl<'a> Lexer<'a> {
     }
 
     /// Lexes an identifier or keyword.
+    ///
+    /// The match arms below are the canonical mapping from keyword text to
+    /// `TokenKind`. The parity of the keyword *set* with
+    /// `ferric_common::keywords::KEYWORDS` is enforced by
+    /// `tests::keywords_match_common_list` — adding a keyword here without
+    /// also adding it to that list (or vice versa) is a test failure.
     fn lex_identifier_or_keyword(&mut self, start: u32) -> Token {
         let mut ident = String::new();
 
@@ -933,5 +939,28 @@ mod tests {
             .errors
             .iter()
             .any(|e| matches!(e, LexError::UnclosedShellInterp { .. })));
+    }
+
+    /// Architectural guarantee: every entry in `ferric_common::keywords::KEYWORDS`
+    /// is recognised by the lexer as a non-`Ident` token. Adding a keyword to
+    /// `KEYWORDS` without a matching arm in `lex_identifier_or_keyword` (or
+    /// vice versa) fails this test.
+    #[test]
+    fn keywords_match_common_list() {
+        for &kw in ferric_common::keywords::KEYWORDS {
+            let mut interner = Interner::new();
+            let result = lex(kw, &mut interner);
+            assert!(
+                !result.has_errors(),
+                "keyword `{kw}` produced lex errors: {:?}",
+                result.errors,
+            );
+            assert!(
+                !matches!(result.tokens[0].kind, TokenKind::Ident(_)),
+                "keyword `{kw}` from ferric_common::keywords::KEYWORDS lexed \
+                 as Ident — `lex_identifier_or_keyword` is missing a match \
+                 arm for it",
+            );
+        }
     }
 }

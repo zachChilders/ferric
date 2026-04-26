@@ -1,1 +1,4 @@
 /target
+
+# LSP extension package output (built by `make extension`)
+/ferric-lang.vsix

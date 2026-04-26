@@ -1,0 +1,31 @@
+{
+    "name": "ferric-lang",
+    "displayName": "Ferric",
+    "description": "Language support for the Ferric programming language",
+    "version": "0.1.0",
+    "publisher": "ferric",
+    "engines": { "vscode": "^1.75.0" },
+    "categories": ["Programming Languages"],
+    "main": "./client/extension.js",
+    "contributes": {
+        "languages": [{
+            "id": "ferric",
+            "aliases": ["Ferric", "ferric"],
+            "extensions": [".fe"],
+            "configuration": "./language-configuration.json"
+        }],
+        "grammars": [{
+            "language": "ferric",
+            "scopeName": "source.ferric",
+            "path": "./syntaxes/ferric.tmLanguage.json"
+        }]
+    },
+    "activationEvents": ["onLanguage:ferric"],
+    "dependencies": {
+        "vscode-languageclient": "^9.0.0"
+    },
+    "devDependencies": {
+        "@types/node": "^20",
+        "@types/vscode": "^1.75.0"
+    }
+}

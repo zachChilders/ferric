@@ -9,9 +9,9 @@
 use std::collections::{HashMap, HashSet};
 
 use ferric_common::{
-    BinOp, CastExpr, DefId, Expr, ImplMethod, Interner, Item, Literal, MatchArm, NamedArg, NodeId,
+    BinOp, DefId, Expr, ImplMethod, Interner, Item, Literal, MatchArm, NamedArg, NodeId,
     Param, ParseResult, Pattern, RequireStmt, ResolveResult, ShellPart, Span, Stmt, Symbol,
-    TraitRegistry, Ty, TyVar, TypeAliasItem, TypeAnnotation, TypeError, TypeResult, TypeScheme,
+    TraitRegistry, Ty, TyVar, TypeAnnotation, TypeError, TypeResult, TypeScheme,
     UnOp,
 };
 
@@ -246,6 +246,12 @@ impl InferEnv {
 /// Per-alias metadata: the parameter list (generic alias names) and the raw
 /// inner annotation. The inner is resolved lazily at each use site so that
 /// alias-to-alias references don't depend on declaration order.
+///
+/// **Scaffolding (M7):** populated by `register_type_aliases` once the
+/// resolver allocates `DefId`s for type-alias items. Currently no fields are
+/// read — the `dead_code` allow is removed when the M7 follow-up wires up the
+/// alias-use sites.
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 struct TypeAliasMeta {
     def_id: DefId,
@@ -274,8 +280,13 @@ struct TypeInfer<'a> {
     /// Type-alias registry. Populated in the pre-pass before any function
     /// body is checked so forward references and out-of-order declarations
     /// resolve consistently.
+    ///
+    /// Scaffolding (M7): populated by `register_type_aliases`, not yet read
+    /// at use sites. Drop the `allow` when the consumer lands.
+    #[allow(dead_code)]
     type_aliases: HashMap<Symbol, TypeAliasMeta>,
     /// In-progress aliases for cycle detection during lazy inner resolution.
+    #[allow(dead_code)]
     type_alias_resolving: HashSet<Symbol>,
 
     /// Within the body of the current function, the expected return type.
@@ -349,6 +360,28 @@ impl<'a> TypeInfer<'a> {
     // ------------------------------------------------------------------
     // Top-level
     // ------------------------------------------------------------------
+
+    /// Walk top-level `Item::TypeAlias` declarations and populate
+    /// `self.type_aliases`. The map is consulted lazily at each alias use
+    /// site so forward references and out-of-order declarations behave
+    /// consistently.
+    ///
+    /// **State note (M7 scaffolding):** the resolver does not yet allocate
+    /// a `DefId` for `Item::TypeAlias` — see `Item::TypeAlias(_) => {}` in
+    /// `ferric_resolve`. Until that lands, this method walks the AST but
+    /// does not insert anything (synthesizing a fake `DefId` would collide
+    /// with real ones the resolver allocates). The call site in
+    /// `infer_program` and the struct fields are kept so the M7 follow-up
+    /// is a single-method change.
+    fn register_type_aliases(&mut self) {
+        for item in &self.ast.items {
+            if let Item::TypeAlias(_alias) = item {
+                // TODO(M7): once the resolver allocates `DefId`s for type
+                //   aliases (`type_defs` extension), build `TypeAliasMeta`
+                //   from `_alias` and insert into `self.type_aliases`.
+            }
+        }
+    }
 
     fn infer_program(&mut self) {
         // 1. Register native function signatures so calls to stdlib like
@@ -2005,6 +2038,8 @@ mod tests {
             current_fn_ret: None,
             generic_aliases: HashMap::new(),
             bound_constraints: HashMap::new(),
+            type_aliases: HashMap::new(),
+            type_alias_resolving: HashSet::new(),
             node_types: HashMap::new(),
             method_dispatch: HashMap::new(),
             pending_methods: Vec::new(),
@@ -2029,6 +2064,8 @@ mod tests {
             current_fn_ret: None,
             generic_aliases: HashMap::new(),
             bound_constraints: HashMap::new(),
+            type_aliases: HashMap::new(),
+            type_alias_resolving: HashSet::new(),
             node_types: HashMap::new(),
             method_dispatch: HashMap::new(),
             pending_methods: Vec::new(),
@@ -2055,6 +2092,8 @@ mod tests {
             current_fn_ret: None,
             generic_aliases: HashMap::new(),
             bound_constraints: HashMap::new(),
+            type_aliases: HashMap::new(),
+            type_alias_resolving: HashSet::new(),
             node_types: HashMap::new(),
             method_dispatch: HashMap::new(),
             pending_methods: Vec::new(),
@@ -2085,6 +2124,8 @@ mod tests {
             current_fn_ret: None,
             generic_aliases: HashMap::new(),
             bound_constraints: HashMap::new(),
+            type_aliases: HashMap::new(),
+            type_alias_resolving: HashSet::new(),
             node_types: HashMap::new(),
             method_dispatch: HashMap::new(),
             pending_methods: Vec::new(),

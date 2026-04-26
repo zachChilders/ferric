@@ -1,0 +1,4 @@
+node_modules/
+bin/
+*.vsix
+syntaxes/ferric.tmLanguage.json

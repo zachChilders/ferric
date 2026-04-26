@@ -1,0 +1,33 @@
+[package]
+name    = "ferric_lsp"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "ferric-lsp"
+path = "src/main.rs"
+
+[dependencies]
+# Public stage entry points only — no internal types from any stage crate.
+ferric_common  = { path = "../ferric_common" }
+ferric_lexer   = { path = "../ferric_lexer" }
+ferric_parser  = { path = "../ferric_parser" }
+ferric_resolve = { path = "../ferric_resolve" }
+# Inference stage. The doc references `ferric_typecheck` (M1); the M3 replacement
+# is `ferric_infer::typecheck`. Spec architectural rule still holds — replacing
+# infer is a one-line import change.
+ferric_infer   = { path = "../ferric_infer" }
+# `ferric_infer::typecheck` requires a `TraitRegistry`, which is built by this
+# stage from `(ParseResult, ResolveResult, Interner)`. M5 added it between
+# resolve and infer; the LSP must run it for trait-aware types.
+ferric_traits  = { path = "../ferric_traits" }
+
+tower-lsp  = "0.20"
+tokio      = { version = "1", features = ["full"] }
+serde      = { version = "1", features = ["derive"] }
+serde_json = "1"
+dashmap    = "5"
+
+[build-dependencies]
+ferric_common = { path = "../ferric_common" }
+serde_json    = "1"

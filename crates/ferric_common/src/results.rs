@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
-use crate::{Token, LexError, ParseError, ResolveError, TypeError, ExhaustivenessError, NodeId, DefId, Ty, Item, NamedArg, Chunk, Symbol};
+use crate::{Token, LexError, ParseError, ResolveError, TypeError, ExhaustivenessError, NodeId, DefId, Ty, Item, NamedArg, Chunk, Symbol, Span};
 
 /// Result of the lexing stage.
 ///
@@ -52,6 +52,17 @@ impl ParseResult {
     }
 }
 
+/// Per-definition metadata: name and source location.
+///
+/// Built by the resolver and consumed by tooling (LSP hover, completion,
+/// goto-def). `span` is `None` for native definitions registered by the
+/// runtime — they have no source location.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DefInfo {
+    pub name: Symbol,
+    pub span: Option<Span>,
+}
+
 /// Result of the name resolution stage.
 ///
 /// Maps each identifier reference to its definition and assigns stack slots
@@ -88,6 +99,10 @@ pub struct ResolveResult {
     /// source name — the compiler binds it to a local slot inside the closure
     /// chunk so the body can reference it by name.
     pub captures: HashMap<NodeId, Vec<(DefId, Symbol)>>,
+    /// Per-DefId metadata: source name + (optional) source span. Populated by
+    /// the resolver at every DefId-allocation site; used by tooling for hover,
+    /// completion, and goto-definition.
+    pub defs: HashMap<DefId, DefInfo>,
     /// Any errors encountered during resolution
     pub errors: Vec<ResolveError>,
 }
@@ -112,6 +127,7 @@ impl ResolveResult {
             method_def_ids: HashMap::new(),
             method_params: HashMap::new(),
             captures: HashMap::new(),
+            defs: HashMap::new(),
             errors,
         }
     }
@@ -119,6 +135,13 @@ impl ResolveResult {
     /// Returns true if there were any errors during resolution.
     pub fn has_errors(&self) -> bool {
         !self.errors.is_empty()
+    }
+
+    /// Look up the metadata for a `DefId`. Returns `None` if the resolver
+    /// did not record the definition (e.g. when reading an older
+    /// `ResolveResult` round-tripped through JSON before this field existed).
+    pub fn def(&self, id: DefId) -> Option<&DefInfo> {
+        self.defs.get(&id)
     }
 }
 

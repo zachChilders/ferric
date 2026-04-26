@@ -8,7 +8,7 @@
 
 use std::collections::HashMap;
 use ferric_common::{
-    ParseResult, ResolveResult, ResolveError, Item, ImplMethod, ModuleResult, Stmt, Expr,
+    DefInfo, ParseResult, ResolveResult, ResolveError, Item, ImplMethod, ModuleResult, Stmt, Expr,
     NamedArg, Param, Pattern, ShellPart, Symbol, Span, NodeId, DefId, TypeAnnotation,
     RequireStmt,
 };
@@ -174,6 +174,11 @@ struct Resolver {
     /// Output: each impl method's declared params, keyed by the method's NodeId.
     method_params: HashMap<NodeId, Vec<Param>>,
 
+    /// Output: per-DefId metadata (name + source span). Populated at every
+    /// DefId-allocation site. Consumed by tooling (LSP hover, completion,
+    /// goto-def). `span: None` marks native definitions with no source.
+    defs: HashMap<DefId, DefInfo>,
+
     /// Accumulated errors
     errors: Vec<ResolveError>,
 
@@ -203,10 +208,17 @@ impl Resolver {
             enum_variants: HashMap::new(),
             method_def_ids: HashMap::new(),
             method_params: HashMap::new(),
+            defs: HashMap::new(),
             errors: Vec::new(),
             loop_depth: 0,
             fn_depth: 0,
         }
+    }
+
+    /// Records `(name, span)` for a freshly-allocated `DefId`. `span: None`
+    /// indicates a native definition with no source location.
+    fn record_def(&mut self, def_id: DefId, name: Symbol, span: Option<Span>) {
+        self.defs.insert(def_id, DefInfo { name, span });
     }
 
     /// Consumes the resolver and produces the final ResolveResult.
@@ -224,6 +236,7 @@ impl Resolver {
         result.method_def_ids = self.method_def_ids;
         result.method_params = self.method_params;
         result.captures = self.captures;
+        result.defs = self.defs;
         result
     }
 
@@ -243,6 +256,7 @@ impl Resolver {
     /// Reports a DuplicateDefinition error if the name is already defined in the current scope.
     fn define(&mut self, name: Symbol, mutable: bool, span: Span) -> DefId {
         let def_id = self.def_id_gen.next();
+        self.record_def(def_id, name, Some(span));
 
         // Check for duplicate definition in the current scope only
         if let Some(scope) = self.scopes.last_mut() {
@@ -341,6 +355,7 @@ impl Resolver {
         }
 
         let def_id = self.def_id_gen.next();
+        self.record_def(def_id, name, None);
 
         // Add to global scope (first scope in the stack). Mark shadowable so
         // a user-defined `fn name(...)` overrides it silently.
@@ -384,20 +399,23 @@ impl Resolver {
                 Item::FnDef { name, params, .. } => {
                     self.fn_params.insert(*name, params.clone());
                 }
-                Item::StructDef { name, fields, .. } => {
+                Item::StructDef { name, fields, span, .. } => {
                     let def_id = self.def_id_gen.next();
+                    self.record_def(def_id, *name, Some(*span));
                     self.type_defs.insert(*name, def_id);
                     self.struct_fields.insert(def_id, fields.clone());
                 }
-                Item::EnumDef { name, variants, .. } => {
+                Item::EnumDef { name, variants, span, .. } => {
                     let def_id = self.def_id_gen.next();
+                    self.record_def(def_id, *name, Some(*span));
                     self.type_defs.insert(*name, def_id);
                     self.enum_variants.insert(def_id, variants.clone());
                 }
-                Item::TraitDef { name, .. } => {
+                Item::TraitDef { name, span, .. } => {
                     // Reserve a DefId for the trait so name lookups can route
                     // through `type_defs` when needed.
                     let def_id = self.def_id_gen.next();
+                    self.record_def(def_id, *name, Some(*span));
                     self.type_defs.insert(*name, def_id);
                 }
                 Item::ImplBlock { methods, .. } => {
@@ -409,6 +427,7 @@ impl Resolver {
                     // compiler can find them later.
                     for m in methods {
                         let def_id = self.def_id_gen.next();
+                        self.record_def(def_id, m.name, Some(m.span));
                         self.method_def_ids.insert(m.id, def_id);
                         let fn_slot = self.next_fn_slot;
                         self.next_fn_slot += 1;

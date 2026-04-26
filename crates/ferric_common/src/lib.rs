@@ -31,6 +31,11 @@ mod bytecode;
 mod traits;
 mod module;
 
+// Namespaced (no glob re-export): consumers reach these constants via
+// `ferric_common::keywords::KEYWORDS`. The lexer and `ferric_lsp/build.rs`
+// both depend on this stable path.
+pub mod keywords;
+
 /// Serialises a `ParseResult` as pretty-printed JSON.
 ///
 /// External tools consume Ferric's AST through this entry point — they import
@@ -90,6 +95,7 @@ const _: fn() = || {
     check::<LexResult>();
     check::<ParseResult>();
     check::<ResolveResult>();
+    check::<DefInfo>();
     check::<TypeResult>();
     check::<ExhaustivenessResult>();
     check::<Program>();
