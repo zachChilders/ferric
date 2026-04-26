@@ -12,9 +12,11 @@
 //! All other implementation details are private.
 
 use ferric_common::{
-    BinOp, Expr, ImplMethod, Item, LexResult, Literal, MatchArm, NamedArg, NodeId, Param,
+    BinOp, CastExpr, Expr, ExportDecl, ImplMethod, ImportDecl, ImportItem, ImportItems,
+    ImportPath, Interner, Item, LexResult, Literal, MatchArm, NamedArg, NodeId, Param,
     ParseError, ParseResult, Pattern, RequireMode, RequireStmt, ShellPart, ShellTokenPart,
-    Stmt, Symbol, Token, TokenKind, TraitMethod, TypeAnnotation, TypeParam, UnOp,
+    Span, Stmt, Symbol, Token, TokenKind, TraitMethod, TypeAliasItem, TypeAnnotation,
+    TypeParam, UnOp,
 };
 
 /// Generates unique NodeIds for AST nodes.
@@ -46,6 +48,11 @@ struct Parser<'a> {
     node_id_gen: NodeIdGen,
     /// Accumulated errors
     errors: Vec<ParseError>,
+    /// Interner — needed to classify `import "..."` path strings at parse time.
+    /// Optional so unit tests that construct tokens directly can omit it; when
+    /// `None`, the parser cannot classify import paths (they emit a
+    /// `ParseError::InvalidImportPath` for safety).
+    interner: Option<&'a Interner>,
     /// When true, an `Ident { ... }` expression is NOT parsed as a struct
     /// literal — it's left for an outer construct (e.g. `if cond { ... }`,
     /// `while cond { ... }`, `match scrutinee { ... }`) to consume the `{`.
@@ -61,6 +68,19 @@ impl<'a> Parser<'a> {
             current: 0,
             node_id_gen: NodeIdGen::new(),
             errors: Vec::new(),
+            interner: None,
+            no_struct_literal: false,
+        }
+    }
+
+    /// Creates a new parser that has access to the interner for path classification.
+    fn new_with_interner(tokens: &'a [Token], interner: &'a Interner) -> Self {
+        Self {
+            tokens,
+            current: 0,
+            node_id_gen: NodeIdGen::new(),
+            errors: Vec::new(),
+            interner: Some(interner),
             no_struct_literal: false,
         }
     }
@@ -146,11 +166,36 @@ impl<'a> Parser<'a> {
     // ========== Parsing Methods ==========
 
     /// Parses a complete program (list of top-level items).
+    ///
+    /// Tracks whether the import section has closed: the first non-import item
+    /// closes it, and any subsequent `import` is reported as `LateImport` and
+    /// skipped (kept out of the AST so downstream stages don't try to resolve
+    /// it).
     fn parse_program(&mut self) -> Vec<Item> {
         let mut items = Vec::new();
+        let mut import_section_closed = false;
 
         while !self.is_at_end() {
+            if matches!(self.peek().kind, TokenKind::Import) {
+                if import_section_closed {
+                    // Skip the late import and emit an error spanning the whole decl.
+                    let start_span = self.peek().span;
+                    let end_span = self.skip_import_decl();
+                    self.errors.push(ParseError::LateImport {
+                        span: start_span.to(end_span),
+                    });
+                    continue;
+                }
+                if let Some(item) = self.parse_import_decl() {
+                    items.push(item);
+                } else {
+                    self.synchronize();
+                }
+                continue;
+            }
+
             if let Some(item) = self.parse_item() {
+                import_section_closed = true;
                 items.push(item);
             } else {
                 // Skip to next likely item start on error
@@ -159,6 +204,37 @@ impl<'a> Parser<'a> {
         }
 
         items
+    }
+
+    /// Skips tokens making up an `import ... from "..."` declaration after a
+    /// `LateImport` is detected. Returns the span of the last consumed token.
+    fn skip_import_decl(&mut self) -> Span {
+        // Consume tokens until we either consume a string literal (the path)
+        // or hit a token that clearly starts a new top-level item.
+        let mut last_span = self.peek().span;
+        self.advance(); // 'import'
+        while !self.is_at_end() {
+            last_span = self.peek().span;
+            match &self.peek().kind {
+                TokenKind::StrLit(_) => {
+                    self.advance();
+                    return last_span;
+                }
+                TokenKind::Fn
+                | TokenKind::Struct
+                | TokenKind::Enum
+                | TokenKind::Trait
+                | TokenKind::Impl
+                | TokenKind::Import
+                | TokenKind::Export
+                | TokenKind::Type
+                | TokenKind::Let => return last_span,
+                _ => {
+                    self.advance();
+                }
+            }
+        }
+        last_span
     }
 
     /// Attempts to synchronize after a parse error by advancing to a likely recovery point.
@@ -174,6 +250,9 @@ impl<'a> Parser<'a> {
                     | TokenKind::Enum
                     | TokenKind::Trait
                     | TokenKind::Impl
+                    | TokenKind::Import
+                    | TokenKind::Export
+                    | TokenKind::Type
             ) {
                 return;
             }
@@ -192,6 +271,8 @@ impl<'a> Parser<'a> {
             TokenKind::Let => self.parse_script_let(),
             TokenKind::Require => self.parse_script_require(),
             TokenKind::For => self.parse_script_for(),
+            TokenKind::Export => self.parse_export_decl(),
+            TokenKind::Type => self.parse_type_alias().map(Item::TypeAlias),
             _ if self.is_expr_start() => self.parse_script_expr(),
             _ => {
                 let token = self.peek().clone();
@@ -389,6 +470,343 @@ impl<'a> Parser<'a> {
         let stmt = Stmt::Expr { expr };
         let id = self.node_id_gen.next();
         Some(Item::Script { stmt, id, span })
+    }
+
+    /// Parses an `import` declaration:
+    ///
+    /// ```text
+    /// import_decl ::= "import" import_items "from" string_lit
+    /// import_items ::= "{" named_import ("," named_import)* ","? "}"
+    ///                | "*" "as" ident
+    /// named_import ::= ident ("as" ident)?
+    /// ```
+    ///
+    /// `import X from "path"` (no braces, no `*`) is reported as
+    /// `ParseError::DefaultImport` and skipped.
+    fn parse_import_decl(&mut self) -> Option<Item> {
+        let start_span = self.peek().span;
+        self.advance(); // consume 'import'
+
+        // Three cases distinguished by the next token:
+        //   `{` → named imports
+        //   `*` → namespace import (Star token)
+        //   `Ident` → JS-style default import → error
+        let items = match self.peek().kind {
+            TokenKind::LBrace => {
+                self.advance(); // '{'
+                let mut imports: Vec<ImportItem> = Vec::new();
+                while !self.check(&TokenKind::RBrace) && !self.is_at_end() {
+                    let item_start = self.peek().span;
+                    let name = match self.peek().kind {
+                        TokenKind::Ident(s) => {
+                            self.advance();
+                            s
+                        }
+                        _ => {
+                            let tok = self.peek().clone();
+                            self.errors.push(ParseError::UnexpectedToken {
+                                expected: "imported name".to_string(),
+                                found: tok.kind,
+                                span: tok.span,
+                            });
+                            break;
+                        }
+                    };
+                    let mut item_end = self.tokens[self.current - 1].span;
+                    let alias = if self.match_token(&TokenKind::As) {
+                        match self.peek().kind {
+                            TokenKind::Ident(s) => {
+                                item_end = self.peek().span;
+                                self.advance();
+                                Some(s)
+                            }
+                            _ => {
+                                let tok = self.peek().clone();
+                                self.errors.push(ParseError::UnexpectedToken {
+                                    expected: "alias name after 'as'".to_string(),
+                                    found: tok.kind,
+                                    span: tok.span,
+                                });
+                                None
+                            }
+                        }
+                    } else {
+                        None
+                    };
+                    imports.push(ImportItem {
+                        span: item_start.to(item_end),
+                        name,
+                        alias,
+                    });
+                    if !self.match_token(&TokenKind::Comma) {
+                        break;
+                    }
+                }
+                if self.expect(TokenKind::RBrace, "'}'").is_err() {
+                    return None;
+                }
+                ImportItems::Named(imports)
+            }
+            TokenKind::Star => {
+                self.advance(); // '*'
+                if self.expect(TokenKind::As, "'as'").is_err() {
+                    return None;
+                }
+                let alias = match self.peek().kind {
+                    TokenKind::Ident(s) => {
+                        self.advance();
+                        s
+                    }
+                    _ => {
+                        let tok = self.peek().clone();
+                        self.errors.push(ParseError::UnexpectedToken {
+                            expected: "namespace alias".to_string(),
+                            found: tok.kind,
+                            span: tok.span,
+                        });
+                        return None;
+                    }
+                };
+                ImportItems::Namespace(alias)
+            }
+            TokenKind::Ident(_) => {
+                // JS-style default import: `import X from "..."`. Report and
+                // skip the rest of the declaration so we don't cascade.
+                let ident_span = self.peek().span;
+                self.errors.push(ParseError::DefaultImport { span: ident_span });
+                let _ = self.skip_import_decl_remainder();
+                return None;
+            }
+            _ => {
+                let tok = self.peek().clone();
+                self.errors.push(ParseError::UnexpectedToken {
+                    expected: "'{', '*', or named imports".to_string(),
+                    found: tok.kind,
+                    span: tok.span,
+                });
+                return None;
+            }
+        };
+
+        if self.expect(TokenKind::From, "'from'").is_err() {
+            return None;
+        }
+
+        // Path string.
+        let (path_str, path_span) = match self.peek().kind {
+            TokenKind::StrLit(sym) => {
+                let span = self.peek().span;
+                self.advance();
+                (sym, span)
+            }
+            _ => {
+                let tok = self.peek().clone();
+                self.errors.push(ParseError::UnexpectedToken {
+                    expected: "import path string".to_string(),
+                    found: tok.kind,
+                    span: tok.span,
+                });
+                return None;
+            }
+        };
+
+        let path = match self.path_string_from_symbol(path_str) {
+            Some(text) => match classify_import_path(&text) {
+                Some(p) => p,
+                None => {
+                    self.errors.push(ParseError::InvalidImportPath { span: path_span });
+                    return None;
+                }
+            },
+            // Without an interner we cannot classify; report and skip.
+            None => {
+                self.errors.push(ParseError::InvalidImportPath { span: path_span });
+                return None;
+            }
+        };
+
+        // Optional trailing semicolon (consistent with other top-level forms).
+        self.match_token(&TokenKind::Semi);
+
+        let span = start_span.to(path_span);
+        let id = self.node_id_gen.next();
+        Some(Item::Import(ImportDecl {
+            id,
+            span,
+            path,
+            items,
+        }))
+    }
+
+    /// After we've already consumed `import` and discovered a malformed shape,
+    /// chew through the rest of the declaration up to and including the path
+    /// string so the next item starts at a clean boundary.
+    fn skip_import_decl_remainder(&mut self) -> Span {
+        let mut last_span = self.peek().span;
+        while !self.is_at_end() {
+            last_span = self.peek().span;
+            match &self.peek().kind {
+                TokenKind::StrLit(_) => {
+                    self.advance();
+                    return last_span;
+                }
+                TokenKind::Fn
+                | TokenKind::Struct
+                | TokenKind::Enum
+                | TokenKind::Trait
+                | TokenKind::Impl
+                | TokenKind::Import
+                | TokenKind::Export
+                | TokenKind::Type
+                | TokenKind::Let => return last_span,
+                _ => {
+                    self.advance();
+                }
+            }
+        }
+        last_span
+    }
+
+    /// Resolves a string-literal symbol to its interned text. Returns `None`
+    /// if the parser was constructed without an interner (test-only path).
+    fn path_string_from_symbol(&self, sym: Symbol) -> Option<String> {
+        self.interner.map(|i| i.resolve(sym).to_string())
+    }
+}
+
+/// Classifies the shape of an import path string:
+/// - `./...` or `../...` → `ImportPath::Relative`
+/// - `@/...`            → `ImportPath::Workspace`
+/// - bare identifier-ish → `ImportPath::Cache`
+/// - anything else      → `None` (caller emits `InvalidImportPath`)
+fn classify_import_path(s: &str) -> Option<ImportPath> {
+    if s.starts_with("./") || s.starts_with("../") {
+        Some(ImportPath::Relative(s.to_string()))
+    } else if let Some(rest) = s.strip_prefix("@/") {
+        if rest.is_empty() {
+            None
+        } else {
+            Some(ImportPath::Workspace(s.to_string()))
+        }
+    } else if !s.is_empty() && is_valid_cache_name(s) {
+        Some(ImportPath::Cache(s.to_string()))
+    } else {
+        None
+    }
+}
+
+/// Returns true if `s` looks like a bare cache dependency name: a non-empty
+/// string containing only ASCII alphanumerics, `_`, or `-`. No path separators
+/// are allowed (those would belong to a relative or workspace path shape).
+fn is_valid_cache_name(s: &str) -> bool {
+    !s.is_empty()
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+}
+
+impl<'a> Parser<'a> {
+    /// Parses an `export` declaration: `export <item>` where `<item>` is one of
+    /// `fn`, `struct`, `enum`, or `type` alias. Wraps the parsed inner item
+    /// in `ExportDecl`. Anything else is reported as `InvalidExportPosition`.
+    fn parse_export_decl(&mut self) -> Option<Item> {
+        let start_span = self.peek().span;
+        self.advance(); // consume 'export'
+
+        let inner = match self.peek().kind {
+            TokenKind::Fn => self.parse_fn_def(),
+            TokenKind::Struct => self.parse_struct_def(),
+            TokenKind::Enum => self.parse_enum_def(),
+            TokenKind::Type => self.parse_type_alias().map(Item::TypeAlias),
+            _ => {
+                let tok = self.peek().clone();
+                self.errors.push(ParseError::InvalidExportPosition { span: start_span.to(tok.span) });
+                return None;
+            }
+        };
+        let inner = inner?;
+        let span = start_span.to(inner.span());
+        let id = self.node_id_gen.next();
+        Some(Item::Export(ExportDecl {
+            id,
+            span,
+            item: Box::new(inner),
+        }))
+    }
+
+    /// Parses a `type` alias definition:
+    ///
+    /// ```text
+    /// type_alias ::= "type" ident ("<" ident ("," ident)* ">")? "=" type_expr
+    /// ```
+    fn parse_type_alias(&mut self) -> Option<TypeAliasItem> {
+        let start_span = self.peek().span;
+        self.advance(); // consume 'type'
+
+        let name = match self.peek().kind {
+            TokenKind::Ident(s) => {
+                self.advance();
+                s
+            }
+            _ => {
+                let tok = self.peek().clone();
+                self.errors.push(ParseError::UnexpectedToken {
+                    expected: "type alias name".to_string(),
+                    found: tok.kind,
+                    span: tok.span,
+                });
+                return None;
+            }
+        };
+
+        // Optional generic parameter list: `<T1, T2>`. Bounds are not allowed
+        // on type aliases in M7, so we accept identifiers only.
+        let mut params: Vec<Symbol> = Vec::new();
+        if self.match_token(&TokenKind::Lt) {
+            if !self.check(&TokenKind::Gt) {
+                loop {
+                    match self.peek().kind {
+                        TokenKind::Ident(s) => {
+                            self.advance();
+                            params.push(s);
+                        }
+                        _ => {
+                            let tok = self.peek().clone();
+                            self.errors.push(ParseError::UnexpectedToken {
+                                expected: "type parameter name".to_string(),
+                                found: tok.kind,
+                                span: tok.span,
+                            });
+                            break;
+                        }
+                    }
+                    if !self.match_token(&TokenKind::Comma) {
+                        break;
+                    }
+                }
+            }
+            let _ = self.expect(TokenKind::Gt, "'>'");
+        }
+
+        if self.expect(TokenKind::Eq, "'='").is_err() {
+            return None;
+        }
+
+        let ty = self.parse_type()?;
+        let end_span = self.tokens[self.current - 1].span;
+
+        // Optional trailing semicolon.
+        self.match_token(&TokenKind::Semi);
+
+        let span = start_span.to(end_span);
+        let id = self.node_id_gen.next();
+        Some(TypeAliasItem {
+            id,
+            span,
+            name,
+            params,
+            ty,
+            opaque: true,
+        })
     }
 
     /// Parses a function definition: `fn name<T: Bound>(params) -> ret_type block`
@@ -1616,7 +2034,7 @@ impl<'a> Parser<'a> {
 
     /// Parses binary expressions using precedence climbing.
     fn parse_binary_expr(&mut self, min_prec: u8) -> Expr {
-        let mut left = self.parse_unary_expr();
+        let mut left = self.parse_cast_expr();
 
         loop {
             // Check if current token is a binary operator
@@ -1659,6 +2077,43 @@ impl<'a> Parser<'a> {
         }
 
         left
+    }
+
+    /// Parses a cast expression: `expr as TypeExpr`. Cast binds tighter than
+    /// every binary operator, but looser than unary (`-`, `!`) and looser than
+    /// any postfix operator parsed inside `parse_unary_expr` (field access,
+    /// indexing, call). Chained casts (`x as A as B`) are an error
+    /// (`ParseError::ChainedCast`).
+    fn parse_cast_expr(&mut self) -> Expr {
+        let expr = self.parse_unary_expr();
+        if matches!(self.peek().kind, TokenKind::As) {
+            let as_span = self.peek().span;
+            self.advance(); // consume 'as'
+            let target = match self.parse_type() {
+                Some(t) => t,
+                None => return expr,
+            };
+            let target_end = self.tokens[self.current - 1].span;
+            let span = expr.span().to(target_end);
+            let id = self.node_id_gen.next();
+            let cast = Expr::Cast(CastExpr {
+                id,
+                span,
+                expr: Box::new(expr),
+                target,
+            });
+            // Reject chained casts: `x as A as B`.
+            if matches!(self.peek().kind, TokenKind::As) {
+                let chain_span = as_span.to(self.peek().span);
+                self.errors.push(ParseError::ChainedCast { span: chain_span });
+                // Consume the chained `as <Type>` for recovery so that one
+                // chain doesn't yield a cascade of follow-on errors.
+                self.advance(); // 'as'
+                let _ = self.parse_type();
+            }
+            return cast;
+        }
+        expr
     }
 
     /// Parses unary expressions: `-expr` or `!expr`
@@ -2348,14 +2803,23 @@ pub fn parse(lex: &LexResult) -> ParseResult {
     ParseResult::new(items, parser.errors)
 }
 
+/// Like [`parse`], but with access to the interner so that import-path strings
+/// can be classified at parse time. M7+ programs that use `import` declarations
+/// must call this entry point.
+pub fn parse_with_interner(lex: &LexResult, interner: &Interner) -> ParseResult {
+    let mut parser = Parser::new_with_interner(&lex.tokens, interner);
+    let items = parser.parse_program();
+    ParseResult::new(items, parser.errors)
+}
+
 /// Convenience wrapper that runs `parse` and serialises the result as JSON.
 ///
 /// External tools that consume the AST should call `ferric --dump-ast` rather
 /// than depending on this crate directly; this helper exists so that consumers
 /// inside the workspace (e.g. the CLI) can produce the same output without
 /// re-implementing the serialisation step.
-pub fn parse_to_json(lex: &LexResult) -> Result<String, serde_json::Error> {
-    let result = parse(lex);
+pub fn parse_to_json(lex: &LexResult, interner: &Interner) -> Result<String, serde_json::Error> {
+    let result = parse_with_interner(lex, interner);
     ferric_common::ast_to_json(&result)
 }
 

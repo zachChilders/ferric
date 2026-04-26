@@ -363,6 +363,9 @@ impl Resolver {
                     }
                 }
                 Item::Script { .. } => {}
+                // Module-system items are emitted starting with M7 Task 2; the
+                // resolver does not yet collect their definitions.
+                Item::Import(_) | Item::Export(_) | Item::TypeAlias(_) => {}
             }
         }
 
@@ -427,6 +430,12 @@ impl Resolver {
             }
             Item::Script { stmt, .. } => {
                 self.resolve_stmt(stmt);
+            }
+            // Module-system items: nothing to resolve in M7 Task 1 — the
+            // module resolver runs as its own stage in Task 3.
+            Item::Import(_) | Item::TypeAlias(_) => {}
+            Item::Export(decl) => {
+                self.resolve_item(&decl.item);
             }
         }
     }
@@ -798,6 +807,11 @@ impl Resolver {
             Expr::Index { array, index, .. } => {
                 self.resolve_expr(array);
                 self.resolve_expr(index);
+            }
+            Expr::Cast(c) => {
+                // The target type expression is resolved by later stages; here
+                // we only need to walk the inner expression.
+                self.resolve_expr(&c.expr);
             }
         }
     }

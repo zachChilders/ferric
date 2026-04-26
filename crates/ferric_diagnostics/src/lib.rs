@@ -146,6 +146,59 @@ impl<'a> Renderer<'a> {
                 notes: vec![],
                 help: None,
             }),
+            ParseError::LateImport { span } => self.render(Diag {
+                kind: "error",
+                message: "import declarations must appear before other items",
+                primary: Some(Label {
+                    span: *span,
+                    message: Some("move this import to the top of the file".to_string()),
+                }),
+                secondary: vec![],
+                notes: vec![],
+                help: None,
+            }),
+            ParseError::DefaultImport { span } => self.render(Diag {
+                kind: "error",
+                message: "default imports are not supported in Ferric",
+                primary: Some(Label {
+                    span: *span,
+                    message: Some("use named imports".to_string()),
+                }),
+                secondary: vec![],
+                notes: vec![],
+                help: Some(
+                    "rewrite as `import { name } from \"./path\"`".to_string(),
+                ),
+            }),
+            ParseError::InvalidImportPath { span } => self.render(Diag {
+                kind: "error",
+                message: "invalid import path",
+                primary: Some(Label { span: *span, message: None }),
+                secondary: vec![],
+                notes: vec![],
+                help: Some(
+                    "expected `./...`, `../...`, `@/...`, or a bare cache name".to_string(),
+                ),
+            }),
+            ParseError::InvalidExportPosition { span } => self.render(Diag {
+                kind: "error",
+                message: "`export` is only allowed on top-level items",
+                primary: Some(Label { span: *span, message: None }),
+                secondary: vec![],
+                notes: vec![],
+                help: None,
+            }),
+            ParseError::ChainedCast { span } => self.render(Diag {
+                kind: "error",
+                message: "cannot chain cast expressions",
+                primary: Some(Label {
+                    span: *span,
+                    message: Some("wrap in parentheses: `(x as A) as B`".to_string()),
+                }),
+                secondary: vec![],
+                notes: vec![],
+                help: None,
+            }),
         }
     }
 
@@ -283,6 +336,23 @@ impl<'a> Renderer<'a> {
                 secondary: vec![],
                 notes: vec![],
                 help: None,
+            }),
+            ResolveError::PrivateImport { name, path, span } => self.render(Diag {
+                kind: "error",
+                message: &format!(
+                    "`{}` is not exported from \"{}\"",
+                    self.name(*name), path
+                ),
+                primary: Some(Label {
+                    span: *span,
+                    message: Some("not marked `export`".to_string()),
+                }),
+                secondary: vec![],
+                notes: vec![],
+                help: Some(format!(
+                    "add `export` to the definition in \"{}\"",
+                    path
+                )),
             }),
         }
     }
@@ -501,6 +571,39 @@ impl<'a> Renderer<'a> {
                 secondary: vec![],
                 notes: vec![],
                 help: None,
+            }),
+            TypeError::OpaqueTypeMismatch { expected, found, span } => self.render(Diag {
+                kind: "error",
+                message: &format!(
+                    "type mismatch: expected `{}`, found `{}`",
+                    expected.description(),
+                    found.description()
+                ),
+                primary: Some(Label {
+                    span: *span,
+                    message: Some(format!("found `{}`", found.description())),
+                }),
+                secondary: vec![],
+                notes: vec![],
+                help: Some(format!(
+                    "use `as {}` to construct or unwrap the opaque type",
+                    expected.description()
+                )),
+            }),
+            TypeError::InvalidCast { from, to, span } => self.render(Diag {
+                kind: "error",
+                message: &format!(
+                    "cannot cast `{}` to `{}`",
+                    from.description(),
+                    to.description()
+                ),
+                primary: Some(Label { span: *span, message: None }),
+                secondary: vec![],
+                notes: vec![],
+                help: Some(
+                    "casts may only wrap or unwrap a single opaque type alias"
+                        .to_string(),
+                ),
             }),
         }
     }

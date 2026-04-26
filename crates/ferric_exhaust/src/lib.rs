@@ -43,6 +43,10 @@ impl<'a> Checker<'a> {
                     self.check_expr(&m.body);
                 }
             }
+            Item::Export(decl) => {
+                self.check_item(&decl.item);
+            }
+            Item::Import(_) | Item::TypeAlias(_) => {}
         }
     }
 
@@ -158,6 +162,7 @@ impl<'a> Checker<'a> {
                 self.check_expr(array);
                 self.check_expr(index);
             }
+            Expr::Cast(c) => self.check_expr(&c.expr),
         }
     }
 

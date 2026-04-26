@@ -406,6 +406,10 @@ impl<'a> TypeInfer<'a> {
                 Item::Script { stmt, .. } => {
                     self.check_stmt(stmt);
                 }
+                // Module-system items become observable in M7 Task 4. Until
+                // then, the type checker simply skips them.
+                Item::Import(_) | Item::TypeAlias(_) => {}
+                Item::Export(_) => {}
             }
         }
     }
@@ -1257,6 +1261,15 @@ impl<'a> TypeInfer<'a> {
                 self.node_types.insert(*id, resolved.clone());
                 resolved
             }
+            // Cast expressions are wired into the type checker in M7 Task 4.
+            // For now, treat them as identity: the result type is the inner
+            // expression's type. Real wrap/unwrap logic against `Ty::Opaque`
+            // arrives with the type-alias registry.
+            Expr::Cast(c) => {
+                let inner = self.infer_expr(&c.expr);
+                self.node_types.insert(c.id, inner.clone());
+                inner
+            }
         };
 
         ty
@@ -1826,6 +1839,8 @@ fn span_in_item(item: &Item, target: NodeId) -> Option<Span> {
             span_in_expr(&m.body, target)
         }),
         Item::StructDef { .. } | Item::EnumDef { .. } | Item::TraitDef { .. } => None,
+        Item::Export(decl) => span_in_item(&decl.item, target),
+        Item::Import(_) | Item::TypeAlias(_) => None,
     }
 }
 
@@ -1900,6 +1915,7 @@ fn span_in_expr(expr: &Expr, target: NodeId) -> Option<Span> {
         Expr::Index { array, index, .. } => {
             span_in_expr(array, target).or_else(|| span_in_expr(index, target))
         }
+        Expr::Cast(c) => span_in_expr(&c.expr, target),
     }
 }
 

@@ -97,6 +97,27 @@ pub enum ParseError {
         /// Location of the invalid token
         span: Span,
     },
+    /// An `import` declaration appeared after a non-import top-level item.
+    LateImport {
+        span: Span,
+    },
+    /// A default-style import: `import X from "..."` (no braces, no `*`).
+    DefaultImport {
+        span: Span,
+    },
+    /// An import path string did not match any of the three supported shapes.
+    InvalidImportPath {
+        span: Span,
+    },
+    /// An `export` modifier appeared somewhere it is not legal (for example,
+    /// inside a function body).
+    InvalidExportPosition {
+        span: Span,
+    },
+    /// Two `as` casts chained without parentheses: `x as A as B`.
+    ChainedCast {
+        span: Span,
+    },
 }
 
 impl ParseError {
@@ -108,6 +129,11 @@ impl ParseError {
             ParseError::ExpectedStatement { span, .. } => *span,
             ParseError::PositionalArg { span } => *span,
             ParseError::InvalidRequireMode { span } => *span,
+            ParseError::LateImport { span } => *span,
+            ParseError::DefaultImport { span } => *span,
+            ParseError::InvalidImportPath { span } => *span,
+            ParseError::InvalidExportPosition { span } => *span,
+            ParseError::ChainedCast { span } => *span,
         }
     }
 
@@ -128,6 +154,22 @@ impl ParseError {
             }
             ParseError::InvalidRequireMode { .. } => {
                 "invalid require mode; expected 'warn'".to_string()
+            }
+            ParseError::LateImport { .. } => {
+                "import declarations must appear before other items".to_string()
+            }
+            ParseError::DefaultImport { .. } => {
+                "default imports are not supported; use named imports `import { X } from \"...\"`"
+                    .to_string()
+            }
+            ParseError::InvalidImportPath { .. } => {
+                "invalid import path; expected `./`, `../`, `@/`, or a bare cache name".to_string()
+            }
+            ParseError::InvalidExportPosition { .. } => {
+                "`export` is only allowed on top-level items".to_string()
+            }
+            ParseError::ChainedCast { .. } => {
+                "cannot chain cast expressions; wrap in parentheses".to_string()
             }
         }
     }
@@ -224,6 +266,13 @@ pub enum ResolveError {
         found: usize,
         span: Span,
     },
+    /// A named import targets an item that exists in the source file but is
+    /// not marked `export`.
+    PrivateImport {
+        name: Symbol,
+        path: String,
+        span: Span,
+    },
 }
 
 impl ResolveError {
@@ -244,6 +293,7 @@ impl ResolveError {
             ResolveError::MissingField { span, .. } => *span,
             ResolveError::UnknownVariant { span, .. } => *span,
             ResolveError::VariantArity { span, .. } => *span,
+            ResolveError::PrivateImport { span, .. } => *span,
         }
     }
 
@@ -283,6 +333,9 @@ impl ResolveError {
             ResolveError::UnknownVariant { .. } => "unknown enum variant".to_string(),
             ResolveError::VariantArity { .. } => {
                 "wrong number of arguments to enum variant".to_string()
+            }
+            ResolveError::PrivateImport { path, .. } => {
+                format!("imported name is not exported from \"{}\"", path)
             }
         }
     }
@@ -413,6 +466,20 @@ pub enum TypeError {
         method: Symbol,
         span: Span,
     },
+    /// An opaque-typed value was used where its inner type (or a different
+    /// opaque type) was expected — `as` was missing.
+    OpaqueTypeMismatch {
+        expected: Ty,
+        found:    Ty,
+        span:     Span,
+    },
+    /// A cast expression `expr as TypeExpr` was neither a wrap nor an unwrap
+    /// of an opaque type alias.
+    InvalidCast {
+        from: Ty,
+        to:   Ty,
+        span: Span,
+    },
 }
 
 impl TypeError {
@@ -437,6 +504,8 @@ impl TypeError {
             TypeError::UnknownTrait { span, .. } => *span,
             TypeError::ImplOfUnknownTrait { span, .. } => *span,
             TypeError::ImplMethodSignatureMismatch { span, .. } => *span,
+            TypeError::OpaqueTypeMismatch { span, .. } => *span,
+            TypeError::InvalidCast { span, .. } => *span,
         }
     }
 
@@ -514,6 +583,20 @@ impl TypeError {
             }
             TypeError::ImplMethodSignatureMismatch { .. } => {
                 "impl method signature does not match trait declaration".to_string()
+            }
+            TypeError::OpaqueTypeMismatch { expected, found, .. } => {
+                format!(
+                    "opaque type mismatch: expected {}, found {}",
+                    expected.description(),
+                    found.description()
+                )
+            }
+            TypeError::InvalidCast { from, to, .. } => {
+                format!(
+                    "cannot cast {} to {}",
+                    from.description(),
+                    to.description()
+                )
             }
         }
     }

@@ -65,6 +65,14 @@ pub enum Ty {
     Option(Box<Ty>),
     /// `Result<T, E>` — built-in success/error type.
     Result(Box<Ty>, Box<Ty>),
+    /// Opaque type alias produced by a `type` declaration. Two `Opaque` types
+    /// with different `def_id`s are never equal even when their `inner` types
+    /// match — that distinction is what makes `type Url = Str` safer than a
+    /// transparent alias. At runtime, opaque types erase to `inner`.
+    Opaque {
+        def_id: DefId,
+        inner: Box<Ty>,
+    },
 }
 
 impl Ty {
@@ -121,6 +129,9 @@ impl Ty {
             Ty::Option(inner) => format!("Option<{}>", inner.description()),
             Ty::Result(ok, err) => {
                 format!("Result<{}, {}>", ok.description(), err.description())
+            }
+            Ty::Opaque { def_id, inner } => {
+                format!("Opaque#{}({})", def_id.0, inner.description())
             }
         }
     }

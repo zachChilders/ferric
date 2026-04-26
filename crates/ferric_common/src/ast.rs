@@ -91,6 +91,83 @@ pub struct RequireStmt {
     pub set_fn:  Option<Box<Expr>>,
 }
 
+/// An `import` declaration at the top of a Ferric file.
+///
+/// The parser classifies the path string into one of three shapes; the module
+/// resolver later turns the path into an actual filesystem location.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ImportDecl {
+    pub id:    NodeId,
+    pub span:  Span,
+    pub path:  ImportPath,
+    pub items: ImportItems,
+}
+
+/// The shape of an import path string.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum ImportPath {
+    /// File-relative path: `"./db"` or `"../util"`.
+    Relative(String),
+    /// Workspace-root-relative path: `"@/config"`. Requires a manifest.
+    Workspace(String),
+    /// Cache dependency name: `"ferric-http"`. Requires manifest + dependency.
+    Cache(String),
+}
+
+/// The items being imported.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum ImportItems {
+    /// Named imports: `{ connect, disconnect as d }`.
+    Named(Vec<ImportItem>),
+    /// Namespace import: `* as db` — binds the symbol to a module value.
+    Namespace(Symbol),
+}
+
+/// One entry in a named import list.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ImportItem {
+    pub span:  Span,
+    pub name:  Symbol,
+    pub alias: Option<Symbol>,
+}
+
+/// An `export` modifier wrapping a top-level item.
+///
+/// `export` is a parser-level decorator; the inner item is parsed exactly as
+/// it would be without `export`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ExportDecl {
+    pub id:   NodeId,
+    pub span: Span,
+    pub item: Box<Item>,
+}
+
+/// A `type` alias item: `type Url = Str` or `type Result<T> = StdResult<T, AppError>`.
+///
+/// In M7, all aliases are opaque — `opaque` is reserved for a future
+/// transparent-alias mode and is always `true`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TypeAliasItem {
+    pub id:     NodeId,
+    pub span:   Span,
+    pub name:   Symbol,
+    pub params: Vec<Symbol>,
+    pub ty:     TypeAnnotation,
+    pub opaque: bool,
+}
+
+/// A `expr as TypeExpr` cast expression.
+///
+/// At type-check time, casts wrap or unwrap an opaque type. At runtime, they
+/// erase to a no-op — there is no `Value` variant for opaque types.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CastExpr {
+    pub id:     NodeId,
+    pub span:   Span,
+    pub expr:   Box<Expr>,
+    pub target: TypeAnnotation,
+}
+
 /// Top-level item in a Ferric program.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Item {
@@ -153,6 +230,13 @@ pub enum Item {
         /// Source location
         span: Span,
     },
+    /// An `import` declaration. Must appear at the top of a file before any
+    /// non-import items.
+    Import(ImportDecl),
+    /// An `export` modifier wrapping another top-level item.
+    Export(ExportDecl),
+    /// A `type` alias definition.
+    TypeAlias(TypeAliasItem),
 }
 
 /// A function inside an `impl` block. Same shape as a top-level FnDef, but
@@ -177,6 +261,9 @@ impl Item {
             Item::TraitDef { id, .. } => *id,
             Item::ImplBlock { id, .. } => *id,
             Item::Script { id, .. } => *id,
+            Item::Import(decl) => decl.id,
+            Item::Export(decl) => decl.id,
+            Item::TypeAlias(decl) => decl.id,
         }
     }
 
@@ -189,6 +276,9 @@ impl Item {
             Item::TraitDef { span, .. } => *span,
             Item::ImplBlock { span, .. } => *span,
             Item::Script { span, .. } => *span,
+            Item::Import(decl) => decl.span,
+            Item::Export(decl) => decl.span,
+            Item::TypeAlias(decl) => decl.span,
         }
     }
 }
@@ -347,6 +437,9 @@ pub enum Expr {
         id: NodeId,
         span: Span,
     },
+    /// Cast expression: `expr as TypeExpr`. At runtime, this is a no-op;
+    /// at type-check time, it wraps or unwraps an opaque type alias.
+    Cast(CastExpr),
 }
 
 /// A single arm of a `match` expression.
@@ -424,6 +517,7 @@ impl Expr {
             Expr::MethodCall { id, .. } => *id,
             Expr::ArrayLit { id, .. } => *id,
             Expr::Index { id, .. } => *id,
+            Expr::Cast(c) => c.id,
         }
     }
 
@@ -452,6 +546,7 @@ impl Expr {
             Expr::MethodCall { span, .. } => *span,
             Expr::ArrayLit { span, .. } => *span,
             Expr::Index { span, .. } => *span,
+            Expr::Cast(c) => c.span,
         }
     }
 }

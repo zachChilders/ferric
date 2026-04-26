@@ -3,7 +3,7 @@ use ferric_common::{
     ResolveResult, Symbol, TypeResult,
 };
 use ferric_lexer::lex;
-use ferric_parser::parse;
+use ferric_parser::parse_with_interner;
 use ferric_resolve::resolve_with_natives;
 use ferric_infer::typecheck;
 use ferric_traits::build_registry;
@@ -95,7 +95,7 @@ fn dump_ast(filename: &str) {
 
     let mut interner = Interner::new();
     let lex_result = lex(&source, &mut interner);
-    let parse_result = parse(&lex_result);
+    let parse_result = parse_with_interner(&lex_result, &interner);
 
     match ferric_common::ast_to_json(&parse_result) {
         Ok(json) => {
@@ -128,7 +128,7 @@ fn run_file(filename: &str) {
     let lex_result = lex(&source, &mut interner);
 
     // Parse
-    let parse_result = parse(&lex_result);
+    let parse_result = parse_with_interner(&lex_result, &interner);
 
     // Resolve (with knowledge of native functions and their param names)
     let resolve_result = resolve_with_natives(&parse_result, &native_fns);
@@ -258,7 +258,7 @@ fn run_session(source: &str) -> Result<(), String> {
             .join("\n"));
     }
 
-    let parse_result = parse(&lex_result);
+    let parse_result = parse_with_interner(&lex_result, &interner);
     if !parse_result.errors.is_empty() {
         let r = Renderer::with_interner(source.to_string(), &interner);
         return Err(parse_result

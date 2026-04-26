@@ -41,6 +41,9 @@ impl ImplTy {
             Ty::Struct { def_id, .. } => ImplTy::Struct(*def_id),
             Ty::Enum { def_id, .. } => ImplTy::Enum(*def_id),
             Ty::Tuple(elems) => ImplTy::Tuple(elems.len()),
+            // Opaque types erase at runtime — trait dispatch falls through to
+            // the inner type. The type checker still treats them as distinct.
+            Ty::Opaque { inner, .. } => return ImplTy::from_ty(inner),
             // Generic / inference / function types don't appear as impl heads.
             Ty::Var(_)
             | Ty::Fn { .. }

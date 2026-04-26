@@ -17,6 +17,7 @@ pub use results::*;
 pub use ast::*;
 pub use bytecode::*;
 pub use traits::*;
+pub use module::*;
 
 mod span;
 mod identifiers;
@@ -28,6 +29,7 @@ mod results;
 mod ast;
 mod bytecode;
 mod traits;
+mod module;
 
 /// Serialises a `ParseResult` as pretty-printed JSON.
 ///
@@ -96,6 +98,19 @@ const _: fn() = || {
     check::<Constant>();
     check::<Pattern>();
     check::<MatchArm>();
+    check::<ImportDecl>();
+    check::<ImportPath>();
+    check::<ImportItems>();
+    check::<ImportItem>();
+    check::<ExportDecl>();
+    check::<TypeAliasItem>();
+    check::<CastExpr>();
+    check::<ModuleResult>();
+    check::<ResolvedImport>();
+    check::<ModuleError>();
+    check::<ManifestResult>();
+    check::<Manifest>();
+    check::<ManifestError>();
 };
 
 #[cfg(test)]

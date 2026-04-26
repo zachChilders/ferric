@@ -82,6 +82,16 @@ pub enum TokenKind {
     Impl,
     /// `for` keyword for impl blocks (`impl Trait for Type`)
     For,
+    /// `import` keyword for module imports
+    Import,
+    /// `export` keyword (prefix modifier on exportable items)
+    Export,
+    /// `from` keyword (used in `import ... from "path"`)
+    From,
+    /// `type` keyword for type alias definitions
+    Type,
+    /// `as` keyword for cast expressions and import aliases
+    As,
 
     // Identifiers and operators
     /// Identifier (variable/function name)
@@ -190,6 +200,11 @@ impl TokenKind {
             TokenKind::Trait => "keyword 'trait'".to_string(),
             TokenKind::Impl => "keyword 'impl'".to_string(),
             TokenKind::For => "keyword 'for'".to_string(),
+            TokenKind::Import => "keyword 'import'".to_string(),
+            TokenKind::Export => "keyword 'export'".to_string(),
+            TokenKind::From => "keyword 'from'".to_string(),
+            TokenKind::Type => "keyword 'type'".to_string(),
+            TokenKind::As => "keyword 'as'".to_string(),
             TokenKind::Ident(_) => "identifier".to_string(),
             TokenKind::Plus => "'+'".to_string(),
             TokenKind::Minus => "'-'".to_string(),

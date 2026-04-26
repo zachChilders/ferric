@@ -622,6 +622,11 @@ impl<'a> Compiler<'a> {
                 self.compile_expr(index);
                 self.emit(Op::ArrayGet);
             }
+            Expr::Cast(c) => {
+                // Casts erase to a no-op — opaque types are a type-checker
+                // artifact only. Just compile the underlying expression.
+                self.compile_expr(&c.expr);
+            }
         }
     }
 
