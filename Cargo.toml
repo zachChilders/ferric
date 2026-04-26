@@ -12,6 +12,8 @@ members = [
     "crates/ferric_vm",
     "crates/ferric_diagnostics",
     "crates/ferric_stdlib",
+    "crates/ferric_manifest",
+    "crates/ferric_module",
 ]
 
 [package]
@@ -31,3 +33,5 @@ ferric_compiler = { path = "crates/ferric_compiler" }
 ferric_vm = { path = "crates/ferric_vm" }
 ferric_diagnostics = { path = "crates/ferric_diagnostics" }
 ferric_stdlib = { path = "crates/ferric_stdlib" }
+ferric_manifest = { path = "crates/ferric_manifest" }
+ferric_module = { path = "crates/ferric_module" }

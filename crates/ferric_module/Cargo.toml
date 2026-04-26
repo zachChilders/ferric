@@ -1,0 +1,9 @@
+[package]
+name = "ferric_module"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+ferric_common = { path = "../ferric_common" }
+ferric_lexer  = { path = "../ferric_lexer" }
+ferric_parser = { path = "../ferric_parser" }

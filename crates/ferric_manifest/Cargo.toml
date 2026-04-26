@@ -1,0 +1,8 @@
+[package]
+name = "ferric_manifest"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+ferric_common = { path = "../ferric_common" }
+toml          = "0.8"

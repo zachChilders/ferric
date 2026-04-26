@@ -8,7 +8,7 @@
 
 use std::collections::HashMap;
 use ferric_common::{
-    ParseResult, ResolveResult, ResolveError, Item, ImplMethod, Stmt, Expr,
+    ParseResult, ResolveResult, ResolveError, Item, ImplMethod, ModuleResult, Stmt, Expr,
     NamedArg, Param, Pattern, ShellPart, Symbol, Span, NodeId, DefId, TypeAnnotation,
     RequireStmt,
 };
@@ -38,6 +38,37 @@ pub fn resolve_with_natives(ast: &ParseResult, native_fns: &[(Symbol, Vec<Symbol
     }
 
     resolver.resolve_program(ast);
+    resolver.into_result()
+}
+
+/// Like [`resolve_with_natives`], but additionally pre-registers names from
+/// `module.imports` in the global scope so that `import { x } from "..."`
+/// makes `x` resolvable in the body of the file.
+///
+/// Also surfaces `module.private_imports` as `ResolveError::PrivateImport`.
+pub fn resolve_with_imports(
+    ast: &ParseResult,
+    native_fns: &[(Symbol, Vec<Symbol>)],
+    module: &ModuleResult,
+) -> ResolveResult {
+    let mut resolver = Resolver::new();
+
+    for (name, param_names) in native_fns {
+        resolver.register_native(*name, param_names.clone());
+    }
+
+    resolver.register_imports(module);
+    resolver.resolve_program(ast);
+
+    // Surface private-import diagnostics as ResolveError::PrivateImport.
+    for p in &module.private_imports {
+        resolver.errors.push(ResolveError::PrivateImport {
+            name: p.name,
+            path: p.path.clone(),
+            span: p.span,
+        });
+    }
+
     resolver.into_result()
 }
 
@@ -274,6 +305,30 @@ impl Resolver {
         for frame in self.closure_stack.iter_mut() {
             if binding_scope < frame.scope_floor && frame.captured_set.insert(def_id) {
                 frame.captures.push((def_id, name));
+            }
+        }
+    }
+
+    /// Pre-registers every binding from `module.imports` in the global scope
+    /// so the resolver doesn't fire `UndefinedVariable` for imported names.
+    /// Synthetic DefIds (allocated by `ferric_module`) flow through unchanged.
+    fn register_imports(&mut self, module: &ModuleResult) {
+        if self.scopes.is_empty() {
+            self.push_scope();
+        }
+        for resolved in &module.imports {
+            for (name, def_id) in &resolved.bindings {
+                if let Some(scope) = self.scopes.first_mut() {
+                    scope.bindings.insert(
+                        *name,
+                        Binding {
+                            def_id: *def_id,
+                            mutable: false,
+                            span: resolved.span,
+                            shadowable: true,
+                        },
+                    );
+                }
             }
         }
     }

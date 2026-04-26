@@ -87,8 +87,23 @@ pub struct ModuleResult {
     /// Resolved imports — each entry maps local names introduced by an
     /// `import` declaration to the source `DefId` they refer to.
     pub imports: Vec<ResolvedImport>,
+    /// Imports referring to a name that *exists* in the target file but is not
+    /// marked `export`. The resolver's wire-in pass turns these into
+    /// `ResolveError::PrivateImport` so users get the more precise diagnostic
+    /// (vs. the generic "not exported" `UnknownExport`).
+    pub private_imports: Vec<PrivateImportInfo>,
     /// Any errors encountered during module resolution.
     pub errors:  Vec<ModuleError>,
+}
+
+/// One named import that resolved to a private (non-exported) item in the
+/// target file. Carried out of the module stage so the resolver can emit the
+/// more specific `ResolveError::PrivateImport`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PrivateImportInfo {
+    pub name: Symbol,
+    pub path: String,
+    pub span: Span,
 }
 
 impl ModuleResult {
@@ -98,7 +113,18 @@ impl ModuleResult {
         imports: Vec<ResolvedImport>,
         errors:  Vec<ModuleError>,
     ) -> Self {
-        Self { exports, imports, errors }
+        Self {
+            exports,
+            imports,
+            private_imports: Vec::new(),
+            errors,
+        }
+    }
+
+    /// Builder-style setter for `private_imports`.
+    pub fn with_private_imports(mut self, ps: Vec<PrivateImportInfo>) -> Self {
+        self.private_imports = ps;
+        self
     }
 
     /// Returns true if there were any errors during module resolution.

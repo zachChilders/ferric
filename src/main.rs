@@ -1,18 +1,21 @@
 use ferric_common::{
-    ExhaustivenessError, ExhaustivenessResult, Interner, LexResult, ParseResult,
-    ResolveResult, Symbol, TypeResult,
+    ExhaustivenessError, ExhaustivenessResult, Interner, LexResult, ManifestResult, ModuleResult,
+    ParseResult, ResolveResult, Symbol, TypeResult,
 };
 use ferric_lexer::lex;
 use ferric_parser::parse_with_interner;
-use ferric_resolve::resolve_with_natives;
+use ferric_resolve::{resolve_with_imports, resolve_with_natives};
 use ferric_infer::typecheck;
 use ferric_traits::build_registry;
 use ferric_exhaust::check_exhaustiveness;
 use ferric_vm::{BytecodeVM, Executor, Value};
 use ferric_stdlib::{NativeRegistry, register_stdlib};
+use ferric_manifest::load_manifest;
+use ferric_module::resolve_modules;
 use ferric_diagnostics::Renderer;
 use std::env;
 use std::fs;
+use std::path::{Path, PathBuf};
 use std::process;
 
 /// Table of `(fn_name, param_names)` for every native registered via
@@ -130,8 +133,23 @@ fn run_file(filename: &str) {
     // Parse
     let parse_result = parse_with_interner(&lex_result, &interner);
 
-    // Resolve (with knowledge of native functions and their param names)
-    let resolve_result = resolve_with_natives(&parse_result, &native_fns);
+    // M7: load manifest (script mode if absent), then resolve imports.
+    let entry_path = PathBuf::from(filename);
+    let workspace_root = workspace_root_for(&entry_path);
+    let manifest_result = load_manifest(&workspace_root);
+    let initial_resolve = resolve_with_natives(&parse_result, &native_fns);
+    let module_result = resolve_modules(
+        &entry_path,
+        &workspace_root,
+        &parse_result,
+        &initial_resolve,
+        &manifest_result,
+        &mut interner,
+    );
+
+    // Re-resolve with imports wired into the global scope so import bindings
+    // are visible during name resolution.
+    let resolve_result = resolve_with_imports(&parse_result, &native_fns, &module_result);
 
     // Build trait registry (M5).
     let trait_registry = build_registry(&parse_result, &resolve_result, &interner);
@@ -152,6 +170,8 @@ fn run_file(filename: &str) {
         &resolve_result,
         &type_result,
         &exhaust_result,
+        &manifest_result,
+        &module_result,
     ) {
         process::exit(1);
     }
@@ -357,6 +377,8 @@ fn report_errors(
     resolve: &ResolveResult,
     types: &TypeResult,
     exhaust: &ExhaustivenessResult,
+    manifest: &ManifestResult,
+    module: &ModuleResult,
 ) -> bool {
     let renderer = Renderer::with_interner(source.to_string(), interner);
     let mut has_errors = false;
@@ -368,6 +390,16 @@ fn report_errors(
 
     for error in &parse.errors {
         eprintln!("{}", renderer.render_parse_error(error));
+        has_errors = true;
+    }
+
+    for error in &manifest.errors {
+        eprintln!("{}", renderer.render_manifest_error(error));
+        has_errors = true;
+    }
+
+    for error in &module.errors {
+        eprintln!("{}", renderer.render_module_error(error));
         has_errors = true;
     }
 
@@ -391,4 +423,25 @@ fn report_errors(
     }
 
     has_errors
+}
+
+/// Returns the workspace root for the given entry-file path. The workspace
+/// root is the nearest ancestor directory that contains a `Ferric.toml`. If
+/// none exists (script mode), the entry file's parent directory is used.
+fn workspace_root_for(entry_path: &Path) -> PathBuf {
+    let mut dir = entry_path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .to_path_buf();
+    let initial = dir.clone();
+    loop {
+        if dir.join("Ferric.toml").exists() {
+            return dir;
+        }
+        match dir.parent() {
+            Some(parent) => dir = parent.to_path_buf(),
+            None => break,
+        }
+    }
+    initial
 }

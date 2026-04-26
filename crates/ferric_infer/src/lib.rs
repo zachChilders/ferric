@@ -9,9 +9,10 @@
 use std::collections::{HashMap, HashSet};
 
 use ferric_common::{
-    BinOp, DefId, Expr, ImplMethod, Interner, Item, Literal, MatchArm, NamedArg, NodeId,
+    BinOp, CastExpr, DefId, Expr, ImplMethod, Interner, Item, Literal, MatchArm, NamedArg, NodeId,
     Param, ParseResult, Pattern, RequireStmt, ResolveResult, ShellPart, Span, Stmt, Symbol,
-    TraitRegistry, Ty, TyVar, TypeAnnotation, TypeError, TypeResult, TypeScheme, UnOp,
+    TraitRegistry, Ty, TyVar, TypeAliasItem, TypeAnnotation, TypeError, TypeResult, TypeScheme,
+    UnOp,
 };
 
 /// Type-checks (and infers) a parsed AST with resolution information.
@@ -239,6 +240,24 @@ impl InferEnv {
 }
 
 // ============================================================================
+// Type-alias registry (M7)
+// ============================================================================
+
+/// Per-alias metadata: the parameter list (generic alias names) and the raw
+/// inner annotation. The inner is resolved lazily at each use site so that
+/// alias-to-alias references don't depend on declaration order.
+#[derive(Debug, Clone)]
+struct TypeAliasMeta {
+    def_id: DefId,
+    /// Generic parameter names declared on the alias (`type Foo<T> = ...`).
+    /// Empty for non-generic aliases.
+    param_syms: Vec<Symbol>,
+    /// Raw inner annotation; resolved fresh at each use site.
+    inner_ann: TypeAnnotation,
+    opaque: bool,
+}
+
+// ============================================================================
 // Inferencer
 // ============================================================================
 
@@ -251,6 +270,13 @@ struct TypeInfer<'a> {
     next_tyvar: u32,
     subst: Substitution,
     env: InferEnv,
+
+    /// Type-alias registry. Populated in the pre-pass before any function
+    /// body is checked so forward references and out-of-order declarations
+    /// resolve consistently.
+    type_aliases: HashMap<Symbol, TypeAliasMeta>,
+    /// In-progress aliases for cycle detection during lazy inner resolution.
+    type_alias_resolving: HashSet<Symbol>,
 
     /// Within the body of the current function, the expected return type.
     /// `None` at the top level (script statements).
@@ -298,6 +324,8 @@ impl<'a> TypeInfer<'a> {
             current_fn_ret: None,
             generic_aliases: HashMap::new(),
             bound_constraints: HashMap::new(),
+            type_aliases: HashMap::new(),
+            type_alias_resolving: HashSet::new(),
             node_types: HashMap::new(),
             method_dispatch: HashMap::new(),
             pending_methods: Vec::new(),
@@ -327,10 +355,18 @@ impl<'a> TypeInfer<'a> {
         //    `println(s: ...)` can be checked.
         self.register_native_signatures();
 
-        // 2. Pre-pass: collect every user-defined function's signature so
+        // 2. Register every `type` alias declared in the program. Aliases are
+        //    stored as raw `TypeAnnotation`s and resolved lazily at each use
+        //    site, so forward and out-of-order references behave consistently.
+        self.register_type_aliases();
+
+        // 3. Pre-pass: collect every user-defined function's signature so
         //    forward references and recursion type-check correctly.
+        // `Export` is treated as transparent — its inner item participates
+        // in the pre-pass exactly like a top-level item.
         let mut fn_aliases: Vec<HashMap<Symbol, TyVar>> = Vec::new();
         for item in &self.ast.items {
+            let item = unwrap_export(item);
             if let Item::FnDef { name, type_params, params, ret_ty, .. } = item {
                 let mut aliases = HashMap::new();
                 // Pre-seed aliases for declared generic parameters so they
@@ -374,9 +410,11 @@ impl<'a> TypeInfer<'a> {
             }
         }
 
-        // 3. Walk items: check each function body and each script statement.
+        // 4. Walk items: check each function body and each script statement.
+        // Again, `Export` is unwrapped — its inner item is processed normally.
         let mut fn_idx = 0;
         for item in &self.ast.items {
+            let item = unwrap_export(item);
             match item {
                 Item::FnDef { id, params, ret_ty, body, .. } => {
                     let aliases = fn_aliases[fn_idx].clone();
@@ -406,10 +444,11 @@ impl<'a> TypeInfer<'a> {
                 Item::Script { stmt, .. } => {
                     self.check_stmt(stmt);
                 }
-                // Module-system items become observable in M7 Task 4. Until
-                // then, the type checker simply skips them.
-                Item::Import(_) | Item::TypeAlias(_) => {}
-                Item::Export(_) => {}
+                // M7 Task 4: type aliases are registered in the pre-pass; no
+                // body to walk here. Imports surface their bindings via the
+                // resolver. `Export` is a transparent wrapper — its inner item
+                // is processed in a second walk below.
+                Item::Import(_) | Item::TypeAlias(_) | Item::Export(_) => {}
             }
         }
     }
@@ -1736,6 +1775,16 @@ impl<'a> TypeInfer<'a> {
         let mut result = TypeResult::new(resolved, self.errors);
         result.method_dispatch = self.method_dispatch;
         result
+    }
+}
+
+/// Returns the inner item of an `Item::Export(...)`, or `item` itself when
+/// it is not an export. The type checker treats `export` as transparent —
+/// the export modifier is purely a module-system concern (Task 3).
+fn unwrap_export(item: &Item) -> &Item {
+    match item {
+        Item::Export(decl) => decl.item.as_ref(),
+        other => other,
     }
 }
 

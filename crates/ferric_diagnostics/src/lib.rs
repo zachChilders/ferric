@@ -22,8 +22,8 @@
 //! header-only block in that case.
 
 use ferric_common::{
-    ExhaustivenessError, Interner, LexError, ParseError, ResolveError, Span, Symbol,
-    TypeError,
+    ExhaustivenessError, Interner, LexError, ManifestError, ModuleError, ParseError,
+    ResolveError, Span, Symbol, TypeError,
 };
 
 /// Public entry point for diagnostics. Keep the surface stable: every other
@@ -353,6 +353,108 @@ impl<'a> Renderer<'a> {
                     "add `export` to the definition in \"{}\"",
                     path
                 )),
+            }),
+        }
+    }
+
+    /// Renders a manifest-loading error.
+    pub fn render_manifest_error(&self, error: &ManifestError) -> String {
+        match error {
+            ManifestError::ParseError { message, span } => self.render(Diag {
+                kind: "error",
+                message: &format!("failed to parse Ferric.toml: {}", message),
+                primary: Some(Label { span: *span, message: None }),
+                secondary: vec![],
+                notes: vec![],
+                help: None,
+            }),
+            ManifestError::ConflictingManifest { path, span } => self.render(Diag {
+                kind: "error",
+                message: &format!("submodule `{}` has its own Ferric.toml", path),
+                primary: Some(Label { span: *span, message: None }),
+                secondary: vec![],
+                notes: vec![],
+                help: Some(
+                    "remove the nested manifest — submodules share the workspace root's Ferric.toml"
+                        .to_string(),
+                ),
+            }),
+        }
+    }
+
+    /// Renders a module-resolution error.
+    pub fn render_module_error(&self, error: &ModuleError) -> String {
+        match error {
+            ModuleError::CircularImport { cycle, span } => {
+                let chain = cycle.join(" → ");
+                self.render(Diag {
+                    kind: "error",
+                    message: "circular import",
+                    primary: Some(Label {
+                        span: *span,
+                        message: Some(format!("cycle: {}", chain)),
+                    }),
+                    secondary: vec![],
+                    notes: vec![],
+                    help: None,
+                })
+            }
+            ModuleError::UnknownExport { name, path, span } => self.render(Diag {
+                kind: "error",
+                message: &format!(
+                    "`{}` is not exported from \"{}\"",
+                    self.name(*name),
+                    path
+                ),
+                primary: Some(Label {
+                    span: *span,
+                    message: Some(format!("not exported in {}", path)),
+                }),
+                secondary: vec![],
+                notes: vec![],
+                help: Some(format!(
+                    "add `export` to the definition of `{}` in \"{}\"",
+                    self.name(*name),
+                    path
+                )),
+            }),
+            ModuleError::NoManifest { path, span } => self.render(Diag {
+                kind: "error",
+                message: &format!("import `{}` requires a Ferric.toml manifest", path),
+                primary: Some(Label {
+                    span: *span,
+                    message: Some("no Ferric.toml found in workspace root".to_string()),
+                }),
+                secondary: vec![],
+                notes: vec![],
+                help: Some("run `ferric init` to create a manifest".to_string()),
+            }),
+            ModuleError::CacheMiss { name, span } => self.render(Diag {
+                kind: "error",
+                message: &format!(
+                    "cache package `{}` not found in .ferric/cache/",
+                    name
+                ),
+                primary: Some(Label {
+                    span: *span,
+                    message: Some("missing from cache".to_string()),
+                }),
+                secondary: vec![],
+                notes: vec![],
+                help: Some("run `ferric fetch` to populate the cache".to_string()),
+            }),
+            ModuleError::DefaultImport { span } => self.render(Diag {
+                kind: "error",
+                message: "default imports are not supported in Ferric",
+                primary: Some(Label {
+                    span: *span,
+                    message: Some("use named imports".to_string()),
+                }),
+                secondary: vec![],
+                notes: vec![],
+                help: Some(
+                    "rewrite as `import { name } from \"./path\"`".to_string(),
+                ),
             }),
         }
     }

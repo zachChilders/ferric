@@ -108,6 +108,7 @@ const _: fn() = || {
     check::<ModuleResult>();
     check::<ResolvedImport>();
     check::<ModuleError>();
+    check::<PrivateImportInfo>();
     check::<ManifestResult>();
     check::<Manifest>();
     check::<ManifestError>();
