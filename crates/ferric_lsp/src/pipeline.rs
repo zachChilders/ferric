@@ -19,7 +19,7 @@ use std::sync::Arc;
 
 use dashmap::DashMap;
 use ferric_common::{
-    Interner, LexResult, ParseResult, ResolveResult, Span, Symbol, TypeResult,
+    Interner, LexResult, ParseResult, ResolveResult, Span, Symbol, TypeAnnotation, TypeResult,
 };
 use tower_lsp::lsp_types::{Position, Range, Url};
 
@@ -164,6 +164,7 @@ pub fn run_pipeline(uri: String, version: i32, source: String) -> PipelineSnapsh
     // `src/main.rs`. Long-term this should live in `ferric_stdlib` so the
     // CLI and the LSP cannot drift.
     let native_fns: Vec<(Symbol, Vec<Symbol>)> = stdlib_native_fn_table(&mut interner);
+    let builtin_enums = stdlib_builtin_enum_table(&mut interner);
 
     // Stage 2: parse. Uses the interner-aware variant for better error
     // messages. The lexer is permissive and emits error tokens that the
@@ -178,7 +179,7 @@ pub fn run_pipeline(uri: String, version: i32, source: String) -> PipelineSnapsh
     // Stage 3: resolve.
     let resolve_result = match &parse_result {
         Some(ast) => catch_stage(std::panic::AssertUnwindSafe(|| {
-            ferric_resolve::resolve_with_natives(ast, &native_fns)
+            ferric_resolve::resolve_with_natives_and_builtins(ast, &native_fns, &builtin_enums)
         })),
         None => None,
     };
@@ -223,6 +224,37 @@ where
     F: FnOnce() -> T + std::panic::UnwindSafe,
 {
     std::panic::catch_unwind(f).ok()
+}
+
+/// Built-in enum table mirroring `ferric_stdlib::builtin_enum_table`. The
+/// LSP intentionally does not depend on `ferric_stdlib` (it has no native
+/// runtime to register), so this is duplicated. Must be kept in sync.
+fn stdlib_builtin_enum_table(
+    interner: &mut Interner,
+) -> Vec<(Symbol, Vec<(Symbol, Vec<TypeAnnotation>)>)> {
+    let option_sym = interner.intern("Option");
+    let some_sym = interner.intern("Some");
+    let none_sym = interner.intern("None");
+    let result_sym = interner.intern("Result");
+    let ok_sym = interner.intern("Ok");
+    let err_sym = interner.intern("Err");
+
+    vec![
+        (
+            option_sym,
+            vec![
+                (some_sym, vec![TypeAnnotation::Infer]),
+                (none_sym, vec![]),
+            ],
+        ),
+        (
+            result_sym,
+            vec![
+                (ok_sym, vec![TypeAnnotation::Infer]),
+                (err_sym, vec![TypeAnnotation::Infer]),
+            ],
+        ),
+    ]
 }
 
 /// Native function table that mirrors `src/main.rs::native_fn_table`. Must be

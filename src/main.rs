@@ -4,12 +4,12 @@ use ferric_common::{
 };
 use ferric_lexer::lex;
 use ferric_parser::parse_with_interner;
-use ferric_resolve::{resolve_with_imports, resolve_with_natives};
+use ferric_resolve::{resolve_with_imports_and_builtins, resolve_with_natives_and_builtins};
 use ferric_infer::typecheck;
 use ferric_traits::build_registry;
 use ferric_exhaust::check_exhaustiveness;
 use ferric_vm::{BytecodeVM, Executor, Value};
-use ferric_stdlib::{NativeRegistry, register_stdlib};
+use ferric_stdlib::{NativeRegistry, builtin_enum_table, register_stdlib};
 use ferric_manifest::load_manifest;
 use ferric_module::resolve_modules;
 use ferric_diagnostics::Renderer;
@@ -126,6 +126,7 @@ fn run_file(filename: &str) {
     register_stdlib(&mut natives, &mut interner);
 
     let native_fns = native_fn_table(&mut interner);
+    let builtin_enums = builtin_enum_table(&mut interner);
 
     // Lex
     let lex_result = lex(&source, &mut interner);
@@ -137,7 +138,8 @@ fn run_file(filename: &str) {
     let entry_path = PathBuf::from(filename);
     let workspace_root = workspace_root_for(&entry_path);
     let manifest_result = load_manifest(&workspace_root);
-    let initial_resolve = resolve_with_natives(&parse_result, &native_fns);
+    let initial_resolve =
+        resolve_with_natives_and_builtins(&parse_result, &native_fns, &builtin_enums);
     let module_result = resolve_modules(
         &entry_path,
         &workspace_root,
@@ -149,7 +151,12 @@ fn run_file(filename: &str) {
 
     // Re-resolve with imports wired into the global scope so import bindings
     // are visible during name resolution.
-    let resolve_result = resolve_with_imports(&parse_result, &native_fns, &module_result);
+    let resolve_result = resolve_with_imports_and_builtins(
+        &parse_result,
+        &native_fns,
+        &builtin_enums,
+        &module_result,
+    );
 
     // Build trait registry (M5).
     let trait_registry = build_registry(&parse_result, &resolve_result, &interner);
@@ -266,6 +273,7 @@ fn run_session(source: &str) -> Result<(), String> {
     let mut natives = NativeRegistry::new();
     register_stdlib(&mut natives, &mut interner);
     let native_fns = native_fn_table(&mut interner);
+    let builtin_enums = builtin_enum_table(&mut interner);
 
     let lex_result = lex(source, &mut interner);
     if !lex_result.errors.is_empty() {
@@ -289,7 +297,8 @@ fn run_session(source: &str) -> Result<(), String> {
             .join("\n"));
     }
 
-    let resolve_result = resolve_with_natives(&parse_result, &native_fns);
+    let resolve_result =
+        resolve_with_natives_and_builtins(&parse_result, &native_fns, &builtin_enums);
     if !resolve_result.errors.is_empty() {
         let r = Renderer::with_interner(source.to_string(), &interner);
         return Err(resolve_result

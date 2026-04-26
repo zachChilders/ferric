@@ -142,6 +142,8 @@ pub enum RuntimeError {
     IndexOutOfBounds { index: i64, len: usize, span: Span },
     /// Receiver of an indexing op was not an array.
     NotAnArray { found: String, span: Span },
+    /// Integer arithmetic produced a value outside `i64`'s representable range.
+    IntegerOverflow { op: &'static str, span: Span },
 }
 
 // Compile-time assertion: `Value` must be `Send` so a future async runtime

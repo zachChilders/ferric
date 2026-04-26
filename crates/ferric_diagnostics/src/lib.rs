@@ -199,6 +199,19 @@ impl<'a> Renderer<'a> {
                 notes: vec![],
                 help: None,
             }),
+            ParseError::StrayPipe { span } => self.render(Diag {
+                kind: "error",
+                message: "unexpected `|`",
+                primary: Some(Label {
+                    span: *span,
+                    message: Some("not a valid expression here".to_string()),
+                }),
+                secondary: vec![],
+                notes: vec![
+                    "closures use `|param| body`; Ferric has no bitwise-or operator".to_string(),
+                ],
+                help: None,
+            }),
         }
     }
 
@@ -856,6 +869,14 @@ impl<'a> Renderer<'a> {
             RuntimeError::NotAnArray { found, span } => self.render(Diag {
                 kind: "error",
                 message: &format!("indexing requires an array, found {}", found),
+                primary: nonzero_label(*span),
+                secondary: vec![],
+                notes: vec![],
+                help: None,
+            }),
+            RuntimeError::IntegerOverflow { op, span } => self.render(Diag {
+                kind: "error",
+                message: &format!("integer overflow in `{}`", op),
                 primary: nonzero_label(*span),
                 secondary: vec![],
                 notes: vec![],

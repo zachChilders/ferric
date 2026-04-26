@@ -30,11 +30,28 @@ pub fn resolve(ast: &ParseResult) -> ResolveResult {
 /// `native_fns` is a slice of `(fn_name, param_names)` pairs — one entry per
 /// native function, providing the parameter names needed for named-arg validation.
 pub fn resolve_with_natives(ast: &ParseResult, native_fns: &[(Symbol, Vec<Symbol>)]) -> ResolveResult {
+    resolve_with_natives_and_builtins(ast, native_fns, &[])
+}
+
+/// Name resolution with native functions and pre-registered built-in enums.
+///
+/// `builtin_enums` is a slice of `(enum_name, [(variant, payload_anns)])`
+/// tuples used to surface compiler-provided enums (currently `Option` and
+/// `Result`) so user code can construct and match their variants without a
+/// hand-written enum declaration.
+pub fn resolve_with_natives_and_builtins(
+    ast: &ParseResult,
+    native_fns: &[(Symbol, Vec<Symbol>)],
+    builtin_enums: &[(Symbol, Vec<(Symbol, Vec<TypeAnnotation>)>)],
+) -> ResolveResult {
     let mut resolver = Resolver::new();
 
-    // Pre-register native functions (name in scope + param info for call validation)
     for (name, param_names) in native_fns {
         resolver.register_native(*name, param_names.clone());
+    }
+
+    for (name, variants) in builtin_enums {
+        resolver.register_builtin_enum(*name, variants.clone());
     }
 
     resolver.resolve_program(ast);
@@ -51,10 +68,25 @@ pub fn resolve_with_imports(
     native_fns: &[(Symbol, Vec<Symbol>)],
     module: &ModuleResult,
 ) -> ResolveResult {
+    resolve_with_imports_and_builtins(ast, native_fns, &[], module)
+}
+
+/// Like [`resolve_with_imports`], with pre-registered built-in enums (e.g.
+/// `Option`, `Result`) added to the resolver's type-def table.
+pub fn resolve_with_imports_and_builtins(
+    ast: &ParseResult,
+    native_fns: &[(Symbol, Vec<Symbol>)],
+    builtin_enums: &[(Symbol, Vec<(Symbol, Vec<TypeAnnotation>)>)],
+    module: &ModuleResult,
+) -> ResolveResult {
     let mut resolver = Resolver::new();
 
     for (name, param_names) in native_fns {
         resolver.register_native(*name, param_names.clone());
+    }
+
+    for (name, variants) in builtin_enums {
+        resolver.register_builtin_enum(*name, variants.clone());
     }
 
     resolver.register_imports(module);
@@ -345,6 +377,28 @@ impl Resolver {
                 }
             }
         }
+    }
+
+    /// Pre-registers a compiler-provided built-in enum (currently `Option`
+    /// and `Result`) so user code can write `Option::Some(x)` /
+    /// `Result::Ok(v)` etc. without redeclaring the enum.
+    ///
+    /// The payload annotations are stored verbatim. The type checker bridges
+    /// these built-ins to the dedicated `Ty::Option` / `Ty::Result` variants
+    /// so that inference messages keep their nice surface form. Anything
+    /// resolvable here just needs the right variant arity.
+    fn register_builtin_enum(
+        &mut self,
+        name: Symbol,
+        variants: Vec<(Symbol, Vec<TypeAnnotation>)>,
+    ) {
+        if self.scopes.is_empty() {
+            self.push_scope();
+        }
+        let def_id = self.def_id_gen.next();
+        self.record_def(def_id, name, None);
+        self.type_defs.insert(name, def_id);
+        self.enum_variants.insert(def_id, variants);
     }
 
     /// Registers a native function as a pre-defined name with its parameter names.

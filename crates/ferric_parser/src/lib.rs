@@ -2572,6 +2572,29 @@ impl<'a> Parser<'a> {
             }
             // Closure with parameters: `|x, y| body` or `|x: Int| body`.
             TokenKind::Pipe => {
+                // Reject stray `|` up front (e.g. `1 | 2`). A real closure
+                // starts with `|` followed by `|` (empty params) or an
+                // identifier (named param). Anything else triggers a single
+                // clear `StrayPipe` error instead of cascading through the
+                // closure-parameter parser.
+                let next_kind = self
+                    .tokens
+                    .get(self.current + 1)
+                    .map(|t| &t.kind);
+                let looks_like_closure = matches!(
+                    next_kind,
+                    Some(TokenKind::Pipe) | Some(TokenKind::Ident(_))
+                );
+                if !looks_like_closure {
+                    let pipe_span = token.span;
+                    self.errors.push(ParseError::StrayPipe { span: pipe_span });
+                    self.advance(); // consume the stray '|'
+                    return Expr::Literal {
+                        value: Literal::Unit,
+                        id,
+                        span: pipe_span,
+                    };
+                }
                 let start_span = token.span;
                 self.advance(); // consume opening '|'
 

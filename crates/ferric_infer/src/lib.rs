@@ -740,7 +740,17 @@ impl<'a> TypeInfer<'a> {
 
     /// Constructs a `Ty::Struct` or `Ty::Enum` for a user-defined type symbol,
     /// or `None` if the symbol does not name a known user-defined type.
+    ///
+    /// `Option` and `Result` are pre-registered in `resolve.type_defs` as
+    /// built-in enums (so variant lookup and arity checks work uniformly), but
+    /// the inferencer tracks them through the dedicated `Ty::Option` /
+    /// `Ty::Result` variants. Returning `None` here forces callers to take the
+    /// dedicated bridge path rather than producing a `Ty::Enum` that would
+    /// then refuse to unify with `Ty::Option<T>`.
     fn lookup_user_type(&mut self, name: Symbol) -> Option<Ty> {
+        if matches!(self.interner.resolve(name), "Option" | "Result") {
+            return None;
+        }
         let def_id = *self.resolve.type_defs.get(&name)?;
         if let Some(fields) = self.resolve.struct_fields.get(&def_id).cloned() {
             let mut tmp = HashMap::new();
@@ -1273,6 +1283,11 @@ impl<'a> TypeInfer<'a> {
             }
 
             Expr::VariantCtor { enum_name, variant, args, id, span } => {
+                if let Some(ty) = self.infer_builtin_variant_ctor(*enum_name, *variant, args) {
+                    let _ = span;
+                    self.node_types.insert(*id, ty.clone());
+                    return ty;
+                }
                 let enum_ty = self
                     .lookup_user_type(*enum_name)
                     .filter(|t| matches!(t, Ty::Enum { .. }))
@@ -1347,6 +1362,90 @@ impl<'a> TypeInfer<'a> {
         ty
     }
 
+    /// Bridges constructor calls for the built-in `Option` / `Result` enums
+    /// to the dedicated `Ty::Option` / `Ty::Result` variants. Returns the
+    /// constructed type when the (enum, variant, arity) tuple is a recognised
+    /// built-in; otherwise returns `None` so the caller falls through to the
+    /// generic enum path. Argument types are still inferred either way.
+    fn infer_builtin_variant_ctor(
+        &mut self,
+        enum_name: Symbol,
+        variant: Symbol,
+        args: &[Expr],
+    ) -> Option<Ty> {
+        let en = self.interner.resolve(enum_name);
+        let vn = self.interner.resolve(variant);
+        match (en, vn, args.len()) {
+            ("Option", "Some", 1) => {
+                let arg_ty = self.infer_expr(&args[0]);
+                Some(Ty::Option(Box::new(arg_ty)))
+            }
+            ("Option", "None", 0) => {
+                let inner = self.fresh_tyvar();
+                Some(Ty::Option(Box::new(inner)))
+            }
+            ("Result", "Ok", 1) => {
+                let arg_ty = self.infer_expr(&args[0]);
+                let err_ty = self.fresh_tyvar();
+                Some(Ty::Result(Box::new(arg_ty), Box::new(err_ty)))
+            }
+            ("Result", "Err", 1) => {
+                let arg_ty = self.infer_expr(&args[0]);
+                let ok_ty = self.fresh_tyvar();
+                Some(Ty::Result(Box::new(ok_ty), Box::new(arg_ty)))
+            }
+            _ => None,
+        }
+    }
+
+    /// Bridges patterns for the built-in `Option` / `Result` enums. Returns
+    /// `true` if the pattern was recognised and processed (sub-patterns
+    /// type-checked, scrutinee unified against the appropriate `Ty::Option` /
+    /// `Ty::Result`); returns `false` so the caller falls through to the
+    /// generic enum path.
+    fn check_builtin_variant_pattern(
+        &mut self,
+        enum_name: Symbol,
+        variant: Symbol,
+        patterns: &[Pattern],
+        scrutinee_ty: &Ty,
+        span: Span,
+    ) -> bool {
+        let en = self.interner.resolve(enum_name);
+        let vn = self.interner.resolve(variant);
+        match (en, vn, patterns.len()) {
+            ("Option", "Some", 1) => {
+                let inner = self.fresh_tyvar();
+                let opt_ty = Ty::Option(Box::new(inner.clone()));
+                self.unify(scrutinee_ty, &opt_ty, span);
+                self.check_pattern(&patterns[0], &inner);
+                true
+            }
+            ("Option", "None", 0) => {
+                let inner = self.fresh_tyvar();
+                self.unify(scrutinee_ty, &Ty::Option(Box::new(inner)), span);
+                true
+            }
+            ("Result", "Ok", 1) => {
+                let ok = self.fresh_tyvar();
+                let err = self.fresh_tyvar();
+                let res_ty = Ty::Result(Box::new(ok.clone()), Box::new(err));
+                self.unify(scrutinee_ty, &res_ty, span);
+                self.check_pattern(&patterns[0], &ok);
+                true
+            }
+            ("Result", "Err", 1) => {
+                let ok = self.fresh_tyvar();
+                let err = self.fresh_tyvar();
+                let res_ty = Ty::Result(Box::new(ok), Box::new(err.clone()));
+                self.unify(scrutinee_ty, &res_ty, span);
+                self.check_pattern(&patterns[0], &err);
+                true
+            }
+            _ => false,
+        }
+    }
+
     /// Type-checks a single match arm: pattern must match scrutinee, body
     /// type must unify with the overall match result type.
     fn check_match_arm(&mut self, arm: &MatchArm, scrutinee_ty: &Ty, result_ty: &Ty) {
@@ -1414,6 +1513,15 @@ impl<'a> TypeInfer<'a> {
                 patterns,
                 span,
             } => {
+                if self.check_builtin_variant_pattern(
+                    *enum_name,
+                    *variant,
+                    patterns,
+                    scrutinee_ty,
+                    *span,
+                ) {
+                    return;
+                }
                 let enum_ty = self
                     .lookup_user_type(*enum_name)
                     .filter(|t| matches!(t, Ty::Enum { .. }))

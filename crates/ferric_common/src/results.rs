@@ -211,11 +211,3 @@ impl Program {
     }
 }
 
-// `Item` and `NamedArg` remain part of the public API of `ferric_common` —
-// later stages use them — but neither appears in `Program` anymore. The
-// `_Keep*` aliases silence unused-import warnings inside `results.rs` without
-// affecting the public re-export surface.
-#[allow(dead_code)]
-type _KeepItem = Item;
-#[allow(dead_code)]
-type _KeepNamedArg = NamedArg;

@@ -31,10 +31,7 @@ use ferric_common::{
     ResolveResult, ShellPart, Stmt, Symbol, Ty, TypeResult, UnOp,
 };
 
-/// Name of the compiler-internal native that executes a shell command.
-/// Duplicated in `ferric_stdlib::SHELL_EXEC_NATIVE` — kept in sync manually
-/// because `ferric_compiler` cannot depend on any stage crate (Rule 3).
-const SHELL_EXEC_NATIVE: &str = "__shell_exec";
+use ferric_common::SHELL_EXEC_NATIVE;
 
 /// Name of the stdlib native used to coerce `Int` interpolations into `Str`
 /// inside a shell command. Also registered by `ferric_stdlib::register_stdlib`.
@@ -637,7 +634,7 @@ impl<'a> Compiler<'a> {
     fn compile_closure_expr(
         &mut self,
         closure_id: NodeId,
-        params: &[ferric_common::Param],
+        params: &[Param],
         body: &Expr,
     ) {
         // Look up the captures the resolver recorded for this closure. Empty
@@ -1111,10 +1108,6 @@ impl<'a> Compiler<'a> {
         self.emit(Op::Call(argc));
     }
 }
-
-// Silence unused-import warnings for symbols only used by future lowerings.
-#[allow(dead_code)]
-fn _unused_imports(_: Param) {}
 
 #[cfg(test)]
 mod tests {

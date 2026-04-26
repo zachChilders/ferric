@@ -1,0 +1,4 @@
+// M7 module-system: importing a name that exists in `./util`
+// but is not marked `export` is a compile-time error.
+
+import { missing } from "./util"

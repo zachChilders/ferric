@@ -1,0 +1,6 @@
+error: `missing` is not exported from "./util"
+  --> input:4:10
+   |
+ 4 | import { missing } from "./util"
+   |          ^^^^^^^ not exported in ./util
+   = help: add `export` to the definition of `missing` in "./util"

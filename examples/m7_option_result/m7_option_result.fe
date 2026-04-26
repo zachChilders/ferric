@@ -1,0 +1,35 @@
+fn safe_div(a: Int, b: Int) -> Option<Int> {
+    if b == 0 {
+        Option::None
+    } else {
+        Option::Some(a / b)
+    }
+}
+
+fn parse_pos(s: Str) -> Result<Int, Str> {
+    let n = str_parse_int(s: s)
+    if n < 0 {
+        Result::Err("negative")
+    } else {
+        Result::Ok(n)
+    }
+}
+
+fn describe_opt(o: Option<Int>) -> Str {
+    match o {
+        Option::Some(v) => int_to_str(n: v),
+        Option::None    => "none",
+    }
+}
+
+fn describe_res(r: Result<Int, Str>) -> Str {
+    match r {
+        Result::Ok(v)  => int_to_str(n: v),
+        Result::Err(e) => e,
+    }
+}
+
+println(s: describe_opt(o: safe_div(a: 10, b: 2)))
+println(s: describe_opt(o: safe_div(a: 10, b: 0)))
+println(s: describe_res(r: parse_pos(s: "42")))
+println(s: describe_res(r: parse_pos(s: "-3")))

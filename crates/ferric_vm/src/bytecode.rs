@@ -130,17 +130,29 @@ impl Executor for BytecodeVM {
                 Op::AddInt => {
                     let b = self.pop_int()?;
                     let a = self.pop_int()?;
-                    self.stack.push(Value::new_int(a.wrapping_add(b)));
+                    let v = a.checked_add(b).ok_or(RuntimeError::IntegerOverflow {
+                        op: "+",
+                        span: dummy_span(),
+                    })?;
+                    self.stack.push(Value::new_int(v));
                 }
                 Op::SubInt => {
                     let b = self.pop_int()?;
                     let a = self.pop_int()?;
-                    self.stack.push(Value::new_int(a.wrapping_sub(b)));
+                    let v = a.checked_sub(b).ok_or(RuntimeError::IntegerOverflow {
+                        op: "-",
+                        span: dummy_span(),
+                    })?;
+                    self.stack.push(Value::new_int(v));
                 }
                 Op::MulInt => {
                     let b = self.pop_int()?;
                     let a = self.pop_int()?;
-                    self.stack.push(Value::new_int(a.wrapping_mul(b)));
+                    let v = a.checked_mul(b).ok_or(RuntimeError::IntegerOverflow {
+                        op: "*",
+                        span: dummy_span(),
+                    })?;
+                    self.stack.push(Value::new_int(v));
                 }
                 Op::DivInt => {
                     let b = self.pop_int()?;
@@ -148,7 +160,11 @@ impl Executor for BytecodeVM {
                     if b == 0 {
                         return Err(RuntimeError::DivisionByZero { span: dummy_span() });
                     }
-                    self.stack.push(Value::new_int(a / b));
+                    let v = a.checked_div(b).ok_or(RuntimeError::IntegerOverflow {
+                        op: "/",
+                        span: dummy_span(),
+                    })?;
+                    self.stack.push(Value::new_int(v));
                 }
                 Op::RemInt => {
                     let b = self.pop_int()?;
@@ -156,11 +172,19 @@ impl Executor for BytecodeVM {
                     if b == 0 {
                         return Err(RuntimeError::DivisionByZero { span: dummy_span() });
                     }
-                    self.stack.push(Value::new_int(a % b));
+                    let v = a.checked_rem(b).ok_or(RuntimeError::IntegerOverflow {
+                        op: "%",
+                        span: dummy_span(),
+                    })?;
+                    self.stack.push(Value::new_int(v));
                 }
                 Op::NegInt => {
                     let a = self.pop_int()?;
-                    self.stack.push(Value::new_int(a.wrapping_neg()));
+                    let v = a.checked_neg().ok_or(RuntimeError::IntegerOverflow {
+                        op: "-",
+                        span: dummy_span(),
+                    })?;
+                    self.stack.push(Value::new_int(v));
                 }
 
                 // ---------------- Float arithmetic -----------------------

@@ -36,6 +36,13 @@ mod module;
 // both depend on this stable path.
 pub mod keywords;
 
+/// Name of the compiler-internal native that executes a shell command.
+///
+/// `ferric_compiler` lowers `$ ...` shell expressions to a call of this
+/// native; `ferric_stdlib::register_stdlib` registers the implementation
+/// under the same name. The constant lives here so neither side can drift.
+pub const SHELL_EXEC_NATIVE: &str = "__shell_exec";
+
 /// Serialises a `ParseResult` as pretty-printed JSON.
 ///
 /// External tools consume Ferric's AST through this entry point — they import

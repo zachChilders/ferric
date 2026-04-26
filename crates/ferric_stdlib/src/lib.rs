@@ -3,7 +3,7 @@
 //! Provides native functions and the NativeRegistry for runtime function lookup.
 
 use std::collections::HashMap;
-use ferric_common::{ShellOutput, Symbol};
+use ferric_common::{Interner, ShellOutput, Symbol, TypeAnnotation};
 
 // Re-export Value and RuntimeError from ferric_vm
 // NOTE: This creates a circular dependency issue - we'll need to move Value here
@@ -225,11 +225,9 @@ fn builtin_shell_exit_code(args: &[NativeValue]) -> Result<NativeValue, String> 
     }
 }
 
-/// Name used by the compiler when lowering `$ ...` shell expressions. Not
-/// a user-visible identifier (the `__` prefix keeps it out of the happy path
-/// of typo-correction and reserves it as internal ABI between the compiler
-/// and the VM).
-pub const SHELL_EXEC_NATIVE: &str = "__shell_exec";
+// `SHELL_EXEC_NATIVE` lives in `ferric_common` so the compiler and the
+// stdlib (which cannot depend on each other) cannot drift on the name.
+pub use ferric_common::SHELL_EXEC_NATIVE;
 
 /// Runs a shell command synchronously and returns a `Value::ShellOutput`.
 ///
@@ -391,6 +389,46 @@ fn builtin_read_line(args: &[NativeValue]) -> Result<NativeValue, String> {
         line.pop();
     }
     Ok(NativeValue::Str(line))
+}
+
+// ============================================================================
+// Built-in Enum Registration
+// ============================================================================
+
+/// Returns the table of compiler-provided built-in enums (currently `Option`
+/// and `Result`) suitable for [`ferric_resolve::resolve_with_natives_and_builtins`].
+///
+/// The payload annotations are placeholders: the type checker bridges these
+/// constructors to the dedicated `Ty::Option<T>` / `Ty::Result<T, E>` variants
+/// for nicer inference messages, so the annotations themselves are never
+/// resolved at use sites. Any `TypeAnnotation` with a sensible arity works;
+/// `Infer` keeps the resolver's pre-pass minimal.
+pub fn builtin_enum_table(
+    interner: &mut Interner,
+) -> Vec<(Symbol, Vec<(Symbol, Vec<TypeAnnotation>)>)> {
+    let option_sym = interner.intern("Option");
+    let some_sym = interner.intern("Some");
+    let none_sym = interner.intern("None");
+    let result_sym = interner.intern("Result");
+    let ok_sym = interner.intern("Ok");
+    let err_sym = interner.intern("Err");
+
+    vec![
+        (
+            option_sym,
+            vec![
+                (some_sym, vec![TypeAnnotation::Infer]),
+                (none_sym, vec![]),
+            ],
+        ),
+        (
+            result_sym,
+            vec![
+                (ok_sym, vec![TypeAnnotation::Infer]),
+                (err_sym, vec![TypeAnnotation::Infer]),
+            ],
+        ),
+    ]
 }
 
 // ============================================================================

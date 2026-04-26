@@ -1,0 +1,10 @@
+// M7 module-system: top-level `export` declarations.
+// Items marked `export` are visible to other files via `import`;
+// unmarked items remain file-private.
+
+export fn double(n: Int) -> Int { n * 2 }
+export struct Point { x: Int, y: Int }
+
+fn private_helper() -> Int { 99 }
+
+println(s: "library file compiled")

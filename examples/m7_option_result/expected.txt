@@ -1,0 +1,4 @@
+5
+none
+42
+negative

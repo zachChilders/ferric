@@ -4,7 +4,7 @@
 //! This enables precise error reporting and future renderer replacement.
 
 use serde::{Deserialize, Serialize};
-use crate::{NodeId, Span, Symbol, TokenKind, Ty, TyVar};
+use crate::{Span, Symbol, TokenKind, Ty, TyVar};
 
 /// Errors that can occur during lexing.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -118,6 +118,13 @@ pub enum ParseError {
     ChainedCast {
         span: Span,
     },
+    /// A `|` appeared in expression position not followed by closure-parameter
+    /// syntax. The lexer cannot reject `|` directly because `|x|` introduces a
+    /// closure, so the rejection lives here as a single clear diagnostic
+    /// instead of cascading through the closure-param parser.
+    StrayPipe {
+        span: Span,
+    },
 }
 
 impl ParseError {
@@ -134,6 +141,7 @@ impl ParseError {
             ParseError::InvalidImportPath { span } => *span,
             ParseError::InvalidExportPosition { span } => *span,
             ParseError::ChainedCast { span } => *span,
+            ParseError::StrayPipe { span } => *span,
         }
     }
 
@@ -170,6 +178,10 @@ impl ParseError {
             }
             ParseError::ChainedCast { .. } => {
                 "cannot chain cast expressions; wrap in parentheses".to_string()
+            }
+            ParseError::StrayPipe { .. } => {
+                "unexpected `|`; closures use `|param| body` and Ferric has no bitwise-or operator"
+                    .to_string()
             }
         }
     }
@@ -637,7 +649,3 @@ impl ExhaustivenessError {
     }
 }
 
-// `NodeId` is imported above for consistency with other span-bearing types
-// even when it is not currently used in any error variant.
-#[allow(dead_code)]
-type _KeepNodeId = NodeId;
