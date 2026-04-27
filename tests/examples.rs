@@ -34,11 +34,16 @@ fn examples() {
         .collect();
     names.sort();
     assert!(!names.is_empty(), "no example fixtures found under examples/");
+    println!("running {} example fixture(s) from examples/", names.len());
 
     let mut failures = Vec::new();
     for name in &names {
+        println!("→ running example: {name}");
         if let Err(msg) = run_example(&examples_root, name) {
+            println!("✗ failed: {name}");
             failures.push(format!("• {name}: {msg}"));
+        } else {
+            println!("✓ passed: {name}");
         }
     }
 
