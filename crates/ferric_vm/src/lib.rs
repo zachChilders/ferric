@@ -69,6 +69,60 @@ pub enum Value {
     /// User-defined closure: function chunk plus the values it captured at
     /// the moment it was constructed.
     Closure { fn_idx: u16, captures: Vec<Value> },
+    /// `Async<T>` — a deferred or resolved async computation. Wraps shared
+    /// mutable state so the same `Async` can be observed from multiple
+    /// places (the original creator, a `spawn`'s thread, awaiters). The
+    /// state machine is `Pending → Ready` for in-process awaits and
+    /// `Pending → Running → Ready` for spawned tasks.
+    ///
+    /// Lazy semantics (M8 Task 5 Option A): the body of an `async { ... }`
+    /// or `async fn` does not execute until the value is awaited or
+    /// spawned. This is what makes true parallelism possible —
+    /// `spawn(task: foo(x))` can move the deferred work onto an OS thread.
+    Async(AsyncCell),
+    /// `Handle<T>` — opaque reference into the scheduler's `handles` table.
+    /// `Op::Await` on a `Handle` consults the scheduler to retrieve the
+    /// resolved value (joining a worker thread first if needed).
+    Handle(u64),
+}
+
+/// Wrapper around the shared, lock-protected state of a `Value::Async`.
+/// Newtype exists so `Value` can keep its `PartialEq` derive — equality on
+/// `AsyncCell` is *identity* (two cells are equal iff they are the same
+/// `Arc`), which is the only meaningful notion for live async values.
+#[derive(Debug, Clone)]
+pub struct AsyncCell(pub(crate) std::sync::Arc<std::sync::Mutex<AsyncState>>);
+
+impl AsyncCell {
+    pub(crate) fn new(state: AsyncState) -> Self {
+        AsyncCell(std::sync::Arc::new(std::sync::Mutex::new(state)))
+    }
+
+    pub(crate) fn lock(&self) -> std::sync::MutexGuard<'_, AsyncState> {
+        self.0.lock().expect("async state poisoned")
+    }
+}
+
+impl PartialEq for AsyncCell {
+    fn eq(&self, other: &Self) -> bool {
+        std::sync::Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+/// Internal state machine of a `Value::Async`. Lives inside an
+/// [`AsyncCell`] (an `Arc<Mutex<...>>`) so the same async can be observed
+/// across threads.
+#[derive(Debug)]
+pub enum AsyncState {
+    /// Body has not yet executed. `chunk_idx` and `captures` together
+    /// describe a deferred call: pushing `captures` onto the stack and
+    /// entering `chunk_idx` runs the body.
+    Pending {
+        chunk_idx: u16,
+        captures: Vec<Value>,
+    },
+    /// Body has run to completion and the result is cached.
+    Ready(Value),
 }
 
 impl Value {
@@ -117,6 +171,30 @@ impl Value {
     pub fn new_closure(fn_idx: u16, captures: Vec<Value>) -> Self {
         Value::Closure { fn_idx, captures }
     }
+
+    /// Creates an `Async<T>` value already in `Ready` state. Used by
+    /// runtime-only constructors that materialise a value synchronously
+    /// (e.g. `sleep`). Rule 7: outside `ferric_vm`, this is the only way
+    /// to construct `Value::Async`.
+    pub fn new_async_ready(inner: Value) -> Self {
+        Value::Async(AsyncCell::new(AsyncState::Ready(inner)))
+    }
+
+    /// Creates a `Pending` `Async<T>` capturing a deferred call: when this
+    /// value is awaited or spawned, the VM will push `captures` onto the
+    /// stack and enter `chunk_idx`. The body has not yet executed.
+    pub fn new_async_pending(chunk_idx: u16, captures: Vec<Value>) -> Self {
+        Value::Async(AsyncCell::new(AsyncState::Pending {
+            chunk_idx,
+            captures,
+        }))
+    }
+
+    /// Creates a `Handle<T>` value referencing scheduler task `id`. Rule 7:
+    /// outside `ferric_vm`, this is the only way to construct `Value::Handle`.
+    pub fn new_handle(id: u64) -> Self {
+        Value::Handle(id)
+    }
 }
 
 /// Runtime errors with source location information.
@@ -144,6 +222,9 @@ pub enum RuntimeError {
     NotAnArray { found: String, span: Span },
     /// Integer arithmetic produced a value outside `i64`'s representable range.
     IntegerOverflow { op: &'static str, span: Span },
+    /// `Op::Await` reached a `Handle` whose task never resolved — the
+    /// scheduler made a full pass with no forward progress.
+    AsyncDeadlock { span: Span },
 }
 
 // Compile-time assertion: `Value` must be `Send` so a future async runtime

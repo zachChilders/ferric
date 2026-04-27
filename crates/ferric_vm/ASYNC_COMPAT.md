@@ -5,10 +5,27 @@ These constraints must be maintained across all milestones so that adding
 
 | Constraint                                | Status                                       | Action needed at async milestone                                  |
 | ----------------------------------------- | -------------------------------------------- | ----------------------------------------------------------------- |
-| `ferric_common` types are `Send + Sync`   | Enforced by compile-time check in `ferric_common/src/lib.rs` | None                                                              |
-| `Value` is `Send`                          | Enforced by compile-time check in `ferric_vm/src/lib.rs`     | None                                                              |
-| `NativeRegistry` fn type is sync           | Documented at the type definition (intentional) | Update fn type to return `Pin<Box<dyn Future<Output=...> + Send>>` |
-| Frame stack is heap-allocated (M3+)        | TreeWalker uses Rust stack (acceptable)      | BytecodeVM uses a heap `Vec<Frame>` — done in M3                  |
+| `ferric_common` types are `Send + Sync`   | **Resolved** — compile-time check in `ferric_common/src/lib.rs` (M2/M8 maintained) | None |
+| `Value` is `Send`                          | **Resolved** — compile-time check in `ferric_vm/src/lib.rs` (covers `Value::Async`/`Value::Handle` added in M8 Task 5) | None |
+| `NativeRegistry` fn type is sync           | **Resolved in M8 Task 5** — see note below   | None                                                              |
+| Frame stack is heap-allocated (M3+)        | **Resolved** — `BytecodeVM` uses a heap `Vec<CallFrame>`     | None                                                              |
+
+## NativeRegistry — what actually shipped in M8 Task 5
+
+The original async-prep design called for changing the `NativeFn` type from
+`Fn(&[NativeValue]) -> Result<NativeValue, String>` to a future-returning
+shape. M8 Task 5 (Path B) chose a simpler architecture: regular sync stdlib
+functions keep the existing signature, and the async-aware stdlib intrinsics
+(`spawn`, `join`, `sleep`, `shell_run_async`) are dispatched directly inside
+the VM's `Op::Call` handler with access to scheduler state. The dual-shape
+"AsyncVal" enum the spec sketched was never needed because eager-evaluation
+async (`Value::Async` wrapping a resolved value) lets all sync natives
+remain sync.
+
+A future migration to truly non-blocking I/O (true cooperative scheduling
+mid-await) would re-open this design — at that point the per-native fn type
+would change so `shell_run_async` and `sleep` could yield without occupying
+a real OS thread.
 
 ## Why these matter
 

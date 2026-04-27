@@ -20,6 +20,7 @@ pub const KEYWORDS: &[&str] = &[
     "trait", "impl", "for",
     "import", "export", "from",
     "type", "as",
+    "async", "await",
 ];
 
 /// Built-in primitive type names. These are NOT lexer keywords — they are

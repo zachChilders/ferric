@@ -73,6 +73,15 @@ pub enum Ty {
         def_id: DefId,
         inner: Box<Ty>,
     },
+    /// `Async<T>` — the type of an `async fn` value (i.e. the result of calling
+    /// `async fn foo() -> T` without `.await`) and of `async { ... }` blocks.
+    Async(Box<Ty>),
+    /// `Handle<T>` — returned by `spawn(...)` when an `Async<T>` task is
+    /// submitted to the scheduler. Awaitable, yielding `T`.
+    Handle(Box<Ty>),
+    /// `Poll<T>` — the result of one step of a state machine: `Ready(T)` or
+    /// `Pending`. Surfaces in the lowered output of `ferric_async`.
+    Poll(Box<Ty>),
 }
 
 impl Ty {
@@ -133,6 +142,9 @@ impl Ty {
             Ty::Opaque { def_id, inner } => {
                 format!("Opaque#{}({})", def_id.0, inner.description())
             }
+            Ty::Async(inner) => format!("Async<{}>", inner.description()),
+            Ty::Handle(inner) => format!("Handle<{}>", inner.description()),
+            Ty::Poll(inner) => format!("Poll<{}>", inner.description()),
         }
     }
 
@@ -186,6 +198,9 @@ impl std::fmt::Display for Ty {
             Ty::Option(inner)     => write!(f, "Option<{inner}>"),
             Ty::Result(ok, err)   => write!(f, "Result<{ok}, {err}>"),
             Ty::Opaque { inner, .. } => write!(f, "{inner}"),
+            Ty::Async(inner)  => write!(f, "Async<{inner}>"),
+            Ty::Handle(inner) => write!(f, "Handle<{inner}>"),
+            Ty::Poll(inner)   => write!(f, "Poll<{inner}>"),
         }
     }
 }

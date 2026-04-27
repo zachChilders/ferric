@@ -92,6 +92,10 @@ pub enum TokenKind {
     Type,
     /// `as` keyword for cast expressions and import aliases
     As,
+    /// `async` keyword — prefix modifier on `fn` and `{ ... }` blocks
+    Async,
+    /// `await` keyword — postfix suffix following `.` on an awaitable expr
+    Await,
 
     // Identifiers and operators
     /// Identifier (variable/function name)
@@ -205,6 +209,8 @@ impl TokenKind {
             TokenKind::From => "keyword 'from'".to_string(),
             TokenKind::Type => "keyword 'type'".to_string(),
             TokenKind::As => "keyword 'as'".to_string(),
+            TokenKind::Async => "keyword 'async'".to_string(),
+            TokenKind::Await => "keyword 'await'".to_string(),
             TokenKind::Ident(_) => "identifier".to_string(),
             TokenKind::Plus => "'+'".to_string(),
             TokenKind::Minus => "'-'".to_string(),

@@ -125,6 +125,19 @@ pub enum ParseError {
     StrayPipe {
         span: Span,
     },
+    /// `.await` appeared inside a non-`async` function — caught at parse time
+    /// as a fast path. The type checker also catches this (with richer typing
+    /// information), but emitting it here gives a clearer diagnostic and lets
+    /// downstream stages skip the malformed body.
+    AwaitOutsideAsync {
+        span: Span,
+    },
+    /// `async` was used as a prefix on something other than `fn` or `{`. The
+    /// token after `async` was something like `let`, `struct`, or any other
+    /// non-function form.
+    AsyncOnNonFn {
+        span: Span,
+    },
 }
 
 impl ParseError {
@@ -142,6 +155,8 @@ impl ParseError {
             ParseError::InvalidExportPosition { span } => *span,
             ParseError::ChainedCast { span } => *span,
             ParseError::StrayPipe { span } => *span,
+            ParseError::AwaitOutsideAsync { span } => *span,
+            ParseError::AsyncOnNonFn { span } => *span,
         }
     }
 
@@ -182,6 +197,12 @@ impl ParseError {
             ParseError::StrayPipe { .. } => {
                 "unexpected `|`; closures use `|param| body` and Ferric has no bitwise-or operator"
                     .to_string()
+            }
+            ParseError::AwaitOutsideAsync { .. } => {
+                "`.await` is only valid inside an `async fn` or `async { ... }` block".to_string()
+            }
+            ParseError::AsyncOnNonFn { .. } => {
+                "`async` must be followed by `fn` or `{`".to_string()
             }
         }
     }
@@ -492,6 +513,41 @@ pub enum TypeError {
         to:   Ty,
         span: Span,
     },
+    /// `.await` was used outside of an `async fn` or `async { ... }` block.
+    /// The type checker catches this independently of the parser fast-path so
+    /// that lowering can rely on the await-context invariant.
+    AwaitOutsideAsync {
+        span: Span,
+    },
+    /// `.await` was applied to a value whose type is not `Async<T>`.
+    AwaitOnNonAsync {
+        found: Ty,
+        span:  Span,
+    },
+    /// An `async { ... }` block appeared in a position where its `Async<T>`
+    /// result type cannot be used (e.g. a sync function that returns `Unit`
+    /// and discards the value).
+    AsyncBlockInSync {
+        span: Span,
+    },
+    /// `spawn(task: ...)` was called with an argument that is not `Async<T>`.
+    SpawnNonAsync {
+        found: Ty,
+        span:  Span,
+    },
+    /// An expression of type `Async<T>` was used where the inner `T` was
+    /// expected — the user almost always forgot to write `.await`. Friendly
+    /// alternative to a plain `Mismatch` for this very common case.
+    AsyncNotAwaited {
+        found:    Ty,
+        expected: Ty,
+        span:     Span,
+    },
+    /// `join(...)` received an argument whose type is not `Handle<T>`.
+    JoinNonHandle {
+        found: Ty,
+        span:  Span,
+    },
 }
 
 impl TypeError {
@@ -518,6 +574,12 @@ impl TypeError {
             TypeError::ImplMethodSignatureMismatch { span, .. } => *span,
             TypeError::OpaqueTypeMismatch { span, .. } => *span,
             TypeError::InvalidCast { span, .. } => *span,
+            TypeError::AwaitOutsideAsync { span } => *span,
+            TypeError::AwaitOnNonAsync { span, .. } => *span,
+            TypeError::AsyncBlockInSync { span } => *span,
+            TypeError::SpawnNonAsync { span, .. } => *span,
+            TypeError::AsyncNotAwaited { span, .. } => *span,
+            TypeError::JoinNonHandle { span, .. } => *span,
         }
     }
 
@@ -609,6 +671,121 @@ impl TypeError {
                     from.description(),
                     to.description()
                 )
+            }
+            TypeError::AwaitOutsideAsync { .. } => {
+                "`.await` is only valid inside an `async fn` or `async { ... }` block".to_string()
+            }
+            TypeError::AwaitOnNonAsync { found, .. } => {
+                format!(
+                    "`.await` requires an Async<T> operand, found {}",
+                    found.description()
+                )
+            }
+            TypeError::AsyncBlockInSync { .. } => {
+                "`async { ... }` produces an Async<T> value that cannot be used in this position"
+                    .to_string()
+            }
+            TypeError::SpawnNonAsync { found, .. } => {
+                format!(
+                    "spawn requires an Async<T> argument, found {}",
+                    found.description()
+                )
+            }
+            TypeError::AsyncNotAwaited { found, expected, .. } => {
+                format!(
+                    "this expression is {} but {} is expected — did you forget `.await`?",
+                    found.description(),
+                    expected.description()
+                )
+            }
+            TypeError::JoinNonHandle { found, .. } => {
+                format!(
+                    "join requires Handle<T> arguments, found {}",
+                    found.description()
+                )
+            }
+        }
+    }
+}
+
+/// Errors that can occur in the `ferric_async` lowering pass.
+///
+/// These complement the type errors caught earlier: the type checker rejects
+/// `.await` outside an async context and on the wrong types; the lowering
+/// pass catches structural problems that are only visible after the full
+/// function body is available for state machine construction.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum AsyncLowerError {
+    /// A local variable is captured by a state across an `.await` point in a
+    /// way the lowering pass cannot translate into a state field. The fix is
+    /// usually to move the capture inside the awaited subexpression.
+    CaptureAcrossAwait {
+        name: Symbol,
+        await_span: Span,
+        capture_span: Span,
+    },
+    /// An `async fn` calls itself unconditionally, with no awaitable suspension
+    /// point along the way — the resulting state machine would loop without
+    /// ever yielding to the scheduler.
+    InfiniteAsyncRecursion {
+        fn_name: Symbol,
+        span: Span,
+    },
+}
+
+impl AsyncLowerError {
+    /// Returns the primary span associated with this error.
+    pub fn span(&self) -> Span {
+        match self {
+            AsyncLowerError::CaptureAcrossAwait { await_span, .. } => *await_span,
+            AsyncLowerError::InfiniteAsyncRecursion { span, .. } => *span,
+        }
+    }
+
+    /// Returns a human-readable description of this error.
+    pub fn description(&self) -> String {
+        match self {
+            AsyncLowerError::CaptureAcrossAwait { .. } => {
+                "value captured across an `.await` cannot be lowered into the state machine"
+                    .to_string()
+            }
+            AsyncLowerError::InfiniteAsyncRecursion { .. } => {
+                "async function recurses without an `.await` — would loop without yielding"
+                    .to_string()
+            }
+        }
+    }
+}
+
+/// A non-fatal diagnostic emitted during async lowering. Warnings do not halt
+/// compilation; the renderer prefixes them with `warning:` instead of
+/// `error:`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AsyncWarning {
+    pub span: Span,
+    pub kind: AsyncWarningKind,
+}
+
+/// The categories of warning the async lowering pass can emit.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum AsyncWarningKind {
+    /// A `$ ...` shell expression appears outside an `async` context, where it
+    /// will block the thread instead of yielding to the scheduler.
+    BlockingShell,
+}
+
+impl AsyncWarning {
+    /// Returns the span associated with this warning.
+    pub fn span(&self) -> Span {
+        self.span
+    }
+
+    /// Returns a human-readable description of this warning.
+    pub fn description(&self) -> String {
+        match self.kind {
+            AsyncWarningKind::BlockingShell => {
+                "`$` shell expression outside an async context — this will block the thread"
+                    .to_string()
             }
         }
     }

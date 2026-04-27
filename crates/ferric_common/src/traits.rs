@@ -45,11 +45,16 @@ impl ImplTy {
             // the inner type. The type checker still treats them as distinct.
             Ty::Opaque { inner, .. } => return ImplTy::from_ty(inner),
             // Generic / inference / function types don't appear as impl heads.
+            // Async/Handle/Poll likewise: these are runtime-only wrappers; trait
+            // dispatch is resolved on the inner result type at await sites.
             Ty::Var(_)
             | Ty::Fn { .. }
             | Ty::Array(_)
             | Ty::Option(_)
-            | Ty::Result(_, _) => return None,
+            | Ty::Result(_, _)
+            | Ty::Async(_)
+            | Ty::Handle(_)
+            | Ty::Poll(_) => return None,
         })
     }
 }

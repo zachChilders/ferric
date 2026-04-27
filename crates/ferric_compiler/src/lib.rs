@@ -76,6 +76,13 @@ struct Compiler<'a> {
     /// names, so the compiler must reference them through their `DefId`.
     method_chunks: HashMap<DefId, u16>,
 
+    /// Async fn name → body chunk index. The body chunk is what runs when
+    /// a deferred `Value::Async` is awaited or spawned. The constructor
+    /// chunk (registered under `fn_chunks`) is what runs when the async
+    /// fn is *called* — it just builds the Pending Async wrapping the
+    /// body chunk + the call's args.
+    async_body_chunks: HashMap<Symbol, u16>,
+
     /// Per-function scope stack of `name → local slot`. Reset on each chunk.
     scopes: Vec<HashMap<Symbol, u8>>,
 
@@ -110,6 +117,7 @@ impl<'a> Compiler<'a> {
             current: 0,
             fn_chunks: HashMap::new(),
             method_chunks: HashMap::new(),
+            async_body_chunks: HashMap::new(),
             scopes: Vec::new(),
             next_local: 0,
             loop_stack: Vec::new(),
@@ -124,12 +132,27 @@ impl<'a> Compiler<'a> {
         let entry_idx: u16 = 0;
 
         // Pre-pass: assign chunk indices to user functions and impl methods.
+        // M8 Task 5 Option A: an `async fn foo` needs *two* chunks: a
+        // constructor (registered under fn_chunks[foo]) that builds the
+        // deferred `Value::Async`, and a body chunk (registered under
+        // async_body_chunks[foo]) that runs the actual code when the async
+        // is awaited or spawned. Lazy semantics — calling foo doesn't
+        // execute the body.
         for item in &self.ast.items {
             match item {
-                Item::FnDef { name, .. } => {
+                Item::Fn(item) => {
                     let chunk_idx = self.chunks.len() as u16;
-                    self.chunks.push(Chunk::new(*name));
-                    self.fn_chunks.insert(*name, chunk_idx);
+                    self.chunks.push(Chunk::new(item.name));
+                    self.fn_chunks.insert(item.name, chunk_idx);
+                }
+                Item::AsyncFn(decl) => {
+                    let f = &decl.item;
+                    let ctor_idx = self.chunks.len() as u16;
+                    self.chunks.push(Chunk::new(f.name));
+                    self.fn_chunks.insert(f.name, ctor_idx);
+                    let body_idx = self.chunks.len() as u16;
+                    self.chunks.push(Chunk::new(f.name));
+                    self.async_body_chunks.insert(f.name, body_idx);
                 }
                 Item::ImplBlock { methods, .. } => {
                     for m in methods {
@@ -149,14 +172,50 @@ impl<'a> Compiler<'a> {
         // Compile each function body.
         for item in &self.ast.items {
             match item {
-                Item::FnDef { name, params, body, .. } => {
-                    let chunk_idx = self.fn_chunks[name] as usize;
+                Item::Fn(item) => {
+                    let chunk_idx = self.fn_chunks[&item.name] as usize;
                     self.enter_chunk(chunk_idx);
                     self.push_scope();
-                    for param in params {
+                    for param in &item.params {
                         self.bind_local(param.name);
                     }
-                    self.compile_expr(body);
+                    self.compile_expr(&item.body);
+                    self.emit(Op::Return);
+                    self.pop_scope();
+                }
+                Item::AsyncFn(decl) => {
+                    let f = &decl.item;
+                    let ctor_idx = self.fn_chunks[&f.name] as usize;
+                    let body_idx = self.async_body_chunks[&f.name];
+                    let n_params = u8::try_from(f.params.len())
+                        .expect("async fn has too many params for u8");
+
+                    // Body chunk: compile body with params bound as locals,
+                    // then Return. This chunk is what the VM runs when the
+                    // async is awaited or spawned.
+                    self.enter_chunk(body_idx as usize);
+                    self.push_scope();
+                    for param in &f.params {
+                        self.bind_local(param.name);
+                    }
+                    self.compile_expr(&f.body);
+                    self.emit(Op::Return);
+                    self.pop_scope();
+
+                    // Constructor chunk: load each param onto the stack as
+                    // a "capture" of the body chunk, then MakeAsync. Calling
+                    // foo() enters this chunk and immediately returns a
+                    // Pending Async — body never runs at call time.
+                    self.enter_chunk(ctor_idx);
+                    self.push_scope();
+                    for (i, param) in f.params.iter().enumerate() {
+                        self.bind_local(param.name);
+                        let _ = i;
+                    }
+                    for i in 0..n_params {
+                        self.emit(Op::LoadSlot(i));
+                    }
+                    self.emit(Op::MakeAsync(body_idx, n_params));
                     self.emit(Op::Return);
                     self.pop_scope();
                 }
@@ -624,6 +683,21 @@ impl<'a> Compiler<'a> {
                 // artifact only. Just compile the underlying expression.
                 self.compile_expr(&c.expr);
             }
+            // M8 Task 5 (Option A — lazy/threaded async): `async { body }` is
+            // hoisted to its own chunk and emitted as a deferred
+            // `MakeAsync(chunk_idx, n_captures)` value. The body runs only
+            // when the value is awaited (in this thread, via Op::Await) or
+            // spawned (on an OS thread, via the spawn intrinsic). This
+            // deferral is what lets `spawn(task: foo(x))` actually run
+            // `foo(x)` in parallel — the body has not yet executed when
+            // spawn receives the value.
+            Expr::AsyncBlock(b) => {
+                self.compile_async_block(b.id, &b.block);
+            }
+            Expr::Await(a) => {
+                self.compile_expr(&a.operand);
+                self.emit(Op::Await);
+            }
         }
     }
 
@@ -696,6 +770,62 @@ impl<'a> Compiler<'a> {
         // 5. Build the closure value at runtime.
         let n = u8::try_from(captures.len()).expect("too many captured variables");
         self.emit(Op::MakeClosure(chunk_idx, n));
+    }
+
+    /// Compiles an `async { body }` expression. The body is hoisted into a
+    /// freshly-allocated chunk so the VM can run it later (on this thread
+    /// when `await`ed, on an OS thread when `spawn`ed). The captures the
+    /// resolver collected for this AsyncBlock — same machinery as closures
+    /// — occupy the leading slots of that chunk's frame; the outer chunk
+    /// pushes them onto the stack just before `Op::MakeAsync` so the VM
+    /// can copy them into the deferred state.
+    fn compile_async_block(&mut self, async_id: NodeId, body: &Expr) {
+        let captures: Vec<(DefId, Symbol)> = self
+            .resolve
+            .captures
+            .get(&async_id)
+            .cloned()
+            .unwrap_or_default();
+
+        // 1. Push each captured value onto the outer stack.
+        for (_def_id, name) in &captures {
+            if let Some(slot) = self.lookup_local(*name) {
+                self.emit(Op::LoadSlot(slot));
+            } else {
+                self.emit(Op::Unit);
+            }
+        }
+
+        // 2. Allocate a chunk for the body. Symbol(0) — anonymous.
+        let chunk_idx = self.chunks.len() as u16;
+        self.chunks.push(Chunk::new(Symbol::new(0)));
+
+        // 3. Save outer state and emit the body in the new chunk.
+        let saved_current = self.current;
+        let saved_scopes = std::mem::take(&mut self.scopes);
+        let saved_next_local = self.next_local;
+        let saved_loop_stack = std::mem::take(&mut self.loop_stack);
+
+        self.enter_chunk(chunk_idx as usize);
+        self.push_scope();
+
+        for (_def_id, name) in &captures {
+            self.bind_local(*name);
+        }
+
+        self.compile_expr(body);
+        self.emit(Op::Return);
+        self.pop_scope();
+
+        // 4. Restore outer state.
+        self.current = saved_current;
+        self.scopes = saved_scopes;
+        self.next_local = saved_next_local;
+        self.loop_stack = saved_loop_stack;
+
+        // 5. Construct the deferred Async value.
+        let n = u8::try_from(captures.len()).expect("too many async-block captures");
+        self.emit(Op::MakeAsync(chunk_idx, n));
     }
 
     /// Compiles a method call by looking up the resolved impl-method DefId

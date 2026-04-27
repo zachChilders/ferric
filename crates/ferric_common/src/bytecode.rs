@@ -147,4 +147,24 @@ pub enum Op {
     /// reverse order they were pushed), then push a closure value referencing
     /// the chunk at `fn_idx` with those captures.
     MakeClosure(u16, u8),
+
+    // ---------------- M8: async / await --------------------------------------
+    /// Build a deferred async value: pop `n_captures` values from the stack,
+    /// then push `Value::Async` wrapping a Pending state that captures the
+    /// chunk index and the captures vector. The body chunk is **not run
+    /// here** — execution is deferred until the value is awaited or
+    /// spawned. Mirrors `MakeClosure`'s shape: captures occupy the leading
+    /// slots of the deferred call frame.
+    ///
+    /// Lazy semantics (M8 Task 5 Option A) is what makes true concurrency
+    /// possible: `spawn(task: foo(1))` can move the deferred work onto a
+    /// thread because the body of `foo` has not yet executed.
+    MakeAsync(u16, u8),
+    /// Pop a value, push the awaited inner value. For a Pending
+    /// `Value::Async`, runs the body chunk synchronously (in a nested
+    /// dispatch loop) and caches the result. For a Ready async, pushes the
+    /// cached value. For a `Value::Handle` referencing a spawned task,
+    /// joins the worker thread (blocks if not yet done) and pushes the
+    /// resolved value. For any other type, raises `RuntimeError`.
+    Await,
 }

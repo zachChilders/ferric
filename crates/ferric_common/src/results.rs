@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
-use crate::{Token, LexError, ParseError, ResolveError, TypeError, ExhaustivenessError, NodeId, DefId, Ty, Item, NamedArg, Chunk, Symbol, Span};
+use crate::{Token, LexError, ParseError, ResolveError, TypeError, ExhaustivenessError, AsyncLowerError, AsyncWarning, NodeId, DefId, Ty, Item, NamedArg, Chunk, Symbol, Span};
 
 /// Result of the lexing stage.
 ///
@@ -187,6 +187,41 @@ impl TypeResult {
     }
 
     /// Returns true if there were any errors during type checking.
+    pub fn has_errors(&self) -> bool {
+        !self.errors.is_empty()
+    }
+}
+
+/// Result of the `ferric_async` lowering stage.
+///
+/// Slots in between the type checker and the compiler. The `ast` field is a
+/// rewritten `ParseResult` — same type as the parser's output — with
+/// `async fn` items and `.await` / `async { ... }` expressions replaced by
+/// their lowered (state machine + poll fn) equivalents. Downstream stages
+/// (`ferric_compiler`, the VM) accept this `ParseResult` unchanged, so the
+/// new stage is additive on the existing pipeline.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AsyncResult {
+    /// The rewritten AST. For programs with no `async fn` / `.await` use, this
+    /// is structurally equivalent to the input `ParseResult`.
+    pub ast: ParseResult,
+    /// Errors discovered during lowering.
+    pub errors: Vec<AsyncLowerError>,
+    /// Non-fatal diagnostics (e.g. blocking-shell warnings).
+    pub warnings: Vec<AsyncWarning>,
+}
+
+impl AsyncResult {
+    /// Creates a new AsyncResult.
+    pub fn new(
+        ast: ParseResult,
+        errors: Vec<AsyncLowerError>,
+        warnings: Vec<AsyncWarning>,
+    ) -> Self {
+        Self { ast, errors, warnings }
+    }
+
+    /// Returns true if any lowering errors were recorded.
     pub fn has_errors(&self) -> bool {
         !self.errors.is_empty()
     }

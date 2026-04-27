@@ -31,4 +31,10 @@ pub const STDLIB_FUNCTIONS: &[(&str, &str)] = &[
     ("floor",           "fn(n: Float) -> Int"),
     ("ceil",            "fn(n: Float) -> Int"),
     ("read_line",       "fn() -> Str"),
+    // M8: async stdlib intrinsics — see `ferric_vm::bytecode::AsyncIntrinsics`.
+    ("spawn",            "fn(task: Async<T>) -> Handle<T>"),
+    ("join",             "fn(a: Handle<A>, b: Handle<B>) -> (A, B)"),
+    ("sleep",            "fn(ms: Int) -> Async<Unit>"),
+    ("shell_run_async",  "fn(cmd: Str) -> Async<ShellOutput>"),
+    ("block_on",         "fn(task: Async<T>) -> T"),
 ];

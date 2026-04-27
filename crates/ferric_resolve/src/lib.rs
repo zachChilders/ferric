@@ -344,10 +344,22 @@ impl Resolver {
         None
     }
 
-    /// If we're currently resolving inside one or more closures, record `def_id`
-    /// as a capture for every enclosing closure whose `scope_floor` is greater
-    /// than `binding_scope`. This handles nested closures correctly.
+    /// If we're currently resolving inside one or more closures (or async
+    /// blocks — same machinery), record `def_id` as a capture for every
+    /// enclosing closure whose `scope_floor` is greater than
+    /// `binding_scope`. Handles nested closures correctly.
+    ///
+    /// **Skips top-level functions and natives**: these are globally
+    /// addressable via their `chunk_idx` (`fn_slots`) — the compiler emits
+    /// `Constant::Fn` / `Constant::NativeFn` references at the use site,
+    /// not a slot load. Capturing them would route a function reference
+    /// through a value slot that nothing fills in (the outer scope has no
+    /// local for the fn name), producing a runtime "value is not
+    /// callable" when the closure tries to invoke it.
     fn note_capture(&mut self, def_id: DefId, name: Symbol, binding_scope: usize) {
+        if self.fn_slots.contains_key(&def_id) {
+            return;
+        }
         for frame in self.closure_stack.iter_mut() {
             if binding_scope < frame.scope_floor && frame.captured_set.insert(def_id) {
                 frame.captures.push((def_id, name));
@@ -450,8 +462,15 @@ impl Resolver {
         // (regardless of order) can be resolved.
         for item in &ast.items {
             match item {
-                Item::FnDef { name, params, .. } => {
-                    self.fn_params.insert(*name, params.clone());
+                Item::Fn(item) => {
+                    self.fn_params.insert(item.name, item.params.clone());
+                }
+                Item::AsyncFn(decl) => {
+                    // For resolution / canonical-arg purposes an async fn is
+                    // structurally identical to a sync fn. The lowering pass
+                    // (M8 Task 4) rewraps it as Item::Fn before the compiler
+                    // runs, but the resolver looks at the original AST.
+                    self.fn_params.insert(decl.item.name, decl.item.params.clone());
                 }
                 Item::StructDef { name, fields, span, .. } => {
                     let def_id = self.def_id_gen.next();
@@ -507,45 +526,12 @@ impl Resolver {
     /// Resolves a top-level item.
     fn resolve_item(&mut self, item: &Item) {
         match item {
-            Item::FnDef { name, params, body, span, .. } => {
-                // Create DefId for the function
-                let fn_def_id = self.define(*name, false, *span);
-
-                // Assign function slot
-                let fn_slot = self.next_fn_slot;
-                self.next_fn_slot += 1;
-                self.fn_slots.insert(fn_def_id, fn_slot);
-
-                // Push a new scope for function body
-                self.push_scope();
-
-                // Increment function depth (we're inside a function now)
-                self.fn_depth += 1;
-
-                // Define parameters in the function scope
-                for param in params {
-                    let param_def_id = self.define(param.name, false, param.span);
-
-                    // Assign variable slot to parameter
-                    let slot = self.next_slot;
-                    self.next_slot += 1;
-                    self.def_slots.insert(param_def_id, slot);
-
-                    // Resolve default expression (if any) in the outer scope — defaults
-                    // are evaluated before the function body runs.
-                    if let Some(default) = &param.default {
-                        self.resolve_expr(default);
-                    }
-                }
-
-                // Resolve function body
-                self.resolve_expr(body);
-
-                // Decrement function depth
-                self.fn_depth -= 1;
-
-                // Pop function scope
-                self.pop_scope();
+            Item::Fn(item) => {
+                self.resolve_fn_body(item.name, &item.params, &item.body, item.span);
+            }
+            Item::AsyncFn(decl) => {
+                let f = &decl.item;
+                self.resolve_fn_body(f.name, &f.params, &f.body, f.span);
             }
             Item::StructDef { .. } | Item::EnumDef { .. } | Item::TraitDef { .. } => {
                 // Type-level definitions: nothing to resolve in the body. The
@@ -566,6 +552,42 @@ impl Resolver {
                 self.resolve_item(&decl.item);
             }
         }
+    }
+
+    /// Shared resolver path for plain `fn` and `async fn` items: allocates
+    /// the function's DefId + fn_slot, defines parameter bindings in a fresh
+    /// scope, and walks the body. Async fns are otherwise structurally
+    /// identical to sync ones at the resolver layer — the `Async<T>` wrapping
+    /// shows up only in the type checker.
+    fn resolve_fn_body(
+        &mut self,
+        name: ferric_common::Symbol,
+        params: &[ferric_common::Param],
+        body: &Expr,
+        span: ferric_common::Span,
+    ) {
+        let fn_def_id = self.define(name, false, span);
+        let fn_slot = self.next_fn_slot;
+        self.next_fn_slot += 1;
+        self.fn_slots.insert(fn_def_id, fn_slot);
+
+        self.push_scope();
+        self.fn_depth += 1;
+
+        for param in params {
+            let param_def_id = self.define(param.name, false, param.span);
+            let slot = self.next_slot;
+            self.next_slot += 1;
+            self.def_slots.insert(param_def_id, slot);
+            if let Some(default) = &param.default {
+                self.resolve_expr(default);
+            }
+        }
+
+        self.resolve_expr(body);
+
+        self.fn_depth -= 1;
+        self.pop_scope();
     }
 
     /// Resolves an `impl` block method body. The method has already been
@@ -941,6 +963,33 @@ impl Resolver {
                 // we only need to walk the inner expression.
                 self.resolve_expr(&c.expr);
             }
+            // `await operand` — just walk the operand. The parser's fast-path
+            // catches top-level await; the type checker enforces async context.
+            Expr::Await(a) => {
+                self.resolve_expr(&a.operand);
+            }
+            // `async { body }` — captures any locals bound in enclosing scopes,
+            // exactly like a closure. The compiler hoists the body into its
+            // own chunk (M8 Task 5 Option A); the captures it needs are
+            // collected here via the same `closure_stack` machinery used for
+            // `Expr::Closure`. Storing under the same `captures` map is fine
+            // because NodeIds are globally unique.
+            Expr::AsyncBlock(b) => {
+                self.push_scope();
+                let scope_floor = self.scopes.len();
+                self.closure_stack.push(ClosureFrame {
+                    id: b.id,
+                    scope_floor,
+                    captures: Vec::new(),
+                    captured_set: std::collections::HashSet::new(),
+                });
+
+                self.resolve_expr(&b.block);
+
+                let frame = self.closure_stack.pop().expect("async-block frame popped");
+                self.captures.insert(frame.id, frame.captures);
+                self.pop_scope();
+            }
         }
     }
 
@@ -1048,7 +1097,7 @@ impl Resolver {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ferric_common::{Span, Symbol, NodeId, Item, Stmt, Expr, Literal, Param, TypeAnnotation};
+    use ferric_common::{Span, Symbol, NodeId, FnItem, Item, Stmt, Expr, Literal, Param, TypeAnnotation};
 
     fn make_span() -> Span {
         Span::new(0, 0)
@@ -1113,7 +1162,7 @@ mod tests {
         // fn foo(x: Int) { x }
         let ast = ParseResult::new(
             vec![
-                Item::FnDef {
+                Item::Fn(FnItem {
                     id: make_node_id(0),
                     name: make_sym(0), // foo
                     type_params: vec![],
@@ -1125,7 +1174,7 @@ mod tests {
                         span: make_span(),
                     },
                     span: make_span(),
-                },
+                }),
             ],
             vec![],
         );
@@ -1384,7 +1433,7 @@ mod tests {
         // fn foo(x: Int) { let y = x; y }
         let ast = ParseResult::new(
             vec![
-                Item::FnDef {
+                Item::Fn(FnItem {
                     id: make_node_id(0),
                     name: make_sym(0), // foo
                     type_params: vec![],
@@ -1414,7 +1463,7 @@ mod tests {
                         span: make_span(),
                     },
                     span: make_span(),
-                },
+                }),
             ],
             vec![],
         );

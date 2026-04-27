@@ -35,11 +35,18 @@ fn push_item_symbol(
     out: &mut Vec<DocumentSymbol>,
 ) {
     match item {
-        Item::FnDef { name, span, .. } => {
+        Item::Fn(item) => {
             out.push(make_symbol(
-                snapshot.interner.resolve(*name).to_string(),
+                snapshot.interner.resolve(item.name).to_string(),
                 SymbolKind::FUNCTION,
-                li.range_of(*span),
+                li.range_of(item.span),
+            ));
+        }
+        Item::AsyncFn(decl) => {
+            out.push(make_symbol(
+                snapshot.interner.resolve(decl.item.name).to_string(),
+                SymbolKind::FUNCTION,
+                li.range_of(decl.span),
             ));
         }
         Item::StructDef { name, span, .. } => {

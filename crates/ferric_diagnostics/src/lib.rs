@@ -22,8 +22,8 @@
 //! header-only block in that case.
 
 use ferric_common::{
-    ExhaustivenessError, Interner, LexError, ManifestError, ModuleError, ParseError,
-    ResolveError, Span, Symbol, TypeError,
+    AsyncLowerError, AsyncWarning, AsyncWarningKind, ExhaustivenessError, Interner, LexError,
+    ManifestError, ModuleError, ParseError, ResolveError, Span, Symbol, TypeError,
 };
 
 /// Public entry point for diagnostics. Keep the surface stable: every other
@@ -210,6 +210,33 @@ impl<'a> Renderer<'a> {
                 notes: vec![
                     "closures use `|param| body`; Ferric has no bitwise-or operator".to_string(),
                 ],
+                help: None,
+            }),
+            ParseError::AwaitOutsideAsync { span } => self.render(Diag {
+                kind: "error",
+                message: "`.await` used outside of any function",
+                primary: Some(Label {
+                    span: *span,
+                    message: Some(
+                        "`.await` can only appear inside an `async fn` or `async` block"
+                            .to_string(),
+                    ),
+                }),
+                secondary: vec![],
+                notes: vec![],
+                help: None,
+            }),
+            ParseError::AsyncOnNonFn { span } => self.render(Diag {
+                kind: "error",
+                message: "`async` must be followed by `fn` or `{`",
+                primary: Some(Label {
+                    span: *span,
+                    message: Some(
+                        "did you mean `async fn` or `async { ... }`?".to_string(),
+                    ),
+                }),
+                secondary: vec![],
+                notes: vec![],
                 help: None,
             }),
         }
@@ -720,6 +747,78 @@ impl<'a> Renderer<'a> {
                         .to_string(),
                 ),
             }),
+            TypeError::AwaitOutsideAsync { span } => self.render(Diag {
+                kind: "error",
+                message: "`.await` is only valid inside an `async fn` or `async { ... }` block",
+                primary: Some(Label {
+                    span: *span,
+                    message: Some("not inside an async context".to_string()),
+                }),
+                secondary: vec![],
+                notes: vec![],
+                help: None,
+            }),
+            TypeError::AwaitOnNonAsync { found, span } => self.render(Diag {
+                kind: "error",
+                message: &format!(
+                    "`.await` requires an `Async<T>` operand, found `{}`",
+                    found.description()
+                ),
+                primary: Some(Label { span: *span, message: None }),
+                secondary: vec![],
+                notes: vec![],
+                help: None,
+            }),
+            TypeError::AsyncBlockInSync { span } => self.render(Diag {
+                kind: "error",
+                message: "`async { ... }` produces an `Async<T>` value that cannot be used here",
+                primary: Some(Label { span: *span, message: None }),
+                secondary: vec![],
+                notes: vec![],
+                help: None,
+            }),
+            TypeError::SpawnNonAsync { found, span } => self.render(Diag {
+                kind: "error",
+                message: &format!(
+                    "`spawn` requires an `Async<T>` argument, found `{}`",
+                    found.description()
+                ),
+                primary: Some(Label { span: *span, message: None }),
+                secondary: vec![],
+                notes: vec![],
+                help: None,
+            }),
+            TypeError::AsyncNotAwaited { found, expected, span } => self.render(Diag {
+                kind: "error",
+                message: &format!(
+                    "this expression is `{}` but `{}` is expected",
+                    found.description(),
+                    expected.description()
+                ),
+                primary: Some(Label {
+                    span: *span,
+                    message: Some(format!(
+                        "this is `{}`; add `.await` to resolve it",
+                        found.description()
+                    )),
+                }),
+                secondary: vec![],
+                notes: vec![],
+                help: Some("call `.await` on the value to extract the inner result".to_string()),
+            }),
+            TypeError::JoinNonHandle { found, span } => self.render(Diag {
+                kind: "error",
+                message: &format!(
+                    "`join` requires `Handle<T>` arguments, found `{}`",
+                    found.description()
+                ),
+                primary: Some(Label { span: *span, message: None }),
+                secondary: vec![],
+                notes: vec![],
+                help: Some(
+                    "use `spawn(task: ...)` to obtain a `Handle<T>` from an `Async<T>`".to_string(),
+                ),
+            }),
         }
     }
 
@@ -748,6 +847,66 @@ impl<'a> Renderer<'a> {
                 kind: "warning",
                 message: "unreachable match arm",
                 primary: Some(Label { span: *span, message: None }),
+                secondary: vec![],
+                notes: vec![],
+                help: None,
+            }),
+        }
+    }
+
+    pub fn render_async_lower_error(&self, error: &AsyncLowerError) -> String {
+        match error {
+            AsyncLowerError::CaptureAcrossAwait { name, await_span, capture_span } => {
+                self.render(Diag {
+                    kind: "error",
+                    message: &format!(
+                        "value `{}` cannot be captured across an `await` point",
+                        self.name(*name)
+                    ),
+                    primary: Some(Label {
+                        span: *await_span,
+                        message: Some("value would need to live across this await".to_string()),
+                    }),
+                    secondary: vec![Label {
+                        span: *capture_span,
+                        message: Some("value defined here".to_string()),
+                    }],
+                    notes: vec![],
+                    help: Some(
+                        "move the capture inside the awaited subexpression, or clone its value before the await"
+                            .to_string(),
+                    ),
+                })
+            }
+            AsyncLowerError::InfiniteAsyncRecursion { fn_name, span } => self.render(Diag {
+                kind: "error",
+                message: &format!(
+                    "`async fn {}` recurses without a suspension point",
+                    self.name(*fn_name)
+                ),
+                primary: Some(Label {
+                    span: *span,
+                    message: Some("the body always awaits a call to this fn".to_string()),
+                }),
+                secondary: vec![],
+                notes: vec![],
+                help: Some(
+                    "introduce a base case or another `.await` so the scheduler can yield"
+                        .to_string(),
+                ),
+            }),
+        }
+    }
+
+    pub fn render_async_warning(&self, warning: &AsyncWarning) -> String {
+        match warning.kind {
+            AsyncWarningKind::BlockingShell => self.render(Diag {
+                kind: "warning",
+                message: "shell `$` outside an async context — this will block the thread",
+                primary: Some(Label {
+                    span: warning.span,
+                    message: Some("wrap in `async { ... }` to make it non-blocking".to_string()),
+                }),
                 secondary: vec![],
                 notes: vec![],
                 help: None,
@@ -881,6 +1040,17 @@ impl<'a> Renderer<'a> {
                 secondary: vec![],
                 notes: vec![],
                 help: None,
+            }),
+            RuntimeError::AsyncDeadlock { span } => self.render(Diag {
+                kind: "error",
+                message: "scheduler deadlock — no task made progress",
+                primary: nonzero_label(*span),
+                secondary: vec![],
+                notes: vec![],
+                help: Some(
+                    "an awaited handle never resolved; check for tasks awaiting each other"
+                        .to_string(),
+                ),
             }),
         }
     }

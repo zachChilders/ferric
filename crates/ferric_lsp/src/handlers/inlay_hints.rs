@@ -58,11 +58,11 @@ struct Ctx<'a> {
 
 fn collect_for_item(item: &Item, cx: &Ctx, hints: &mut Vec<InlayHint>) {
     match item {
-        Item::FnDef { body, .. } => {
+        Item::Fn(item) => {
             // Top-level fn parameters always have explicit annotations
             // (the parser requires it), so they never produce hints.
             // Recurse into the body for nested lets and closures.
-            collect_for_expr(body, cx, hints);
+            collect_for_expr(&item.body, cx, hints);
         }
         Item::Script { stmt, .. } => collect_for_stmt(stmt, cx, hints),
         Item::ImplBlock { methods, .. } => {

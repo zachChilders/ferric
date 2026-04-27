@@ -9,9 +9,9 @@
 use std::collections::{HashMap, HashSet};
 
 use ferric_common::{
-    BinOp, DefId, Expr, ImplMethod, Interner, Item, Literal, MatchArm, NamedArg, NodeId,
+    BinOp, DefId, Expr, FnItem, ImplMethod, Interner, Item, Literal, MatchArm, NamedArg, NodeId,
     Param, ParseResult, Pattern, RequireStmt, ResolveResult, ShellPart, Span, Stmt, Symbol,
-    TraitRegistry, Ty, TyVar, TypeAnnotation, TypeError, TypeResult, TypeScheme,
+    TraitRegistry, Ty, TyVar, TypeAnnotation, TypeError, TypeParam, TypeResult, TypeScheme,
     UnOp,
 };
 
@@ -93,6 +93,9 @@ impl Substitution {
                 Box::new(self.apply(ok)),
                 Box::new(self.apply(err)),
             ),
+            Ty::Async(inner)  => Ty::Async(Box::new(self.apply(inner))),
+            Ty::Handle(inner) => Ty::Handle(Box::new(self.apply(inner))),
+            Ty::Poll(inner)   => Ty::Poll(Box::new(self.apply(inner))),
             other => other.clone(),
         }
     }
@@ -121,6 +124,7 @@ fn occurs_raw(var: TyVar, ty: &Ty) -> bool {
             .any(|(_, ts)| ts.iter().any(|t| occurs_raw(var, t))),
         Ty::Array(inner) | Ty::Option(inner) => occurs_raw(var, inner),
         Ty::Result(ok, err) => occurs_raw(var, ok) || occurs_raw(var, err),
+        Ty::Async(inner) | Ty::Handle(inner) | Ty::Poll(inner) => occurs_raw(var, inner),
         _ => false,
     }
 }
@@ -164,6 +168,7 @@ fn free_vars_raw(ty: &Ty, out: &mut HashSet<TyVar>) {
             free_vars_raw(ok, out);
             free_vars_raw(err, out);
         }
+        Ty::Async(inner) | Ty::Handle(inner) | Ty::Poll(inner) => free_vars_raw(inner, out),
         _ => {}
     }
 }
@@ -293,6 +298,12 @@ struct TypeInfer<'a> {
     /// `None` at the top level (script statements).
     current_fn_ret: Option<Ty>,
 
+    /// Nesting count of async contexts (`async fn` body or `async { ... }`
+    /// block). `.await` is legal iff `async_depth > 0`. Mirrors the parser's
+    /// `fn_depth` but is async-specific — sync function bodies do not bump
+    /// this counter, only async ones do.
+    async_depth: usize,
+
     /// Stable mapping from a "generic" type-name symbol (e.g. `T`) to a
     /// fresh type variable, scoped to the function being processed.
     generic_aliases: HashMap<Symbol, TyVar>,
@@ -333,6 +344,7 @@ impl<'a> TypeInfer<'a> {
             subst: Substitution::new(),
             env: InferEnv::new(),
             current_fn_ret: None,
+            async_depth: 0,
             generic_aliases: HashMap::new(),
             bound_constraints: HashMap::new(),
             type_aliases: HashMap::new(),
@@ -397,50 +409,79 @@ impl<'a> TypeInfer<'a> {
         //    forward references and recursion type-check correctly.
         // `Export` is treated as transparent — its inner item participates
         // in the pre-pass exactly like a top-level item.
+        // `fn_aliases` parallels iteration over `Item::Fn` and `Item::AsyncFn`
+        // items in source order. The walk pass below uses the same iteration
+        // shape and consumes them in lockstep.
         let mut fn_aliases: Vec<HashMap<Symbol, TyVar>> = Vec::new();
         for item in &self.ast.items {
             let item = unwrap_export(item);
-            if let Item::FnDef { name, type_params, params, ret_ty, .. } = item {
-                let mut aliases = HashMap::new();
-                // Pre-seed aliases for declared generic parameters so they
-                // resolve to a stable TyVar across param/ret types — and so
-                // any trait bounds can be attached to that TyVar.
-                for tp in type_params {
-                    let var = self.fresh_var_only();
-                    aliases.insert(tp.name, var);
-                    if !tp.bounds.is_empty() {
-                        self.bound_constraints
-                            .entry(var)
-                            .or_default()
-                            .extend(tp.bounds.iter().copied());
-                    }
+            // Extract the inner FnItem-shaped fields plus an "async-wrap" flag
+            // so we can register both Fn and AsyncFn through the same path.
+            // For AsyncFn the call-site return type is wrapped in `Async<T>`.
+            let (name, type_params, params, ret_ty, is_async): (
+                Symbol,
+                &Vec<TypeParam>,
+                &Vec<Param>,
+                &TypeAnnotation,
+                bool,
+            ) = match item {
+                Item::Fn(FnItem { name, type_params, params, ret_ty, .. }) => {
+                    (*name, type_params, params, ret_ty, false)
                 }
-                let param_tys: Vec<Ty> = params
-                    .iter()
-                    .map(|p| self.resolve_type_annotation(&p.ty, &mut aliases))
-                    .collect();
-                let ret_ty_resolved = self.resolve_type_annotation(ret_ty, &mut aliases);
-                let fn_ty = Ty::Fn {
-                    params: param_tys,
-                    ret: Box::new(ret_ty_resolved),
-                };
-                // Generic functions: do NOT quantify the type parameters.
-                // This sidesteps freshening at call sites so the function's
-                // body and call site share the same TyVar, which lets
-                // method-call dispatch and bound checking resolve through
-                // the global substitution. The trade-off is that a generic
-                // function can only be called with one concrete type per
-                // type parameter — adequate for M5's one-specialization
-                // model.
-                let forall = if type_params.is_empty() {
-                    aliases.values().copied().collect()
-                } else {
-                    Vec::new()
-                };
-                let scheme = TypeScheme { forall, ty: fn_ty };
-                self.env.define(*name, scheme);
-                fn_aliases.push(aliases);
+                Item::AsyncFn(decl) => {
+                    let f = &decl.item;
+                    (f.name, &f.type_params, &f.params, &f.ret_ty, true)
+                }
+                _ => continue,
+            };
+
+            let mut aliases = HashMap::new();
+            // Pre-seed aliases for declared generic parameters so they
+            // resolve to a stable TyVar across param/ret types — and so
+            // any trait bounds can be attached to that TyVar.
+            for tp in type_params {
+                let var = self.fresh_var_only();
+                aliases.insert(tp.name, var);
+                if !tp.bounds.is_empty() {
+                    self.bound_constraints
+                        .entry(var)
+                        .or_default()
+                        .extend(tp.bounds.iter().copied());
+                }
             }
+            let param_tys: Vec<Ty> = params
+                .iter()
+                .map(|p| self.resolve_type_annotation(&p.ty, &mut aliases))
+                .collect();
+            let ret_ty_resolved = self.resolve_type_annotation(ret_ty, &mut aliases);
+            // For `async fn foo(...) -> T`, the call-site signature is
+            // `fn(...) -> Async<T>`. The body itself still type-checks
+            // against `T` (handled in the walk pass below).
+            let call_site_ret = if is_async {
+                Ty::Async(Box::new(ret_ty_resolved))
+            } else {
+                ret_ty_resolved
+            };
+            let fn_ty = Ty::Fn {
+                params: param_tys,
+                ret: Box::new(call_site_ret),
+            };
+            // Generic functions: do NOT quantify the type parameters.
+            // This sidesteps freshening at call sites so the function's
+            // body and call site share the same TyVar, which lets
+            // method-call dispatch and bound checking resolve through
+            // the global substitution. The trade-off is that a generic
+            // function can only be called with one concrete type per
+            // type parameter — adequate for M5's one-specialization
+            // model.
+            let forall = if type_params.is_empty() {
+                aliases.values().copied().collect()
+            } else {
+                Vec::new()
+            };
+            let scheme = TypeScheme { forall, ty: fn_ty };
+            self.env.define(name, scheme);
+            fn_aliases.push(aliases);
         }
 
         // 4. Walk items: check each function body and each script statement.
@@ -449,10 +490,21 @@ impl<'a> TypeInfer<'a> {
         for item in &self.ast.items {
             let item = unwrap_export(item);
             match item {
-                Item::FnDef { id, params, ret_ty, body, .. } => {
+                Item::Fn(FnItem { id, params, ret_ty, body, .. }) => {
                     let aliases = fn_aliases[fn_idx].clone();
                     fn_idx += 1;
                     self.check_fn_def(*id, params, ret_ty, body, aliases);
+                }
+                Item::AsyncFn(decl) => {
+                    let aliases = fn_aliases[fn_idx].clone();
+                    fn_idx += 1;
+                    let f = &decl.item;
+                    // The body type-checks against the *inner* T (declared
+                    // ret_ty), not against `Async<T>` — `async fn`'s call-site
+                    // wrapping happens at use sites, not in the body.
+                    self.async_depth += 1;
+                    self.check_fn_def(f.id, &f.params, &f.ret_ty, &f.body, aliases);
+                    self.async_depth -= 1;
                 }
                 Item::StructDef { .. } | Item::EnumDef { .. } | Item::TraitDef { .. } => {
                     // Type-only definitions; bodies (if any) are signatures
@@ -619,6 +671,75 @@ impl<'a> TypeInfer<'a> {
             self.env
                 .define(sym, TypeScheme { forall: vec![elem_var], ty: fn_ty });
         }
+
+        // M8 Task 3: `spawn(task: Async<T>) -> Handle<T>` — generic in T.
+        if let Some(sym) = self.interner.lookup("spawn") {
+            let t = TyVar(self.next_tyvar);
+            self.next_tyvar += 1;
+            let fn_ty = Ty::Fn {
+                params: vec![Ty::Async(Box::new(Ty::Var(t)))],
+                ret: Box::new(Ty::Handle(Box::new(Ty::Var(t)))),
+            };
+            self.env
+                .define(sym, TypeScheme { forall: vec![t], ty: fn_ty });
+        }
+
+        // M8 Task 3: `join(a: Handle<A>, b: Handle<B>) -> (A, B)` — generic in
+        // A, B. The spec mentions optional 3-arity and 4-arity overloads, but
+        // the milestone done-when only requires the 2-arity form; the
+        // additional overloads are deferred until a real call site demands
+        // them.
+        if let Some(sym) = self.interner.lookup("join") {
+            let a = TyVar(self.next_tyvar);
+            self.next_tyvar += 1;
+            let b = TyVar(self.next_tyvar);
+            self.next_tyvar += 1;
+            let fn_ty = Ty::Fn {
+                params: vec![
+                    Ty::Handle(Box::new(Ty::Var(a))),
+                    Ty::Handle(Box::new(Ty::Var(b))),
+                ],
+                ret: Box::new(Ty::Tuple(vec![Ty::Var(a), Ty::Var(b)])),
+            };
+            self.env
+                .define(sym, TypeScheme { forall: vec![a, b], ty: fn_ty });
+        }
+
+        // M8 Task 5: `sleep(ms: Int) -> Async<Unit>` — wall-clock pause.
+        if let Some(sym) = self.interner.lookup("sleep") {
+            let fn_ty = Ty::Fn {
+                params: vec![Ty::Int],
+                ret: Box::new(Ty::Async(Box::new(Ty::Unit))),
+            };
+            self.env.define(sym, TypeScheme::monomorphic(fn_ty));
+        }
+
+        // M8 Task 5: `shell_run_async(cmd: Str) -> Async<ShellOutput>`.
+        // The async-context lowering rewrites `$ ...` inside async fns to a
+        // call here.
+        if let Some(sym) = self.interner.lookup("shell_run_async") {
+            let fn_ty = Ty::Fn {
+                params: vec![Ty::Str],
+                ret: Box::new(Ty::Async(Box::new(Ty::ShellOutput))),
+            };
+            self.env.define(sym, TypeScheme::monomorphic(fn_ty));
+        }
+
+        // M8 Task 5: `block_on(task: Async<T>) -> T` — host-side runner.
+        // Generic in T; mirrors `await` but is callable from sync top-level
+        // code where `await` would be a parse/type error. Needed to extract
+        // results from async-producing functions when the script itself is
+        // not async.
+        if let Some(sym) = self.interner.lookup("block_on") {
+            let t = TyVar(self.next_tyvar);
+            self.next_tyvar += 1;
+            let fn_ty = Ty::Fn {
+                params: vec![Ty::Async(Box::new(Ty::Var(t)))],
+                ret: Box::new(Ty::Var(t)),
+            };
+            self.env
+                .define(sym, TypeScheme { forall: vec![t], ty: fn_ty });
+        }
     }
 
     fn check_fn_def(
@@ -731,6 +852,15 @@ impl<'a> TypeInfer<'a> {
                         Box::new(self.resolve_type_annotation(ok, aliases)),
                         Box::new(self.resolve_type_annotation(err, aliases)),
                     ),
+                    ("Async", [inner]) => Ty::Async(Box::new(
+                        self.resolve_type_annotation(inner, aliases),
+                    )),
+                    ("Handle", [inner]) => Ty::Handle(Box::new(
+                        self.resolve_type_annotation(inner, aliases),
+                    )),
+                    ("Poll", [inner]) => Ty::Poll(Box::new(
+                        self.resolve_type_annotation(inner, aliases),
+                    )),
                     _ => self.fresh_tyvar(),
                 }
             }
@@ -797,7 +927,24 @@ impl<'a> TypeInfer<'a> {
                 let bound_ty = if let Some(ann) = ty {
                     let mut tmp = HashMap::new();
                     let declared = self.resolve_type_annotation(ann, &mut tmp);
-                    self.unify(&declared, &init_ty, *span);
+                    // M8 Task 3 friendliness: if the user wrote `let x: T = e`
+                    // where `e: Async<T>`, the most likely fix is `.await`.
+                    // Emit `AsyncNotAwaited` instead of generic `Mismatch`
+                    // for this very common case. We still unify so other
+                    // dependent inference proceeds.
+                    let init_resolved = self.subst.apply(&init_ty);
+                    let declared_resolved = self.subst.apply(&declared);
+                    if matches!(&init_resolved, Ty::Async(_))
+                        && !matches!(&declared_resolved, Ty::Async(_) | Ty::Var(_))
+                    {
+                        self.errors.push(TypeError::AsyncNotAwaited {
+                            found: init_resolved,
+                            expected: declared_resolved,
+                            span: init.span(),
+                        });
+                    } else {
+                        self.unify(&declared, &init_ty, *span);
+                    }
                     declared
                 } else {
                     init_ty.clone()
@@ -946,6 +1093,38 @@ impl<'a> TypeInfer<'a> {
                     self.infer_args(args)
                 };
 
+                // M8 Task 3: friendlier errors for stdlib `spawn` / `join`.
+                // When the callee is a direct reference to one of these and an
+                // argument has the wrong shape, emit `SpawnNonAsync` /
+                // `JoinNonHandle` instead of a generic `Mismatch`. Detect on
+                // the source name; the full type-driven path still runs below
+                // so any other unification failures still surface.
+                let callee_name = match callee.as_ref() {
+                    Expr::Variable { name, .. } => Some(self.interner.resolve(*name)),
+                    _ => None,
+                };
+                if callee_name == Some("spawn") {
+                    if let Some(arg_ty) = arg_tys.first() {
+                        let resolved = self.subst.apply(arg_ty);
+                        if !matches!(&resolved, Ty::Async(_) | Ty::Var(_)) {
+                            self.errors.push(TypeError::SpawnNonAsync {
+                                found: resolved,
+                                span: *span,
+                            });
+                        }
+                    }
+                } else if callee_name == Some("join") {
+                    for arg_ty in &arg_tys {
+                        let resolved = self.subst.apply(arg_ty);
+                        if !matches!(&resolved, Ty::Handle(_) | Ty::Var(_)) {
+                            self.errors.push(TypeError::JoinNonHandle {
+                                found: resolved,
+                                span: *span,
+                            });
+                        }
+                    }
+                }
+
                 let ret_ty = self.fresh_tyvar();
                 let expected_fn_ty = Ty::Fn {
                     params: arg_tys.clone(),
@@ -970,7 +1149,18 @@ impl<'a> TypeInfer<'a> {
                         });
                     }
                     _ => {
-                        self.unify(&callee_ty, &expected_fn_ty, *span);
+                        // For `spawn`/`join` we already pushed a dedicated
+                        // diagnostic above; skip the generic unify so we don't
+                        // double-report the same problem.
+                        let dedicated = matches!(callee_name, Some("spawn") | Some("join"));
+                        if !dedicated {
+                            self.unify(&callee_ty, &expected_fn_ty, *span);
+                        } else {
+                            // Still attempt a try_unify so the substitution
+                            // captures the inferred T (used to type the call's
+                            // return value), but swallow any failure.
+                            let _ = self.try_unify(&callee_ty, &expected_fn_ty);
+                        }
                     }
                 }
 
@@ -1357,6 +1547,47 @@ impl<'a> TypeInfer<'a> {
                 self.node_types.insert(c.id, inner.clone());
                 inner
             }
+            Expr::Await(a) => {
+                let operand_ty = self.infer_expr(&a.operand);
+                if self.async_depth == 0 {
+                    self.errors
+                        .push(TypeError::AwaitOutsideAsync { span: a.span });
+                }
+                // Result is whatever the inner T is. Try unifying with both
+                // `Async<?T>` and `Handle<?T>` — whichever matches, that's
+                // the awaited value's type. If neither matches the operand,
+                // emit AwaitOnNonAsync against the resolved operand type.
+                let inner = self.fresh_tyvar();
+                let async_shape = Ty::Async(Box::new(inner.clone()));
+                let handle_shape = Ty::Handle(Box::new(inner.clone()));
+                let resolved = self.subst.apply(&operand_ty);
+                let unified = match &resolved {
+                    Ty::Async(_) => self.try_unify(&operand_ty, &async_shape).is_ok(),
+                    Ty::Handle(_) => self.try_unify(&operand_ty, &handle_shape).is_ok(),
+                    Ty::Var(_) => {
+                        // Operand still ambiguous — bias toward Async<T>.
+                        self.try_unify(&operand_ty, &async_shape).is_ok()
+                    }
+                    _ => false,
+                };
+                if !unified {
+                    self.errors.push(TypeError::AwaitOnNonAsync {
+                        found: resolved,
+                        span: a.span,
+                    });
+                }
+                let resolved_inner = self.subst.apply(&inner);
+                self.node_types.insert(a.id, resolved_inner.clone());
+                resolved_inner
+            }
+            Expr::AsyncBlock(b) => {
+                self.async_depth += 1;
+                let body_ty = self.infer_expr(&b.block);
+                self.async_depth -= 1;
+                let result = Ty::Async(Box::new(body_ty));
+                self.node_types.insert(b.id, result.clone());
+                result
+            }
         };
 
         ty
@@ -1717,6 +1948,9 @@ impl<'a> TypeInfer<'a> {
                 self.try_unify(&a_ok, &b_ok)?;
                 self.try_unify(&a_err, &b_err)
             }
+            (Ty::Async(a), Ty::Async(b)) => self.try_unify(&a, &b),
+            (Ty::Handle(a), Ty::Handle(b)) => self.try_unify(&a, &b),
+            (Ty::Poll(a), Ty::Poll(b)) => self.try_unify(&a, &b),
 
             _ => Err(()),
         }
@@ -1766,7 +2000,7 @@ impl<'a> TypeInfer<'a> {
             .items
             .iter()
             .find_map(|item| match item {
-                Item::FnDef { name, type_params, .. } if *name == fn_name => Some(
+                Item::Fn(FnItem { name, type_params, .. }) if *name == fn_name => Some(
                     type_params
                         .iter()
                         .filter(|tp| !tp.bounds.is_empty())
@@ -1799,7 +2033,7 @@ impl<'a> TypeInfer<'a> {
         // declared param types of the FnDef. We rely on the original type
         // annotations being identifiers like "T".
         let fn_def = self.ast.items.iter().find_map(|item| match item {
-            Item::FnDef { name, params, .. } if *name == fn_name => Some(params.clone()),
+            Item::Fn(FnItem { name, params, .. }) if *name == fn_name => Some(params.clone()),
             _ => None,
         });
         let formal_params = match fn_def {
@@ -1962,6 +2196,9 @@ fn rename_vars(ty: &Ty, mapping: &HashMap<TyVar, Ty>) -> Ty {
             Box::new(rename_vars(ok, mapping)),
             Box::new(rename_vars(err, mapping)),
         ),
+        Ty::Async(inner)  => Ty::Async(Box::new(rename_vars(inner, mapping))),
+        Ty::Handle(inner) => Ty::Handle(Box::new(rename_vars(inner, mapping))),
+        Ty::Poll(inner)   => Ty::Poll(Box::new(rename_vars(inner, mapping))),
         other => other.clone(),
     }
 }
@@ -2000,6 +2237,9 @@ fn default_remaining_vars(ty: &Ty) -> Ty {
             Box::new(default_remaining_vars(ok)),
             Box::new(default_remaining_vars(err)),
         ),
+        Ty::Async(inner)  => Ty::Async(Box::new(default_remaining_vars(inner))),
+        Ty::Handle(inner) => Ty::Handle(Box::new(default_remaining_vars(inner))),
+        Ty::Poll(inner)   => Ty::Poll(Box::new(default_remaining_vars(inner))),
         other => other.clone(),
     }
 }
@@ -2020,7 +2260,7 @@ fn span_in_item(item: &Item, target: NodeId) -> Option<Span> {
         return Some(item.span());
     }
     match item {
-        Item::FnDef { body, .. } => span_in_expr(body, target),
+        Item::Fn(item) => span_in_expr(&item.body, target),
         Item::Script { stmt, .. } => span_in_stmt(stmt, target),
         Item::ImplBlock { methods, .. } => methods.iter().find_map(|m| {
             if m.id == target {
@@ -2031,6 +2271,7 @@ fn span_in_item(item: &Item, target: NodeId) -> Option<Span> {
         Item::StructDef { .. } | Item::EnumDef { .. } | Item::TraitDef { .. } => None,
         Item::Export(decl) => span_in_item(&decl.item, target),
         Item::Import(_) | Item::TypeAlias(_) => None,
+        Item::AsyncFn(decl) => span_in_expr(&decl.item.body, target),
     }
 }
 
@@ -2106,6 +2347,8 @@ fn span_in_expr(expr: &Expr, target: NodeId) -> Option<Span> {
             span_in_expr(array, target).or_else(|| span_in_expr(index, target))
         }
         Expr::Cast(c) => span_in_expr(&c.expr, target),
+        Expr::Await(a) => span_in_expr(&a.operand, target),
+        Expr::AsyncBlock(b) => span_in_expr(&b.block, target),
     }
 }
 
@@ -2144,6 +2387,7 @@ mod tests {
             subst: Substitution::new(),
             env: InferEnv::new(),
             current_fn_ret: None,
+            async_depth: 0,
             generic_aliases: HashMap::new(),
             bound_constraints: HashMap::new(),
             type_aliases: HashMap::new(),
@@ -2170,6 +2414,7 @@ mod tests {
             subst: Substitution::new(),
             env: InferEnv::new(),
             current_fn_ret: None,
+            async_depth: 0,
             generic_aliases: HashMap::new(),
             bound_constraints: HashMap::new(),
             type_aliases: HashMap::new(),
@@ -2198,6 +2443,7 @@ mod tests {
             subst: Substitution::new(),
             env: InferEnv::new(),
             current_fn_ret: None,
+            async_depth: 0,
             generic_aliases: HashMap::new(),
             bound_constraints: HashMap::new(),
             type_aliases: HashMap::new(),
@@ -2230,6 +2476,7 @@ mod tests {
             subst: Substitution::new(),
             env: InferEnv::new(),
             current_fn_ret: None,
+            async_depth: 0,
             generic_aliases: HashMap::new(),
             bound_constraints: HashMap::new(),
             type_aliases: HashMap::new(),

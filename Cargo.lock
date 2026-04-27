@@ -92,6 +92,7 @@ dependencies = [
 name = "ferric"
 version = "0.1.0"
 dependencies = [
+ "ferric_async",
  "ferric_common",
  "ferric_compiler",
  "ferric_diagnostics",
@@ -105,6 +106,13 @@ dependencies = [
  "ferric_stdlib",
  "ferric_traits",
  "ferric_vm",
+]
+
+[[package]]
+name = "ferric_async"
+version = "0.1.0"
+dependencies = [
+ "ferric_common",
 ]
 
 [[package]]

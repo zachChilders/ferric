@@ -5,6 +5,7 @@ use ferric_common::{
 use ferric_lexer::lex;
 use ferric_parser::parse_with_interner;
 use ferric_resolve::{resolve_with_imports_and_builtins, resolve_with_natives_and_builtins};
+use ferric_async::lower_async;
 use ferric_infer::typecheck;
 use ferric_traits::build_registry;
 use ferric_exhaust::check_exhaustiveness;
@@ -48,6 +49,14 @@ fn native_fn_table(interner: &mut Interner) -> Vec<(Symbol, Vec<Symbol>)> {
         ("floor",           &["n"]),
         ("ceil",            &["n"]),
         ("read_line",       &[]),
+        // M8: async stdlib functions. The runtime impls land in M8 Task 5;
+        // for now they're registered here so the resolver and type checker
+        // recognise the names. Calling them at runtime panics until Task 5.
+        ("spawn",           &["task"]),
+        ("join",            &["a", "b"]),
+        ("sleep",           &["ms"]),
+        ("shell_run_async", &["cmd"]),
+        ("block_on",        &["task"]),
     ];
     entries
         .iter()
@@ -183,8 +192,27 @@ fn run_file(filename: &str) {
         process::exit(1);
     }
 
+    // M8: lower async/await into ordinary state-machine items before
+    // compilation. M1–M7 programs (no async syntax) round-trip through
+    // this pass unchanged. Lowering errors halt compilation; warnings are
+    // rendered alongside ordinary diagnostics.
+    let async_result = lower_async(&parse_result, &type_result);
+    if !async_result.errors.is_empty() {
+        let renderer = Renderer::with_interner(source.clone(), &interner);
+        for err in &async_result.errors {
+            eprint!("{}", renderer.render_async_lower_error(err));
+        }
+        process::exit(1);
+    }
+    if !async_result.warnings.is_empty() {
+        let renderer = Renderer::with_interner(source.clone(), &interner);
+        for warn in &async_result.warnings {
+            eprint!("{}", renderer.render_async_warning(warn));
+        }
+    }
+
     // Compile to bytecode.
-    let program = ferric_compiler::compile(&parse_result, &resolve_result, &type_result, &interner);
+    let program = ferric_compiler::compile(&async_result.ast, &resolve_result, &type_result, &interner);
 
     // Create VM
     let mut vm: Box<dyn Executor> = Box::new(BytecodeVM::new());
@@ -337,8 +365,24 @@ fn run_session(source: &str) -> Result<(), String> {
             .join("\n"));
     }
 
+    // M8: lower async/await before compiling. See `run_file` for details.
+    let async_result = lower_async(&parse_result, &type_result);
+    if !async_result.errors.is_empty() {
+        let r = Renderer::with_interner(source.to_string(), &interner);
+        return Err(async_result
+            .errors
+            .iter()
+            .map(|e| r.render_async_lower_error(e))
+            .collect::<Vec<_>>()
+            .join("\n"));
+    }
+    for warn in &async_result.warnings {
+        let r = Renderer::with_interner(source.to_string(), &interner);
+        eprint!("{}", r.render_async_warning(warn));
+    }
+
     let program = ferric_compiler::compile(
-        &parse_result,
+        &async_result.ast,
         &resolve_result,
         &type_result,
         &interner,
@@ -375,6 +419,8 @@ fn print_repl_value(value: &Value) {
         Value::Tuple(elems) => println!("Tuple({:?})", elems),
         Value::Array(elems) => println!("{:?}", elems),
         Value::Closure { .. } => println!("<closure>"),
+        Value::Async(inner) => println!("Async({:?})", inner),
+        Value::Handle(id) => println!("Handle({})", id),
     }
 }
 

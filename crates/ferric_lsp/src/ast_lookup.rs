@@ -20,7 +20,7 @@ pub fn find_ident_at_byte(parse: &ParseResult, byte: u32) -> Option<(NodeId, Spa
 
 fn walk_item(item: &Item, byte: u32) -> Option<(NodeId, Span)> {
     match item {
-        Item::FnDef { body, .. } => walk_expr(body, byte),
+        Item::Fn(item) => walk_expr(&item.body, byte),
         Item::Script { stmt, .. } => walk_stmt(stmt, byte),
         Item::ImplBlock { methods, .. } => methods.iter().find_map(|m| walk_expr(&m.body, byte)),
         Item::Export(decl) => walk_item(&decl.item, byte),

@@ -168,26 +168,52 @@ pub struct CastExpr {
     pub target: TypeAnnotation,
 }
 
+/// A plain (synchronous) function definition.
+///
+/// Extracted as a struct so `AsyncFnItem` (M8) can wrap the same shape without
+/// duplicating fields. `Item::Fn` and `Item::AsyncFn(AsyncFnItem)` are the two
+/// shapes a function definition can take at the top level.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FnItem {
+    /// Unique identifier for this node
+    pub id: NodeId,
+    /// Function name
+    pub name: Symbol,
+    /// Generic type parameters (`<T, U: Bound>`). Empty for non-generic fns.
+    pub type_params: Vec<TypeParam>,
+    /// Parameters
+    pub params: Vec<Param>,
+    /// Return type
+    pub ret_ty: TypeAnnotation,
+    /// Function body
+    pub body: Expr,
+    /// Source location
+    pub span: Span,
+}
+
+/// An `async fn` definition. The inner `FnItem` is structurally identical to a
+/// synchronous function definition — `async` is a modifier, not a structural
+/// rewrite. Wrapping (rather than adding a boolean flag to `FnItem`) keeps the
+/// two forms distinct under exhaustive `match`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AsyncFnItem {
+    pub span: Span,
+    /// The inner fn — params, return type, and body are unchanged from the
+    /// synchronous form. The lowering pass (M8 Task 4) reads this and replaces
+    /// the enclosing `Item::AsyncFn` with an ordinary `Item::Fn` whose body
+    /// builds and returns the lowered state machine.
+    pub item: Box<FnItem>,
+}
+
 /// Top-level item in a Ferric program.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Item {
     /// Function definition
-    FnDef {
-        /// Unique identifier for this node
-        id: NodeId,
-        /// Function name
-        name: Symbol,
-        /// Generic type parameters (`<T, U: Bound>`). Empty for non-generic fns.
-        type_params: Vec<TypeParam>,
-        /// Parameters
-        params: Vec<Param>,
-        /// Return type
-        ret_ty: TypeAnnotation,
-        /// Function body
-        body: Expr,
-        /// Source location
-        span: Span,
-    },
+    Fn(FnItem),
+    /// `async fn` definition. The inner `FnItem` is the same shape as `Fn`;
+    /// the lowering pass rewrites this into an `Item::Fn` whose body returns
+    /// an `Async<T>` value built from the lowered state machine.
+    AsyncFn(AsyncFnItem),
     /// Struct definition
     StructDef {
         id: NodeId,
@@ -255,7 +281,8 @@ impl Item {
     /// Returns the NodeId of this item.
     pub fn id(&self) -> NodeId {
         match self {
-            Item::FnDef { id, .. } => *id,
+            Item::Fn(item) => item.id,
+            Item::AsyncFn(decl) => decl.item.id,
             Item::StructDef { id, .. } => *id,
             Item::EnumDef { id, .. } => *id,
             Item::TraitDef { id, .. } => *id,
@@ -270,7 +297,8 @@ impl Item {
     /// Returns the Span of this item.
     pub fn span(&self) -> Span {
         match self {
-            Item::FnDef { span, .. } => *span,
+            Item::Fn(item) => item.span,
+            Item::AsyncFn(decl) => decl.span,
             Item::StructDef { span, .. } => *span,
             Item::EnumDef { span, .. } => *span,
             Item::TraitDef { span, .. } => *span,
@@ -281,6 +309,28 @@ impl Item {
             Item::TypeAlias(decl) => decl.span,
         }
     }
+}
+
+/// A `.await` postfix expression. The operand is any expression evaluating to
+/// an `Async<T>` value (the type checker rejects awaits on non-async types).
+/// `.await` is legal only inside an `async fn` or `async { ... }` block — both
+/// the parser and type checker enforce this.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AwaitExpr {
+    pub id:      NodeId,
+    pub span:    Span,
+    /// The `Async<T>` value being awaited.
+    pub operand: Box<Expr>,
+}
+
+/// An `async { ... }` block expression. Lifts a synchronous block into an
+/// `Async<T>` value where `T` is the type of the block's tail expression.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AsyncBlockExpr {
+    pub id:    NodeId,
+    pub span:  Span,
+    /// The block being lifted. The parser guarantees this is `Expr::Block`.
+    pub block: Box<Expr>,
 }
 
 /// Expression in Ferric.
@@ -440,6 +490,10 @@ pub enum Expr {
     /// Cast expression: `expr as TypeExpr`. At runtime, this is a no-op;
     /// at type-check time, it wraps or unwraps an opaque type alias.
     Cast(CastExpr),
+    /// `expr.await` — postfix await on an `Async<T>` operand.
+    Await(AwaitExpr),
+    /// `async { ... }` — lifts a block into an `Async<T>` value.
+    AsyncBlock(AsyncBlockExpr),
 }
 
 /// A single arm of a `match` expression.
@@ -518,6 +572,8 @@ impl Expr {
             Expr::ArrayLit { id, .. } => *id,
             Expr::Index { id, .. } => *id,
             Expr::Cast(c) => c.id,
+            Expr::Await(a) => a.id,
+            Expr::AsyncBlock(b) => b.id,
         }
     }
 
@@ -547,6 +603,8 @@ impl Expr {
             Expr::ArrayLit { span, .. } => *span,
             Expr::Index { span, .. } => *span,
             Expr::Cast(c) => c.span,
+            Expr::Await(a) => a.span,
+            Expr::AsyncBlock(b) => b.span,
         }
     }
 }

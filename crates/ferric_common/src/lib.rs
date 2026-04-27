@@ -125,6 +125,14 @@ const _: fn() = || {
     check::<ManifestResult>();
     check::<Manifest>();
     check::<ManifestError>();
+    check::<FnItem>();
+    check::<AsyncFnItem>();
+    check::<AwaitExpr>();
+    check::<AsyncBlockExpr>();
+    check::<AsyncResult>();
+    check::<AsyncLowerError>();
+    check::<AsyncWarning>();
+    check::<AsyncWarningKind>();
 };
 
 #[cfg(test)]

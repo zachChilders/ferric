@@ -1,0 +1,16 @@
+// M8 — async fn with multiple sequential `await` points.
+//
+// Each `await` extracts the inner value from the previous async fn's
+// result. The final return type of `pipeline` is `Async<Str>`; `block_on`
+// drives it from sync top-level code.
+
+async fn step1() -> Int { 10 }
+async fn step2(x: Int) -> Int { x + 5 }
+async fn pipeline() -> Str {
+    let a = await step1()
+    let b = await step2(x: a)
+    int_to_str(n: b)
+}
+
+let result: Str = block_on(task: pipeline())
+println(s: result)

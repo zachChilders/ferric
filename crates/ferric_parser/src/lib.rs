@@ -12,11 +12,11 @@
 //! All other implementation details are private.
 
 use ferric_common::{
-    BinOp, CastExpr, Expr, ExportDecl, ImplMethod, ImportDecl, ImportItem, ImportItems,
-    ImportPath, Interner, Item, LexResult, Literal, MatchArm, NamedArg, NodeId, Param,
-    ParseError, ParseResult, Pattern, RequireMode, RequireStmt, ShellPart, ShellTokenPart,
-    Span, Stmt, Symbol, Token, TokenKind, TraitMethod, TypeAliasItem, TypeAnnotation,
-    TypeParam, UnOp,
+    AsyncBlockExpr, AsyncFnItem, AwaitExpr, BinOp, CastExpr, Expr, ExportDecl, FnItem,
+    ImplMethod, ImportDecl, ImportItem, ImportItems, ImportPath, Interner, Item, LexResult,
+    Literal, MatchArm, NamedArg, NodeId, Param, ParseError, ParseResult, Pattern, RequireMode,
+    RequireStmt, ShellPart, ShellTokenPart, Span, Stmt, Symbol, Token, TokenKind, TraitMethod,
+    TypeAliasItem, TypeAnnotation, TypeParam, UnOp,
 };
 
 /// Generates unique NodeIds for AST nodes.
@@ -58,6 +58,11 @@ struct Parser<'a> {
     /// `while cond { ... }`, `match scrutinee { ... }`) to consume the `{`.
     /// Mirrors rustc's `Restrictions::NO_STRUCT_LITERAL`.
     no_struct_literal: bool,
+    /// Nesting count of function-shaped scopes (`fn`, impl methods, closures,
+    /// and `async { ... }` blocks). Used as a parse-time fast-path so that
+    /// `await` at file top level (depth 0) is rejected immediately. Inside
+    /// any function-shaped scope, we defer to the type checker (Task 3).
+    fn_depth: u32,
 }
 
 impl<'a> Parser<'a> {
@@ -70,6 +75,7 @@ impl<'a> Parser<'a> {
             errors: Vec::new(),
             interner: None,
             no_struct_literal: false,
+            fn_depth: 0,
         }
     }
 
@@ -82,6 +88,7 @@ impl<'a> Parser<'a> {
             errors: Vec::new(),
             interner: Some(interner),
             no_struct_literal: false,
+            fn_depth: 0,
         }
     }
 
@@ -221,6 +228,7 @@ impl<'a> Parser<'a> {
                     return last_span;
                 }
                 TokenKind::Fn
+                | TokenKind::Async
                 | TokenKind::Struct
                 | TokenKind::Enum
                 | TokenKind::Trait
@@ -246,6 +254,7 @@ impl<'a> Parser<'a> {
             if matches!(
                 self.peek().kind,
                 TokenKind::Fn
+                    | TokenKind::Async
                     | TokenKind::Struct
                     | TokenKind::Enum
                     | TokenKind::Trait
@@ -264,6 +273,7 @@ impl<'a> Parser<'a> {
     fn parse_item(&mut self) -> Option<Item> {
         match self.peek().kind {
             TokenKind::Fn => self.parse_fn_def(),
+            TokenKind::Async => self.parse_async_item(),
             TokenKind::Struct => self.parse_struct_def(),
             TokenKind::Enum => self.parse_enum_def(),
             TokenKind::Trait => self.parse_trait_def(),
@@ -651,6 +661,7 @@ impl<'a> Parser<'a> {
                     return last_span;
                 }
                 TokenKind::Fn
+                | TokenKind::Async
                 | TokenKind::Struct
                 | TokenKind::Enum
                 | TokenKind::Trait
@@ -916,9 +927,14 @@ impl<'a> Parser<'a> {
             TypeAnnotation::Named(Symbol::new(0)) // Will need proper unit symbol
         };
 
-        // Parse body (must be a block)
+        // Parse body (must be a block). Bumping `fn_depth` here is what
+        // tells the prefix `await` parser to defer to the type checker
+        // for await-context validation.
         let body = if self.check(&TokenKind::LBrace) {
-            self.parse_block()
+            self.fn_depth += 1;
+            let body = self.parse_block();
+            self.fn_depth -= 1;
+            body
         } else {
             let token = self.peek().clone();
             self.errors.push(ParseError::UnexpectedToken {
@@ -932,7 +948,7 @@ impl<'a> Parser<'a> {
         let span = start_span.to(body.span());
         let id = self.node_id_gen.next();
 
-        Some(Item::FnDef {
+        Some(Item::Fn(FnItem {
             id,
             name,
             type_params,
@@ -940,7 +956,50 @@ impl<'a> Parser<'a> {
             ret_ty,
             body,
             span,
-        })
+        }))
+    }
+
+    /// Parses an `async`-prefixed item. Currently the only legal form at the
+    /// item level is `async fn ...`; anything else (e.g. `async let`,
+    /// `async struct`) produces `ParseError::AsyncOnNonFn`.
+    ///
+    /// `async { ... }` blocks are expressions, not items, and never reach
+    /// here — they are handled in `parse_primary` via `parse_script_expr`.
+    fn parse_async_item(&mut self) -> Option<Item> {
+        let async_span = self.peek().span;
+        self.advance(); // consume 'async'
+
+        match self.peek().kind {
+            TokenKind::Fn => {
+                let inner = self.parse_fn_def()?;
+                let item = match inner {
+                    Item::Fn(item) => item,
+                    other => return Some(other), // parse_fn_def always returns Item::Fn — be defensive
+                };
+                let span = async_span.to(item.span);
+                Some(Item::AsyncFn(AsyncFnItem {
+                    span,
+                    item: Box::new(item),
+                }))
+            }
+            TokenKind::LBrace => {
+                // `async {` at the top level: parse the async block as a
+                // script expression so the user gets the natural surface
+                // syntax `async { ... }` at file scope. Push the parser
+                // back one token so `parse_script_expr` re-enters from the
+                // `Async` token and dispatches into `parse_primary`.
+                self.current -= 1;
+                self.parse_script_expr()
+            }
+            _ => {
+                let bad = self.peek().clone();
+                let span = async_span.to(bad.span);
+                self.errors.push(ParseError::AsyncOnNonFn { span });
+                // Recover: skip the offending modifier and continue parsing
+                // whatever follows as a normal item.
+                self.parse_item()
+            }
+        }
     }
 
     /// Parses a generic parameter list: `<T, U: Trait, V: A + B>`.
@@ -1172,7 +1231,7 @@ impl<'a> Parser<'a> {
 
     /// Parses one impl method: `fn name(params) -> Ret { body }`. Identical
     /// to a free-standing `fn` except it lives inside an impl block and is
-    /// represented by an `ImplMethod`, not `Item::FnDef`.
+    /// represented by an `ImplMethod`, not `Item::Fn`.
     fn parse_impl_method(&mut self) -> Option<ImplMethod> {
         let start_span = self.peek().span;
         if self.expect(TokenKind::Fn, "'fn'").is_err() {
@@ -1201,7 +1260,10 @@ impl<'a> Parser<'a> {
             TypeAnnotation::Named(Symbol::new(0))
         };
         let body = if self.check(&TokenKind::LBrace) {
-            self.parse_block()
+            self.fn_depth += 1;
+            let body = self.parse_block();
+            self.fn_depth -= 1;
+            body
         } else {
             let token = self.peek().clone();
             self.errors.push(ParseError::UnexpectedToken {
@@ -1473,6 +1535,8 @@ impl<'a> Parser<'a> {
                 | TokenKind::Pipe      // closure: |x| ...
                 | TokenKind::LBracket  // array literal: [1, 2]
                 | TokenKind::ShellLine(_)
+                | TokenKind::Async     // async { ... } block expression
+                | TokenKind::Await     // prefix `await expr`
         )
     }
 
@@ -2163,6 +2227,24 @@ impl<'a> Parser<'a> {
                     span,
                 }
             }
+            // Prefix `await expr`. Same precedence tier as `-`/`!` — binds
+            // tighter than binary operators, looser than postfix. Use parens
+            // to chain into a method call: `(await fetch(url: u)).body`.
+            //
+            // Parser fast-path: top-level `.await` (file scope, depth 0) is
+            // rejected immediately. Inside any function body the type
+            // checker takes over (see m8-02-lexer-parser.md).
+            TokenKind::Await => {
+                let start_span = self.peek().span;
+                self.advance();
+                let operand = Box::new(self.parse_unary_expr());
+                let span = start_span.to(operand.span());
+                if self.fn_depth == 0 {
+                    self.errors.push(ParseError::AwaitOutsideAsync { span });
+                }
+                let id = self.node_id_gen.next();
+                Expr::Await(AwaitExpr { id, span, operand })
+            }
             _ => self.parse_call_expr(),
         }
     }
@@ -2557,11 +2639,43 @@ impl<'a> Parser<'a> {
                 first
             }
             TokenKind::LBrace => self.parse_block(),
+            // `async { ... }` block expression. The next token must be `{`;
+            // anything else is `AsyncOnNonFn`. (`async fn` at the item level
+            // is dispatched in `parse_item` / `parse_async_item` and never
+            // reaches here.)
+            TokenKind::Async => {
+                let start_span = token.span;
+                self.advance(); // consume 'async'
+                if !self.check(&TokenKind::LBrace) {
+                    let bad = self.peek().clone();
+                    let span = start_span.to(bad.span);
+                    self.errors.push(ParseError::AsyncOnNonFn { span });
+                    return Expr::Literal {
+                        value: Literal::Unit,
+                        id,
+                        span,
+                    };
+                }
+                // Bump fn_depth so `await` inside the block is accepted by
+                // the parse-time fast-path. Type checker still verifies the
+                // operand type.
+                self.fn_depth += 1;
+                let block = self.parse_block();
+                self.fn_depth -= 1;
+                let span = start_span.to(block.span());
+                Expr::AsyncBlock(AsyncBlockExpr {
+                    id,
+                    span,
+                    block: Box::new(block),
+                })
+            }
             // Zero-parameter closure: `|| body` (body may be a block or expr).
             TokenKind::OrOr => {
                 let start_span = token.span;
                 self.advance(); // consume '||'
+                self.fn_depth += 1;
                 let body = self.parse_expr();
+                self.fn_depth -= 1;
                 let span = start_span.to(body.span());
                 Expr::Closure {
                     params: vec![],
@@ -2635,7 +2749,9 @@ impl<'a> Parser<'a> {
                 }
                 let _ = self.expect(TokenKind::Pipe, "'|'");
 
+                self.fn_depth += 1;
                 let body = self.parse_expr();
+                self.fn_depth -= 1;
                 let span = start_span.to(body.span());
                 Expr::Closure {
                     params,
@@ -2909,7 +3025,7 @@ mod tests {
         assert_eq!(result.errors.len(), 0);
 
         match &result.items[0] {
-            Item::FnDef { name, params, body, .. } => {
+            Item::Fn(FnItem { name, params, body, .. }) => {
                 assert_eq!(*name, foo);
                 assert_eq!(params.len(), 0);
                 match body {
@@ -2961,7 +3077,7 @@ mod tests {
         assert_eq!(result.errors.len(), 0);
 
         match &result.items[0] {
-            Item::FnDef { name, params, ret_ty, .. } => {
+            Item::Fn(FnItem { name, params, ret_ty, .. }) => {
                 assert_eq!(*name, add);
                 assert_eq!(params.len(), 2);
                 assert_eq!(params[0].name, x);
@@ -3000,7 +3116,7 @@ mod tests {
         assert_eq!(result.errors.len(), 0);
 
         match &result.items[0] {
-            Item::FnDef { body, .. } => {
+            Item::Fn(FnItem { body, .. }) => {
                 match body {
                     Expr::Block { expr: Some(expr), .. } => {
                         // Should be: 1 + (2 * 3)
@@ -3128,7 +3244,7 @@ mod tests {
         assert_eq!(result.errors.len(), 0);
 
         match &result.items[0] {
-            Item::FnDef { body, .. } => match body {
+            Item::Fn(FnItem { body, .. }) => match body {
                 Expr::Block { expr: Some(expr), .. } => match expr.as_ref() {
                     Expr::Call { args, .. } => {
                         assert_eq!(args.len(), 2);
@@ -3371,7 +3487,7 @@ mod tests {
         assert!(result.errors.iter().any(|e| matches!(e, ParseError::LateImport { .. })));
         // Only the legal item (the fn) should remain.
         assert_eq!(result.items.len(), 1);
-        assert!(matches!(result.items[0], Item::FnDef { .. }));
+        assert!(matches!(result.items[0], Item::Fn(_)));
     }
 
     #[test]
@@ -3379,7 +3495,7 @@ mod tests {
         let (_, result) = lex_parse("export fn connect() { }");
         assert_eq!(result.errors.len(), 0, "errors: {:?}", result.errors);
         match &result.items[0] {
-            Item::Export(decl) => assert!(matches!(*decl.item, Item::FnDef { .. })),
+            Item::Export(decl) => assert!(matches!(*decl.item, Item::Fn(_))),
             _ => panic!("expected export"),
         }
     }
@@ -3499,5 +3615,161 @@ mod tests {
     fn test_chained_cast_is_error() {
         let (_, result) = lex_parse("let x = y as Foo as Bar");
         assert!(result.errors.iter().any(|e| matches!(e, ParseError::ChainedCast { .. })));
+    }
+
+    // =============== M8 — async fn / await / async blocks ===============
+
+    #[test]
+    fn test_async_fn_top_level() {
+        let (interner, result) = lex_parse("async fn fetch(url: Str) -> Str { url }");
+        assert_eq!(result.errors.len(), 0, "errors: {:?}", result.errors);
+        match &result.items[0] {
+            Item::AsyncFn(decl) => {
+                assert_eq!(interner.resolve(decl.item.name), "fetch");
+                assert_eq!(decl.item.params.len(), 1);
+            }
+            other => panic!("expected Item::AsyncFn, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_async_on_non_fn_is_error() {
+        let (_, result) = lex_parse("async let x = 5");
+        assert!(
+            result.errors.iter().any(|e| matches!(e, ParseError::AsyncOnNonFn { .. })),
+            "errors: {:?}", result.errors,
+        );
+    }
+
+    #[test]
+    fn test_async_struct_is_error() {
+        let (_, result) = lex_parse("async struct Foo { }");
+        assert!(
+            result.errors.iter().any(|e| matches!(e, ParseError::AsyncOnNonFn { .. })),
+            "errors: {:?}", result.errors,
+        );
+    }
+
+    #[test]
+    fn test_await_prefix_inside_async_fn() {
+        let (_, result) = lex_parse("async fn f() -> Int { await foo() }");
+        assert_eq!(result.errors.len(), 0, "errors: {:?}", result.errors);
+        match &result.items[0] {
+            Item::AsyncFn(decl) => match &decl.item.body {
+                Expr::Block { expr: Some(tail), .. } => {
+                    assert!(matches!(tail.as_ref(), Expr::Await(_)),
+                        "tail expr should be Await, got {:?}", tail);
+                }
+                other => panic!("expected block body, got {:?}", other),
+            },
+            other => panic!("expected AsyncFn, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_await_with_field_access_needs_parens() {
+        // `await foo().x` parses as `await (foo().x)` — the postfix `.x`
+        // binds tighter than the prefix await.
+        let (_, result) = lex_parse("async fn f() -> Int { await obj().x }");
+        assert_eq!(result.errors.len(), 0, "errors: {:?}", result.errors);
+    }
+
+    #[test]
+    fn test_await_then_method_call_needs_parens() {
+        // To call `.len()` on the awaited value, parens are required.
+        let (_, result) = lex_parse("async fn f() -> Int { (await fetch()).len() }");
+        assert_eq!(result.errors.len(), 0, "errors: {:?}", result.errors);
+    }
+
+    #[test]
+    fn test_double_await_chain() {
+        // `await await nested()` — parser must accept; type checker rejects
+        // later if the inner await isn't well-typed.
+        let (_, result) = lex_parse("async fn f() -> Int { await await nested() }");
+        assert_eq!(result.errors.len(), 0, "errors: {:?}", result.errors);
+    }
+
+    #[test]
+    fn test_await_at_file_top_level_is_error() {
+        // No enclosing function — fast-path parse error fires.
+        let (_, result) = lex_parse("let x = await foo()");
+        assert!(
+            result.errors.iter().any(|e| matches!(e, ParseError::AwaitOutsideAsync { .. })),
+            "errors: {:?}", result.errors,
+        );
+    }
+
+    #[test]
+    fn test_await_inside_sync_fn_is_not_parse_error() {
+        // Parser defers to the type checker for awaits inside any function
+        // body — sync or async — because the parser cannot know macro/future
+        // expansion outcomes.
+        let (_, result) = lex_parse("fn f() -> Int { await bar() }");
+        assert!(
+            !result.errors.iter().any(|e| matches!(e, ParseError::AwaitOutsideAsync { .. })),
+            "parser should defer to typechecker; got: {:?}", result.errors,
+        );
+    }
+
+    #[test]
+    fn test_async_block_expression() {
+        let (_, result) = lex_parse("let task = async { 42 }");
+        assert_eq!(result.errors.len(), 0, "errors: {:?}", result.errors);
+        match &result.items[0] {
+            Item::Script { stmt: Stmt::Let { init, .. }, .. } => {
+                assert!(matches!(init, Expr::AsyncBlock(_)),
+                    "init should be AsyncBlock, got {:?}", init);
+            }
+            other => panic!("expected let, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_empty_async_block() {
+        let (_, result) = lex_parse("let t = async { }");
+        assert_eq!(result.errors.len(), 0, "errors: {:?}", result.errors);
+    }
+
+    #[test]
+    fn test_await_inside_async_block_is_legal() {
+        // `await` is fine inside an async{} block at file top level — the
+        // block bumps fn_depth.
+        let (_, result) = lex_parse("let r = async { await foo() }");
+        assert!(
+            !result.errors.iter().any(|e| matches!(e, ParseError::AwaitOutsideAsync { .. })),
+            "errors: {:?}", result.errors,
+        );
+    }
+
+    #[test]
+    fn test_async_type_annotation_parses_as_generic() {
+        // `Async<Int>` parses as TypeAnnotation::Generic { head: "Async", args: [Int] }.
+        let (interner, result) = lex_parse("let t: Async<Int> = async { 1 }");
+        assert_eq!(result.errors.len(), 0, "errors: {:?}", result.errors);
+        match &result.items[0] {
+            Item::Script { stmt: Stmt::Let { ty: Some(ty), .. }, .. } => match ty {
+                TypeAnnotation::Generic { head, args } => {
+                    assert_eq!(interner.resolve(*head), "Async");
+                    assert_eq!(args.len(), 1);
+                }
+                other => panic!("expected Generic type annotation, got {:?}", other),
+            },
+            other => panic!("expected let with type annotation, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_handle_type_annotation_parses_as_generic() {
+        let (interner, result) = lex_parse("fn run(h: Handle<Str>) -> Unit { }");
+        assert_eq!(result.errors.len(), 0, "errors: {:?}", result.errors);
+        match &result.items[0] {
+            Item::Fn(item) => match &item.params[0].ty {
+                TypeAnnotation::Generic { head, .. } => {
+                    assert_eq!(interner.resolve(*head), "Handle");
+                }
+                other => panic!("expected Generic, got {:?}", other),
+            },
+            other => panic!("expected fn, got {:?}", other),
+        }
     }
 }

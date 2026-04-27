@@ -1,0 +1,2 @@
+from-spawn
+42

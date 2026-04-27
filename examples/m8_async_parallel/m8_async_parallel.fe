@@ -1,0 +1,24 @@
+// M8 — true parallelism: two spawned tasks run on separate OS threads.
+//
+// Each `slow_task(n)` does `await sleep(ms: 500)` then returns `n`. With
+// lazy async semantics (M8 Task 5 Option A), calling `slow_task(n)` builds
+// a deferred `Async<Int>` *without* running the body. `spawn` moves the
+// deferred work onto an OS worker thread. Both spawned tasks sleep
+// concurrently, so the wall clock measures ~500ms — not the ~1000ms a
+// sequential implementation would take.
+//
+// `join` then collects both results; `block_on` is the host-side runner
+// that drives the whole thing from sync top-level code.
+
+async fn slow_task(n: Int) -> Int {
+    await sleep(ms: 500)
+    n
+}
+
+let h1 = spawn(task: slow_task(n: 1))
+let h2 = spawn(task: slow_task(n: 2))
+
+let pair = join(a: h1, b: h2)
+match pair {
+    (a, b) => println(s: int_to_str(n: a + b))
+}

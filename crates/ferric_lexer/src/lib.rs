@@ -341,6 +341,8 @@ impl<'a> Lexer<'a> {
             "from" => TokenKind::From,
             "type" => TokenKind::Type,
             "as" => TokenKind::As,
+            "async" => TokenKind::Async,
+            "await" => TokenKind::Await,
             "true" => TokenKind::True,
             "false" => TokenKind::False,
             "_" => TokenKind::Underscore,

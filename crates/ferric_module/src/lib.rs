@@ -435,8 +435,9 @@ impl<'a> ModuleCtx<'a> {
 /// aren't named (script blocks etc., which cannot legally be exported).
 fn exported_name(item: &Item) -> Option<Symbol> {
     match item {
-        Item::FnDef { name, .. }
-        | Item::StructDef { name, .. }
+        Item::Fn(item) => Some(item.name),
+        Item::AsyncFn(decl) => Some(decl.item.name),
+        Item::StructDef { name, .. }
         | Item::EnumDef { name, .. }
         | Item::TraitDef { name, .. } => Some(*name),
         Item::TypeAlias(decl) => Some(decl.name),

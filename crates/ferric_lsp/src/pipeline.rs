@@ -286,6 +286,15 @@ fn stdlib_native_fn_table(interner: &mut Interner) -> Vec<(Symbol, Vec<Symbol>)>
         ("floor",           &["n"]),
         ("ceil",            &["n"]),
         ("read_line",       &[]),
+        // M8: async stdlib intrinsics. Implemented as VM intrinsics in
+        // `ferric_vm` (not via `register_stdlib`) but registered here so
+        // the resolver recognises the names. Kept in sync manually with
+        // `src/main.rs::native_fn_table`.
+        ("spawn",           &["task"]),
+        ("join",            &["a", "b"]),
+        ("sleep",           &["ms"]),
+        ("shell_run_async", &["cmd"]),
+        ("block_on",        &["task"]),
     ];
     entries
         .iter()

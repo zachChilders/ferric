@@ -35,7 +35,7 @@ struct Checker<'a> {
 impl<'a> Checker<'a> {
     fn check_item(&mut self, item: &Item) {
         match item {
-            Item::FnDef { body, .. } => self.check_expr(body),
+            Item::Fn(item) => self.check_expr(&item.body),
             Item::Script { stmt, .. } => self.check_stmt(stmt),
             Item::StructDef { .. } | Item::EnumDef { .. } | Item::TraitDef { .. } => {}
             Item::ImplBlock { methods, .. } => {
@@ -47,6 +47,9 @@ impl<'a> Checker<'a> {
                 self.check_item(&decl.item);
             }
             Item::Import(_) | Item::TypeAlias(_) => {}
+            // Async fn body checking lands with M8 Task 4 (lowering): bodies
+            // are only available after the state machine transform.
+            Item::AsyncFn(_) => {}
         }
     }
 
@@ -163,6 +166,8 @@ impl<'a> Checker<'a> {
                 self.check_expr(index);
             }
             Expr::Cast(c) => self.check_expr(&c.expr),
+            // Async expressions: parser does not yet emit these in M8 Task 1.
+            Expr::Await(_) | Expr::AsyncBlock(_) => {}
         }
     }
 
