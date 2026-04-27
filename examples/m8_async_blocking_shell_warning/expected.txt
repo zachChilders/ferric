@@ -1,0 +1,6 @@
+warning: shell `$` outside an async context — this will block the thread
+  --> input:6:11
+   |
+ 6 | let out = $ echo hello
+   |           ^^^^^^^^^^^^ wrap in `async { ... }` to make it non-blockinghello
+

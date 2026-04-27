@@ -1,0 +1,12 @@
+error: `join` requires `Handle<T>` arguments, found `int`
+  --> input:2:9
+   |
+ 2 | let r = join(a: 1, b: 2)
+   |         ^^^^^^^^^^^^^^^^
+   = help: use `spawn(task: ...)` to obtain a `Handle<T>` from an `Async<T>`
+error: `join` requires `Handle<T>` arguments, found `int`
+  --> input:2:9
+   |
+ 2 | let r = join(a: 1, b: 2)
+   |         ^^^^^^^^^^^^^^^^
+   = help: use `spawn(task: ...)` to obtain a `Handle<T>` from an `Async<T>`

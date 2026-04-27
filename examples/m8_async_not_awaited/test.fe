@@ -1,0 +1,7 @@
+// `let s: Str = fetch(...)` where fetch is async would silently bind an
+// `Async<Str>` to a `Str` slot if the type checker didn't catch it. The
+// dedicated `AsyncNotAwaited` error is friendlier than a generic mismatch
+// and tells the user how to fix it.
+async fn fetch(url: Str) -> Str { url }
+
+let s: Str = fetch(url: "x")

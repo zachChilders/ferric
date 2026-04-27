@@ -1,0 +1,6 @@
+error: this expression is `Async<str>` but `str` is expected
+  --> input:7:14
+   |
+ 7 | let s: Str = fetch(url: "x")
+   |              ^^^^^^^^^^^^^^^ this is `Async<str>`; add `await` to resolve it
+   = help: call `await` on the value to extract the inner result

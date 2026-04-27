@@ -1,0 +1,5 @@
+// `async fn forever() { await forever() }` would loop forever inside the
+// scheduler with no suspension point that ever yields a value. The
+// lowering pass detects this best-effort case (direct self-await with no
+// branching) and reports it before the program runs.
+async fn forever() -> Int { await forever() }

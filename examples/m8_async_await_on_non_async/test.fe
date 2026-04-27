@@ -1,0 +1,6 @@
+// `await` requires its operand to be `Async<T>` or `Handle<T>`. Awaiting an
+// `Int` is a type error caught before the program runs.
+async fn bad() -> Int {
+    let x: Int = 5
+    await x
+}

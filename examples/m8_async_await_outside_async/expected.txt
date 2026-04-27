@@ -1,0 +1,5 @@
+error: `await` is only valid inside an `async fn` or `async { ... }` block
+  --> input:7:5
+   |
+ 7 |     await fetch()
+   |     ^^^^^^^^^^^^^ not inside an async context

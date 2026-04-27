@@ -5,13 +5,51 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ```bash
-cargo build                          # build
-cargo run -- examples/hello.fe       # run a Ferric source file
-cargo run                            # start the REPL
-cargo test                           # run all tests
-cargo test -p ferric_parser          # run tests for one crate
-cargo check                          # fast type-check without compiling
+cargo build                                # build
+cargo run -- examples/hello/test.fe        # run a Ferric source file
+cargo run                                  # start the REPL
+cargo test                                 # run all tests
+cargo test -p ferric_parser                # run tests for one crate
+cargo check                                # fast type-check without compiling
 ```
+
+## End-to-end test fixtures live in `examples/`
+
+**This is the canonical place for every Ferric program used as a test.**
+Do *not* write `.fe` files to `/tmp` or other ephemeral locations when
+iterating on language behaviour — put them under `examples/` so the next
+run picks them up.
+
+Each subdirectory is a self-contained fixture:
+
+```text
+examples/<name>/
+    test.fe         — the source program (always exactly this filename)
+    expected.txt    — combined stdout+stderr the program must produce, byte-for-byte
+    exit            — the expected integer exit code (e.g. `0\n`)
+```
+
+`tests/examples.rs` discovers every directory under `examples/` that has
+all three files and runs them through the `ferric` binary, comparing the
+captured output against `expected.txt` and the exit code against `exit`.
+
+To add a new test: drop a directory with those three files. To capture
+the expected output for a new fixture, run the program once with output
+redirected:
+
+```bash
+./target/debug/ferric examples/<name>/test.fe > examples/<name>/expected.txt 2>&1
+echo $? > examples/<name>/exit
+```
+
+A directory missing `expected.txt` is silently skipped — useful only as a
+documentation fixture. A directory may contain additional `.fe` files
+besides `test.fe` (e.g. modules imported by `test.fe`); only `test.fe` is
+the entry point.
+
+**Prefer this pattern over standalone Rust integration tests** for
+end-to-end language behaviour. Reserve `tests/*.rs` for the harness
+itself or for pure-Rust behaviour that has no Ferric-program form.
 
 ## What this is
 

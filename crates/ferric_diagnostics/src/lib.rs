@@ -214,11 +214,11 @@ impl<'a> Renderer<'a> {
             }),
             ParseError::AwaitOutsideAsync { span } => self.render(Diag {
                 kind: "error",
-                message: "`.await` used outside of any function",
+                message: "`await` used outside of any function",
                 primary: Some(Label {
                     span: *span,
                     message: Some(
-                        "`.await` can only appear inside an `async fn` or `async` block"
+                        "`await` can only appear inside an `async fn` or `async` block"
                             .to_string(),
                     ),
                 }),
@@ -749,7 +749,7 @@ impl<'a> Renderer<'a> {
             }),
             TypeError::AwaitOutsideAsync { span } => self.render(Diag {
                 kind: "error",
-                message: "`.await` is only valid inside an `async fn` or `async { ... }` block",
+                message: "`await` is only valid inside an `async fn` or `async { ... }` block",
                 primary: Some(Label {
                     span: *span,
                     message: Some("not inside an async context".to_string()),
@@ -761,7 +761,7 @@ impl<'a> Renderer<'a> {
             TypeError::AwaitOnNonAsync { found, span } => self.render(Diag {
                 kind: "error",
                 message: &format!(
-                    "`.await` requires an `Async<T>` operand, found `{}`",
+                    "`await` requires an `Async<T>` operand, found `{}`",
                     found.description()
                 ),
                 primary: Some(Label { span: *span, message: None }),
@@ -798,13 +798,13 @@ impl<'a> Renderer<'a> {
                 primary: Some(Label {
                     span: *span,
                     message: Some(format!(
-                        "this is `{}`; add `.await` to resolve it",
+                        "this is `{}`; add `await` to resolve it",
                         found.description()
                     )),
                 }),
                 secondary: vec![],
                 notes: vec![],
-                help: Some("call `.await` on the value to extract the inner result".to_string()),
+                help: Some("call `await` on the value to extract the inner result".to_string()),
             }),
             TypeError::JoinNonHandle { found, span } => self.render(Diag {
                 kind: "error",
@@ -891,7 +891,7 @@ impl<'a> Renderer<'a> {
                 secondary: vec![],
                 notes: vec![],
                 help: Some(
-                    "introduce a base case or another `.await` so the scheduler can yield"
+                    "introduce a base case or another `await` so the scheduler can yield"
                         .to_string(),
                 ),
             }),

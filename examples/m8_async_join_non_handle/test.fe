@@ -1,0 +1,2 @@
+// `join` requires `Handle<T>` arguments. Passing raw `Int`s is a type error.
+let r = join(a: 1, b: 2)

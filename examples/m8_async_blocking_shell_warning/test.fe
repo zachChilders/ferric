@@ -1,0 +1,7 @@
+// `$` shell expressions outside an async context emit a `BlockingShell`
+// warning when the program also uses async syntax somewhere — it's a hint
+// that the user opted into async but didn't move blocking I/O into it.
+// Pure M1–M7 programs (no async at all) don't get this warning.
+async fn noop() -> Int { 1 }
+let out = $ echo hello
+println(s: shell_stdout(output: out))

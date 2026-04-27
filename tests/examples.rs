@@ -4,13 +4,16 @@
 //!
 //! ```text
 //! examples/<name>/
-//!     <name>.fe       — the source program
+//!     test.fe         — the source program (always named `test.fe`)
 //!     expected.txt    — combined stdout+stderr the program must produce
 //!     exit            — the integer exit code (e.g. `0\n`)
 //! ```
 //!
 //! Adding a new example is a pure data change: drop a folder with those
-//! three files and the next `cargo test` run picks it up.
+//! three files and the next `cargo test` run picks it up. **All Ferric
+//! programs intended as test fixtures live here** — do not write `.fe`
+//! files to `/tmp` or other ephemeral locations. See CLAUDE.md for the
+//! full convention.
 
 use std::fs::{self, File};
 use std::path::PathBuf;
@@ -26,7 +29,7 @@ fn examples() {
         .filter_map(|e| e.file_name().into_string().ok())
         .filter(|name| {
             let dir = examples_root.join(name);
-            dir.join(format!("{name}.fe")).exists() && dir.join("expected.txt").exists()
+            dir.join("test.fe").exists() && dir.join("expected.txt").exists()
         })
         .collect();
     names.sort();
@@ -50,7 +53,7 @@ fn examples() {
 
 fn run_example(root: &PathBuf, name: &str) -> Result<(), String> {
     let dir = root.join(name);
-    let script = dir.join(format!("{name}.fe"));
+    let script = dir.join("test.fe");
     let expected = fs::read_to_string(dir.join("expected.txt"))
         .map_err(|e| format!("read expected.txt: {e}"))?;
     let expected_exit: i32 = fs::read_to_string(dir.join("exit"))

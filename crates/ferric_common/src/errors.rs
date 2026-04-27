@@ -125,7 +125,7 @@ pub enum ParseError {
     StrayPipe {
         span: Span,
     },
-    /// `.await` appeared inside a non-`async` function — caught at parse time
+    /// `await` appeared inside a non-`async` function — caught at parse time
     /// as a fast path. The type checker also catches this (with richer typing
     /// information), but emitting it here gives a clearer diagnostic and lets
     /// downstream stages skip the malformed body.
@@ -199,7 +199,7 @@ impl ParseError {
                     .to_string()
             }
             ParseError::AwaitOutsideAsync { .. } => {
-                "`.await` is only valid inside an `async fn` or `async { ... }` block".to_string()
+                "`await` is only valid inside an `async fn` or `async { ... }` block".to_string()
             }
             ParseError::AsyncOnNonFn { .. } => {
                 "`async` must be followed by `fn` or `{`".to_string()
@@ -513,13 +513,13 @@ pub enum TypeError {
         to:   Ty,
         span: Span,
     },
-    /// `.await` was used outside of an `async fn` or `async { ... }` block.
+    /// `await` was used outside of an `async fn` or `async { ... }` block.
     /// The type checker catches this independently of the parser fast-path so
     /// that lowering can rely on the await-context invariant.
     AwaitOutsideAsync {
         span: Span,
     },
-    /// `.await` was applied to a value whose type is not `Async<T>`.
+    /// `await` was applied to a value whose type is not `Async<T>`.
     AwaitOnNonAsync {
         found: Ty,
         span:  Span,
@@ -536,7 +536,7 @@ pub enum TypeError {
         span:  Span,
     },
     /// An expression of type `Async<T>` was used where the inner `T` was
-    /// expected — the user almost always forgot to write `.await`. Friendly
+    /// expected — the user almost always forgot to write `await`. Friendly
     /// alternative to a plain `Mismatch` for this very common case.
     AsyncNotAwaited {
         found:    Ty,
@@ -673,11 +673,11 @@ impl TypeError {
                 )
             }
             TypeError::AwaitOutsideAsync { .. } => {
-                "`.await` is only valid inside an `async fn` or `async { ... }` block".to_string()
+                "`await` is only valid inside an `async fn` or `async { ... }` block".to_string()
             }
             TypeError::AwaitOnNonAsync { found, .. } => {
                 format!(
-                    "`.await` requires an Async<T> operand, found {}",
+                    "`await` requires an Async<T> operand, found {}",
                     found.description()
                 )
             }
@@ -693,7 +693,7 @@ impl TypeError {
             }
             TypeError::AsyncNotAwaited { found, expected, .. } => {
                 format!(
-                    "this expression is {} but {} is expected — did you forget `.await`?",
+                    "this expression is {} but {} is expected — did you forget `await`?",
                     found.description(),
                     expected.description()
                 )
@@ -711,12 +711,12 @@ impl TypeError {
 /// Errors that can occur in the `ferric_async` lowering pass.
 ///
 /// These complement the type errors caught earlier: the type checker rejects
-/// `.await` outside an async context and on the wrong types; the lowering
+/// `await` outside an async context and on the wrong types; the lowering
 /// pass catches structural problems that are only visible after the full
 /// function body is available for state machine construction.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum AsyncLowerError {
-    /// A local variable is captured by a state across an `.await` point in a
+    /// A local variable is captured by a state across an `await` point in a
     /// way the lowering pass cannot translate into a state field. The fix is
     /// usually to move the capture inside the awaited subexpression.
     CaptureAcrossAwait {
@@ -746,11 +746,11 @@ impl AsyncLowerError {
     pub fn description(&self) -> String {
         match self {
             AsyncLowerError::CaptureAcrossAwait { .. } => {
-                "value captured across an `.await` cannot be lowered into the state machine"
+                "value captured across an `await` cannot be lowered into the state machine"
                     .to_string()
             }
             AsyncLowerError::InfiniteAsyncRecursion { .. } => {
-                "async function recurses without an `.await` — would loop without yielding"
+                "async function recurses without an `await` — would loop without yielding"
                     .to_string()
             }
         }

@@ -1,0 +1,6 @@
+error: `async fn forever` recurses without a suspension point
+  --> input:5:1
+   |
+ 5 | async fn forever() -> Int { await forever() }
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the body always awaits a call to this fn
+   = help: introduce a base case or another `await` so the scheduler can yield

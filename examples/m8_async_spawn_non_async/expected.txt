@@ -1,0 +1,5 @@
+error: `spawn` requires an `Async<T>` argument, found `int`
+  --> input:3:9
+   |
+ 3 | let h = spawn(task: 5)
+   |         ^^^^^^^^^^^^^^

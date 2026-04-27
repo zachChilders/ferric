@@ -1,0 +1,5 @@
+error: `await` requires an `Async<T>` operand, found `int`
+  --> input:5:5
+   |
+ 5 |     await x
+   |     ^^^^^^^

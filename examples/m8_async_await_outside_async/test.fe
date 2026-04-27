@@ -1,0 +1,8 @@
+// `await` is only legal inside an `async fn` body or `async { ... }` block.
+// The parser catches the file-scope case directly; the type checker catches
+// the inside-a-sync-fn case shown here.
+async fn fetch() -> Str { "x" }
+
+fn sync_caller() -> Str {
+    await fetch()
+}
