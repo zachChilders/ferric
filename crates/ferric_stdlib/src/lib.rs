@@ -2,12 +2,154 @@
 //!
 //! Provides native functions and the NativeRegistry for runtime function lookup.
 
-use std::collections::HashMap;
+use std::cell::RefCell;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::rc::Rc;
+
 use ferric_common::{Interner, ShellOutput, Symbol, TypeAnnotation};
 
-// Re-export Value and RuntimeError from ferric_vm
-// NOTE: This creates a circular dependency issue - we'll need to move Value here
-// or define NativeFn with a generic Result for now. Let's use String for errors.
+// Public modules — each contributes a `register()` entry point.
+pub mod bytes;
+pub mod crypto;
+pub mod encode;
+pub mod env;
+pub mod fmt;
+pub mod http;
+pub mod io;
+pub mod json;
+pub mod list;
+pub mod log;
+pub mod map;
+pub mod math;
+pub mod path;
+pub mod proc_;
+pub mod rand_;
+pub mod re;
+pub mod serve;
+pub mod set;
+pub mod sock;
+pub mod sort;
+pub mod str_;
+pub mod sync;
+pub mod time_;
+
+// Re-export common repr types so other modules can `use crate::Foo`.
+pub use http::{RequestBuilderRepr, ResponseRepr};
+pub use json::JsonRepr;
+pub use log::{LogLevelRepr, LoggerRepr};
+pub use proc_::{CommandRepr, ProcOutputRepr, ProcessRepr};
+pub use rand_::RngRepr;
+pub use re::MatchRepr;
+pub use serve::{RequestRepr as ServeRequestRepr, ResponseRepr as ServeResponseRepr, ServerRepr};
+pub use sync::{MutexRepr, OnceRepr, ReceiverRepr, SenderRepr};
+pub use time_::{DurationRepr, TimeRepr};
+
+// ============================================================================
+// MapKey — hashable + orderable subset of `NativeValue`.
+// ============================================================================
+
+/// Hashable + orderable subset of `NativeValue` allowed as map / set key.
+/// Float keys are forbidden because of NaN.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum MapKey {
+    Int(i64),
+    Str(String),
+    Bool(bool),
+}
+
+impl MapKey {
+    /// Lifts a `NativeValue` into a `MapKey`, rejecting unsupported variants.
+    pub fn from_value(v: &NativeValue) -> Result<Self, String> {
+        match v {
+            NativeValue::Int(n) => Ok(MapKey::Int(*n)),
+            NativeValue::Str(s) => Ok(MapKey::Str(s.clone())),
+            NativeValue::Bool(b) => Ok(MapKey::Bool(*b)),
+            NativeValue::Float(_) => {
+                Err("map/set keys may not be Float (NaN forbids ordering)".to_string())
+            }
+            other => Err(format!(
+                "map/set keys must be Int, Str, or Bool — got {:?}",
+                other
+            )),
+        }
+    }
+
+    /// Lowers a `MapKey` back to a `NativeValue`.
+    pub fn into_value(self) -> NativeValue {
+        match self {
+            MapKey::Int(n) => NativeValue::Int(n),
+            MapKey::Str(s) => NativeValue::Str(s),
+            MapKey::Bool(b) => NativeValue::Bool(b),
+        }
+    }
+
+    /// Cheap clone-to-value, used when iterating keys without consuming.
+    pub fn to_value(&self) -> NativeValue {
+        self.clone().into_value()
+    }
+}
+
+// ============================================================================
+// NativeClosure — a thin wrapper around an Rc<dyn Fn> for higher-order natives.
+// ============================================================================
+
+/// Closure wrapper that can be invoked via [`invoke_closure`]. The VM does
+/// not yet bridge real Ferric closures into this; for now the stdlib uses
+/// `NativeClosure` only for unit testing higher-order functions and as a
+/// placeholder until VM closure dispatch lands.
+#[derive(Clone)]
+pub struct NativeClosure {
+    inner: Rc<dyn Fn(&[NativeValue]) -> Result<NativeValue, String>>,
+}
+
+impl NativeClosure {
+    /// Wraps a Rust closure into a `NativeClosure`.
+    pub fn new<F>(f: F) -> Self
+    where
+        F: Fn(&[NativeValue]) -> Result<NativeValue, String> + 'static,
+    {
+        Self { inner: Rc::new(f) }
+    }
+
+    /// Invokes the wrapped closure.
+    pub fn call(&self, args: &[NativeValue]) -> Result<NativeValue, String> {
+        (self.inner)(args)
+    }
+}
+
+impl std::fmt::Debug for NativeClosure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("<NativeClosure>")
+    }
+}
+
+impl PartialEq for NativeClosure {
+    /// Two closures are equal iff they point at the same `Rc`.
+    fn eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.inner, &other.inner)
+    }
+}
+
+/// Invoke a closure-shaped `NativeValue` with the given arguments.
+///
+/// TODO(stdlib-closure-bridge): the VM should be able to push a real
+/// Ferric closure into a `NativeClosure` so that higher-order natives
+/// (`list::map`, `sort::with`, `serve::get`, etc.) can call user code.
+/// Until that bridge exists, only `NativeValue::Closure` constructed
+/// from Rust closures (via `NativeClosure::new`) works.
+pub fn invoke_closure(c: &NativeValue, args: &[NativeValue]) -> Result<NativeValue, String> {
+    match c {
+        NativeValue::Closure(closure) => closure.call(args),
+        other => Err(format!(
+            "expected closure, got {:?} — VM closure bridge is not yet wired",
+            other
+        )),
+    }
+}
+
+// ============================================================================
+// NativeValue
+// ============================================================================
 
 /// Type for native function implementations.
 ///
@@ -17,18 +159,98 @@ pub type NativeFn = fn(&[NativeValue]) -> Result<NativeValue, String>;
 
 /// Simplified value type for native function interface.
 ///
-/// This is a temporary type to avoid circular dependencies.
-/// Native functions work with this type, and the VM converts between
-/// this and the full Value type.
+/// This is the boundary between the VM's full `Value` type and the stdlib.
 #[derive(Debug, Clone, PartialEq)]
 pub enum NativeValue {
+    // -------- Basic scalars --------
     Int(i64),
     Float(f64),
     Bool(bool),
     Str(String),
     Unit,
+
+    // -------- Existing extensions --------
     ShellOutput(ShellOutput),
-    Array(Vec<NativeValue>),
+
+    /// Dynamic list of values. Was historically named `Array`; renamed to
+    /// `List` to match the stdlib spec terminology. Callers may still use
+    /// the `Array` variant name via the deprecated alias below.
+    List(Vec<NativeValue>),
+
+    // -------- New variants for the stdlib build-out --------
+    Bytes(Vec<u8>),
+    BytesMut(Rc<RefCell<Vec<u8>>>),
+    ListMut(Rc<RefCell<Vec<NativeValue>>>),
+    Map(BTreeMap<MapKey, NativeValue>),
+    MapMut(Rc<RefCell<BTreeMap<MapKey, NativeValue>>>),
+    Set(BTreeSet<MapKey>),
+
+    /// Algebraic Option, encoded directly as a `NativeValue` variant rather
+    /// than as a tagged tuple. The inner `Box` matches the spec.
+    Option(Option<Box<NativeValue>>),
+    /// Algebraic Result, encoded directly as a `NativeValue` variant.
+    Result(Box<Result<NativeValue, NativeValue>>),
+    /// Two-element tuple. Multi-element tuples can be modelled as nested
+    /// `Tuple2`s if/when needed.
+    Tuple2(Box<NativeValue>, Box<NativeValue>),
+    /// N-element tuple — used by some modules (e.g. `rand`) that return
+    /// `(value, Rng)` pairs. Many call sites still prefer `Tuple2`.
+    Tuple(Vec<NativeValue>),
+
+    // -------- Domain-specific representations --------
+    Json(Box<JsonRepr>),
+    Time(TimeRepr),
+    Duration(DurationRepr),
+    Regex(Rc<regex::Regex>),
+    Match(MatchRepr),
+    Ordering(std::cmp::Ordering),
+    Rng(Rc<RefCell<RngRepr>>),
+
+    /// Higher-order callback wrapper (see [`NativeClosure`] and
+    /// [`invoke_closure`]).
+    Closure(NativeClosure),
+
+    // -------- HTTP --------
+    HttpResponse(Rc<ResponseRepr>),
+    HttpRequestBuilder(Rc<RefCell<RequestBuilderRepr>>),
+
+    // -------- HTTP server (`serve`) --------
+    ServeServer(Rc<RefCell<ServerRepr>>),
+    ServeRequest(Rc<ServeRequestRepr>),
+    ServeResponse(Rc<RefCell<ServeResponseRepr>>),
+
+    // -------- Sockets --------
+    TcpStream(Rc<RefCell<std::net::TcpStream>>),
+    TcpListener(Rc<std::net::TcpListener>),
+    UdpSocket(Rc<std::net::UdpSocket>),
+
+    // -------- File I/O --------
+    FileWriter(Rc<RefCell<std::io::BufWriter<std::fs::File>>>),
+
+    // -------- Process --------
+    ProcOutput(Rc<ProcOutputRepr>),
+    ProcCommand(Rc<RefCell<CommandRepr>>),
+    ProcProcess(Rc<RefCell<ProcessRepr>>),
+
+    // -------- Logging --------
+    Logger(Rc<LoggerRepr>),
+    LogLevel(LogLevelRepr),
+
+    // -------- Sync --------
+    SyncSender(Rc<SenderRepr>),
+    SyncReceiver(Rc<ReceiverRepr>),
+    SyncMutex(Rc<MutexRepr>),
+    SyncOnce(Rc<OnceRepr>),
+}
+
+#[allow(non_upper_case_globals)]
+impl NativeValue {
+    /// Backwards-compat constructor for callers that still spell the old
+    /// `Array` variant. Prefer `NativeValue::List(...)` directly.
+    #[allow(non_snake_case)]
+    pub fn Array(elems: Vec<NativeValue>) -> NativeValue {
+        NativeValue::List(elems)
+    }
 }
 
 /// Registry of native functions available to the VM.
@@ -128,12 +350,6 @@ fn expect_bool(value: &NativeValue) -> Result<bool, String> {
 // ============================================================================
 
 /// Prints a string followed by a newline to stdout.
-///
-/// # Arguments
-/// * `s: Str` - The string to print
-///
-/// # Returns
-/// * `Unit`
 fn builtin_println(args: &[NativeValue]) -> Result<NativeValue, String> {
     check_arg_count(args, 1)?;
     let s = expect_str(&args[0])?;
@@ -142,12 +358,6 @@ fn builtin_println(args: &[NativeValue]) -> Result<NativeValue, String> {
 }
 
 /// Prints a string without a newline to stdout.
-///
-/// # Arguments
-/// * `s: Str` - The string to print
-///
-/// # Returns
-/// * `Unit`
 fn builtin_print(args: &[NativeValue]) -> Result<NativeValue, String> {
     check_arg_count(args, 1)?;
     let s = expect_str(&args[0])?;
@@ -156,12 +366,6 @@ fn builtin_print(args: &[NativeValue]) -> Result<NativeValue, String> {
 }
 
 /// Converts an integer to its string representation.
-///
-/// # Arguments
-/// * `n: Int` - The integer to convert
-///
-/// # Returns
-/// * `Str` - The string representation of the integer
 fn builtin_int_to_str(args: &[NativeValue]) -> Result<NativeValue, String> {
     check_arg_count(args, 1)?;
     let n = expect_int(&args[0])?;
@@ -169,12 +373,6 @@ fn builtin_int_to_str(args: &[NativeValue]) -> Result<NativeValue, String> {
 }
 
 /// Converts a float to its string representation.
-///
-/// # Arguments
-/// * `f: Float` - The float to convert
-///
-/// # Returns
-/// * `Str` - The string representation of the float
 fn builtin_float_to_str(args: &[NativeValue]) -> Result<NativeValue, String> {
     check_arg_count(args, 1)?;
     let f = expect_float(&args[0])?;
@@ -182,12 +380,6 @@ fn builtin_float_to_str(args: &[NativeValue]) -> Result<NativeValue, String> {
 }
 
 /// Converts a boolean to its string representation.
-///
-/// # Arguments
-/// * `b: Bool` - The boolean to convert
-///
-/// # Returns
-/// * `Str` - The string representation of the boolean ("true" or "false")
 fn builtin_bool_to_str(args: &[NativeValue]) -> Result<NativeValue, String> {
     check_arg_count(args, 1)?;
     let b = expect_bool(&args[0])?;
@@ -195,12 +387,6 @@ fn builtin_bool_to_str(args: &[NativeValue]) -> Result<NativeValue, String> {
 }
 
 /// Converts an integer to a float.
-///
-/// # Arguments
-/// * `n: Int` - The integer to convert
-///
-/// # Returns
-/// * `Float` - The integer value as a float
 fn builtin_int_to_float(args: &[NativeValue]) -> Result<NativeValue, String> {
     check_arg_count(args, 1)?;
     let n = expect_int(&args[0])?;
@@ -230,10 +416,6 @@ fn builtin_shell_exit_code(args: &[NativeValue]) -> Result<NativeValue, String> 
 pub use ferric_common::SHELL_EXEC_NATIVE;
 
 /// Runs a shell command synchronously and returns a `Value::ShellOutput`.
-///
-/// On Unix this delegates to `sh -c <cmd>`; on Windows to `cmd /C <cmd>`.
-/// On targets without subprocess support (e.g. WASM), returns exit code 126
-/// (the conventional "command not executable" code).
 fn run_shell_command(cmd: &str) -> ShellOutput {
     #[cfg(any(unix, windows))]
     {
@@ -259,9 +441,6 @@ fn run_shell_command(cmd: &str) -> ShellOutput {
 }
 
 /// Runs a shell command and returns a `ShellOutput`.
-///
-/// This native is emitted by the compiler when lowering `$ cmd @{interp}`
-/// expressions. User code never calls it directly.
 fn builtin_shell_exec(args: &[NativeValue]) -> Result<NativeValue, String> {
     check_arg_count(args, 1)?;
     let cmd = expect_str(&args[0])?;
@@ -272,7 +451,7 @@ fn builtin_shell_exec(args: &[NativeValue]) -> Result<NativeValue, String> {
 
 fn expect_array(value: &NativeValue) -> Result<&Vec<NativeValue>, String> {
     match value {
-        NativeValue::Array(elems) => Ok(elems),
+        NativeValue::List(elems) => Ok(elems),
         other => Err(format!("expected array, got {:?}", other)),
     }
 }
@@ -331,7 +510,7 @@ fn builtin_str_split(args: &[NativeValue]) -> Result<NativeValue, String> {
             .map(|p| NativeValue::Str(p.to_string()))
             .collect()
     };
-    Ok(NativeValue::Array(parts))
+    Ok(NativeValue::List(parts))
 }
 
 fn builtin_abs(args: &[NativeValue]) -> Result<NativeValue, String> {
@@ -397,12 +576,6 @@ fn builtin_read_line(args: &[NativeValue]) -> Result<NativeValue, String> {
 
 /// Returns the table of compiler-provided built-in enums (currently `Option`
 /// and `Result`) suitable for [`ferric_resolve::resolve_with_natives_and_builtins`].
-///
-/// The payload annotations are placeholders: the type checker bridges these
-/// constructors to the dedicated `Ty::Option<T>` / `Ty::Result<T, E>` variants
-/// for nicer inference messages, so the annotations themselves are never
-/// resolved at use sites. Any `TypeAnnotation` with a sensible arity works;
-/// `Infer` keeps the resolver's pre-pass minimal.
 pub fn builtin_enum_table(
     interner: &mut Interner,
 ) -> Vec<(Symbol, Vec<(Symbol, Vec<TypeAnnotation>)>)> {
@@ -436,13 +609,6 @@ pub fn builtin_enum_table(
 // ============================================================================
 
 /// Registers all standard library functions with the given registry.
-///
-/// This function should be called at startup to populate the native function
-/// registry with all built-in functions.
-///
-/// # Arguments
-/// * `registry` - The native function registry to populate
-/// * `interner` - The string interner for creating function name symbols
 pub fn register_stdlib(registry: &mut NativeRegistry, interner: &mut ferric_common::Interner) {
     // M1 functions
     let println_sym = interner.intern("println");
@@ -471,8 +637,7 @@ pub fn register_stdlib(registry: &mut NativeRegistry, interner: &mut ferric_comm
     let shell_exit_code_sym = interner.intern("shell_exit_code");
     registry.register(shell_exit_code_sym, builtin_shell_exit_code);
 
-    // M3: compiler-internal shell runner. Interned so the compiler can find
-    // the symbol via `Interner::lookup(SHELL_EXEC_NATIVE)`.
+    // M3: compiler-internal shell runner.
     let shell_exec_sym = interner.intern(SHELL_EXEC_NATIVE);
     registry.register(shell_exec_sym, builtin_shell_exec);
 
@@ -492,6 +657,31 @@ pub fn register_stdlib(registry: &mut NativeRegistry, interner: &mut ferric_comm
     registry.register(interner.intern("floor"),           builtin_floor);
     registry.register(interner.intern("ceil"),            builtin_ceil);
     registry.register(interner.intern("read_line"),       builtin_read_line);
+
+    // Per-module registrations from the stdlib build-out.
+    str_::register(registry, interner);
+    bytes::register(registry, interner);
+    list::register(registry, interner);
+    sort::register(registry, interner);
+    map::register(registry, interner);
+    set::register(registry, interner);
+    math::register(registry, interner);
+    io::register(registry, interner);
+    path::register(registry, interner);
+    env::register(registry, interner);
+    time_::register(registry, interner);
+    rand_::register(registry, interner);
+    re::register(registry, interner);
+    json::register(registry, interner);
+    fmt::register(registry, interner);
+    encode::register(registry, interner);
+    crypto::register(registry, interner);
+    http::register(registry, interner);
+    serve::register(registry, interner);
+    sock::register(registry, interner);
+    proc_::register(registry, interner);
+    log::register(registry, interner);
+    sync::register(registry, interner);
 }
 
 // ============================================================================
@@ -508,7 +698,6 @@ mod tests {
 
     #[test]
     fn test_native_registry_new() {
-        // Test that NativeRegistry::new() creates an empty registry
         let registry = NativeRegistry::new();
         let sym = make_sym(0);
         assert!(registry.get(sym).is_none());
@@ -516,7 +705,6 @@ mod tests {
 
     #[test]
     fn test_native_registry_register() {
-        // Test that register() adds a function
         let mut registry = NativeRegistry::new();
         let sym = make_sym(0);
 
@@ -526,7 +714,6 @@ mod tests {
 
     #[test]
     fn test_native_registry_get() {
-        // Test that get() retrieves a registered function
         let mut registry = NativeRegistry::new();
         let sym = make_sym(0);
 
@@ -537,7 +724,6 @@ mod tests {
 
     #[test]
     fn test_native_registry_get_unregistered() {
-        // Test that get() returns None for an unregistered function
         let registry = NativeRegistry::new();
         let sym = make_sym(42);
         assert!(registry.get(sym).is_none());
@@ -545,13 +731,11 @@ mod tests {
 
     #[test]
     fn test_register_stdlib() {
-        // Test that register_stdlib() registers all M1 functions
         let mut registry = NativeRegistry::new();
         let mut interner = ferric_common::Interner::new();
 
         register_stdlib(&mut registry, &mut interner);
 
-        // Check that all three functions are registered
         let println_sym = interner.intern("println");
         let print_sym = interner.intern("print");
         let int_to_str_sym = interner.intern("int_to_str");
@@ -563,7 +747,6 @@ mod tests {
 
     #[test]
     fn test_builtin_println_valid() {
-        // Test that builtin_println with valid string argument works
         let args = vec![NativeValue::Str("Hello, world!".to_string())];
         let result = builtin_println(&args);
 
@@ -573,7 +756,6 @@ mod tests {
 
     #[test]
     fn test_builtin_println_wrong_arg_count() {
-        // Test that builtin_println with wrong arg count returns error
         let args = vec![];
         let result = builtin_println(&args);
 
@@ -583,7 +765,6 @@ mod tests {
 
     #[test]
     fn test_builtin_println_wrong_arg_count_too_many() {
-        // Test that builtin_println with too many args returns error
         let args = vec![
             NativeValue::Str("Hello".to_string()),
             NativeValue::Str("World".to_string()),
@@ -596,7 +777,6 @@ mod tests {
 
     #[test]
     fn test_builtin_println_wrong_arg_type() {
-        // Test that builtin_println with wrong arg type returns error
         let args = vec![NativeValue::Int(42)];
         let result = builtin_println(&args);
 
@@ -606,7 +786,6 @@ mod tests {
 
     #[test]
     fn test_builtin_print_valid() {
-        // Test that builtin_print works without newline
         let args = vec![NativeValue::Str("Hello".to_string())];
         let result = builtin_print(&args);
 
@@ -616,7 +795,6 @@ mod tests {
 
     #[test]
     fn test_builtin_print_wrong_arg_count() {
-        // Test that builtin_print with wrong arg count returns error
         let args = vec![];
         let result = builtin_print(&args);
 
@@ -626,7 +804,6 @@ mod tests {
 
     #[test]
     fn test_builtin_print_wrong_arg_type() {
-        // Test that builtin_print with wrong arg type returns error
         let args = vec![NativeValue::Bool(true)];
         let result = builtin_print(&args);
 
@@ -636,7 +813,6 @@ mod tests {
 
     #[test]
     fn test_builtin_int_to_str() {
-        // Test that builtin_int_to_str(42) returns "42"
         let args = vec![NativeValue::Int(42)];
         let result = builtin_int_to_str(&args);
 
@@ -646,7 +822,6 @@ mod tests {
 
     #[test]
     fn test_builtin_int_to_str_negative() {
-        // Test int_to_str with negative number
         let args = vec![NativeValue::Int(-123)];
         let result = builtin_int_to_str(&args);
 
@@ -656,7 +831,6 @@ mod tests {
 
     #[test]
     fn test_builtin_int_to_str_zero() {
-        // Test int_to_str with zero
         let args = vec![NativeValue::Int(0)];
         let result = builtin_int_to_str(&args);
 
@@ -666,7 +840,6 @@ mod tests {
 
     #[test]
     fn test_builtin_int_to_str_wrong_arg_count() {
-        // Test that int_to_str with wrong arg count returns error
         let args = vec![];
         let result = builtin_int_to_str(&args);
 
@@ -676,7 +849,6 @@ mod tests {
 
     #[test]
     fn test_builtin_int_to_str_wrong_arg_type() {
-        // Test that int_to_str with wrong arg type returns error
         let args = vec![NativeValue::Str("not an int".to_string())];
         let result = builtin_int_to_str(&args);
 
@@ -686,7 +858,6 @@ mod tests {
 
     #[test]
     fn test_check_arg_count_correct() {
-        // Test helper function with correct arg count
         let args = vec![NativeValue::Int(1), NativeValue::Int(2)];
         let result = check_arg_count(&args, 2);
         assert!(result.is_ok());
@@ -694,7 +865,6 @@ mod tests {
 
     #[test]
     fn test_check_arg_count_wrong() {
-        // Test helper function with wrong arg count
         let args = vec![NativeValue::Int(1)];
         let result = check_arg_count(&args, 2);
         assert!(result.is_err());
@@ -702,7 +872,6 @@ mod tests {
 
     #[test]
     fn test_expect_str_valid() {
-        // Test expect_str with valid string
         let value = NativeValue::Str("test".to_string());
         let result = expect_str(&value);
         assert!(result.is_ok());
@@ -711,7 +880,6 @@ mod tests {
 
     #[test]
     fn test_expect_str_invalid() {
-        // Test expect_str with invalid type
         let value = NativeValue::Int(42);
         let result = expect_str(&value);
         assert!(result.is_err());
@@ -719,7 +887,6 @@ mod tests {
 
     #[test]
     fn test_expect_int_valid() {
-        // Test expect_int with valid integer
         let value = NativeValue::Int(42);
         let result = expect_int(&value);
         assert!(result.is_ok());
@@ -728,9 +895,33 @@ mod tests {
 
     #[test]
     fn test_expect_int_invalid() {
-        // Test expect_int with invalid type
         let value = NativeValue::Str("not an int".to_string());
         let result = expect_int(&value);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_native_closure_round_trip() {
+        let c = NativeClosure::new(|args: &[NativeValue]| -> Result<NativeValue, String> {
+            match &args[0] {
+                NativeValue::Int(n) => Ok(NativeValue::Int(n * 2)),
+                _ => Err("expected int".into()),
+            }
+        });
+        let v = NativeValue::Closure(c);
+        let r = invoke_closure(&v, &[NativeValue::Int(7)]).unwrap();
+        assert_eq!(r, NativeValue::Int(14));
+    }
+
+    #[test]
+    fn test_map_key_from_int() {
+        let k = MapKey::from_value(&NativeValue::Int(3)).unwrap();
+        assert_eq!(k, MapKey::Int(3));
+    }
+
+    #[test]
+    fn test_map_key_rejects_float() {
+        let r = MapKey::from_value(&NativeValue::Float(1.5));
+        assert!(r.is_err());
     }
 }
