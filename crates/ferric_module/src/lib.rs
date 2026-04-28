@@ -159,9 +159,9 @@ impl<'a> ModuleCtx<'a> {
             if let Item::Import(decl) = item
                 && let Some(resolved) =
                     self.resolve_import_decl(from_file, decl, /*entry*/ true)
-                {
-                    out.push(resolved);
-                }
+            {
+                out.push(resolved);
+            }
         }
     }
 

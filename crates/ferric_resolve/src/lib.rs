@@ -748,10 +748,11 @@ impl Resolver {
         if let Some(set_fn) = &req.set_fn {
             // Check arity: set closure must have zero declared parameters
             if let Expr::Closure { params, span, .. } = set_fn.as_ref()
-                && !params.is_empty() {
-                    self.errors
-                        .push(ResolveError::RequireSetArity { span: *span });
-                }
+                && !params.is_empty()
+            {
+                self.errors
+                    .push(ResolveError::RequireSetArity { span: *span });
+            }
             // Resolve the set_fn expression
             self.resolve_expr(set_fn);
         }
@@ -802,38 +803,39 @@ impl Resolver {
 
                 // Named-arg validation and canonicalization (only for direct fn calls)
                 if let Expr::Variable { name: fname, .. } = callee.as_ref()
-                    && let Some(params) = self.fn_params.get(fname).cloned() {
-                        // Check for unknown arg names
-                        for arg in args {
-                            if !params.iter().any(|p| p.name == arg.name) {
-                                self.errors.push(ResolveError::UnknownArg {
-                                    name: arg.name,
-                                    span: arg.span,
-                                });
-                            }
+                    && let Some(params) = self.fn_params.get(fname).cloned()
+                {
+                    // Check for unknown arg names
+                    for arg in args {
+                        if !params.iter().any(|p| p.name == arg.name) {
+                            self.errors.push(ResolveError::UnknownArg {
+                                name: arg.name,
+                                span: arg.span,
+                            });
                         }
-
-                        // Build canonical arg list in definition order
-                        let mut canonical: Vec<NamedArg> = Vec::new();
-                        for param in &params {
-                            if let Some(arg) = args.iter().find(|a| a.name == param.name) {
-                                canonical.push(arg.clone());
-                            } else if let Some(default) = &param.default {
-                                canonical.push(NamedArg {
-                                    span: *span,
-                                    name: param.name,
-                                    value: default.clone(),
-                                });
-                            } else {
-                                self.errors.push(ResolveError::MissingArg {
-                                    param: param.name,
-                                    call_span: *span,
-                                });
-                            }
-                        }
-
-                        self.canonical_call_args.insert(*id, canonical);
                     }
+
+                    // Build canonical arg list in definition order
+                    let mut canonical: Vec<NamedArg> = Vec::new();
+                    for param in &params {
+                        if let Some(arg) = args.iter().find(|a| a.name == param.name) {
+                            canonical.push(arg.clone());
+                        } else if let Some(default) = &param.default {
+                            canonical.push(NamedArg {
+                                span: *span,
+                                name: param.name,
+                                value: default.clone(),
+                            });
+                        } else {
+                            self.errors.push(ResolveError::MissingArg {
+                                param: param.name,
+                                call_span: *span,
+                            });
+                        }
+                    }
+
+                    self.canonical_call_args.insert(*id, canonical);
+                }
             }
             Expr::If {
                 cond,

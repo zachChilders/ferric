@@ -197,9 +197,11 @@ fn builtin_io_read_lines(args: &[NativeValue]) -> Result<NativeValue, String> {
     // If the file ended with a newline, the split produced a trailing
     // empty element — drop it for ergonomic line iteration.
     if let Some(NativeValue::Str(last)) = lines.last()
-        && last.is_empty() && contents.ends_with('\n') {
-            lines.pop();
-        }
+        && last.is_empty()
+        && contents.ends_with('\n')
+    {
+        lines.pop();
+    }
     Ok(NativeValue::Array(lines))
 }
 

@@ -363,10 +363,11 @@ impl<'a> Compiler<'a> {
             Stmt::Assign { target, value, .. } => {
                 self.compile_expr(value);
                 if let Expr::Variable { name, .. } = target
-                    && let Some(slot) = self.lookup_local(*name) {
-                        self.emit(Op::StoreSlot(slot));
-                        return;
-                    }
+                    && let Some(slot) = self.lookup_local(*name)
+                {
+                    self.emit(Op::StoreSlot(slot));
+                    return;
+                }
                 // Unresolved target — drop the value to keep the stack balanced.
                 self.emit(Op::Pop);
             }

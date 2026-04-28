@@ -484,9 +484,10 @@ fn builtin_sort_is_sorted_by(args: &[NativeValue]) -> Result<NativeValue, String
     for item in l {
         let k = invoke_closure(key, &[item])?;
         if let Some(p) = &prev_key
-            && total_cmp(p, &k)? == Ordering::Greater {
-                return Ok(NativeValue::Bool(false));
-            }
+            && total_cmp(p, &k)? == Ordering::Greater
+        {
+            return Ok(NativeValue::Bool(false));
+        }
         prev_key = Some(k);
     }
     Ok(NativeValue::Bool(true))

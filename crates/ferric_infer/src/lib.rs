@@ -1415,17 +1415,18 @@ impl<'a> TypeInfer<'a> {
                     for (fname, fexpr) in fields {
                         let expr_ty = self.infer_expr(fexpr);
                         if let Some((_, decl_ty)) = declared.iter().find(|(n, _)| *n == *fname)
-                            && self.try_unify(decl_ty, &expr_ty).is_err() {
-                                let expected = self.subst.apply(decl_ty);
-                                let found = self.subst.apply(&expr_ty);
-                                self.errors.push(TypeError::FieldTypeMismatch {
-                                    struct_name: sname,
-                                    field: *fname,
-                                    expected,
-                                    found,
-                                    span: fexpr.span(),
-                                });
-                            }
+                            && self.try_unify(decl_ty, &expr_ty).is_err()
+                        {
+                            let expected = self.subst.apply(decl_ty);
+                            let found = self.subst.apply(&expr_ty);
+                            self.errors.push(TypeError::FieldTypeMismatch {
+                                struct_name: sname,
+                                field: *fname,
+                                expected,
+                                found,
+                                span: fexpr.span(),
+                            });
+                        }
                     }
                 } else {
                     // Still walk the field expressions so any nested errors are reported.
@@ -1525,28 +1526,31 @@ impl<'a> TypeInfer<'a> {
                 if ferric_common::ImplTy::from_ty(&resolved).is_some()
                     && let Some((trait_name, def_id)) =
                         self.registry.find_method(&resolved, *method)
+                {
+                    self.method_dispatch.insert(*id, def_id);
+                    if let Some(trait_def) = self.registry.traits.get(&trait_name)
+                        && let Some(sig) = trait_def.methods.get(method)
                     {
-                        self.method_dispatch.insert(*id, def_id);
-                        if let Some(trait_def) = self.registry.traits.get(&trait_name)
-                            && let Some(sig) = trait_def.methods.get(method) {
-                                method_sig = Some((sig.params.clone(), sig.ret.clone()));
-                            }
+                        method_sig = Some((sig.params.clone(), sig.ret.clone()));
                     }
+                }
 
                 // 2) Receiver is a type variable bound by a trait — use the
                 //    trait's method signature for type-checking; dispatch is
                 //    resolved monomorphically at compile time.
                 if method_sig.is_none()
                     && let Ty::Var(v) = &resolved
-                        && let Some(bounds) = self.bound_constraints.get(v).cloned() {
-                            for bound in &bounds {
-                                if let Some(trait_def) = self.registry.traits.get(bound)
-                                    && let Some(sig) = trait_def.methods.get(method) {
-                                        method_sig = Some((sig.params.clone(), sig.ret.clone()));
-                                        break;
-                                    }
-                            }
+                    && let Some(bounds) = self.bound_constraints.get(v).cloned()
+                {
+                    for bound in &bounds {
+                        if let Some(trait_def) = self.registry.traits.get(bound)
+                            && let Some(sig) = trait_def.methods.get(method)
+                        {
+                            method_sig = Some((sig.params.clone(), sig.ret.clone()));
+                            break;
                         }
+                    }
+                }
 
                 // Always schedule a post-pass dispatch attempt for
                 // method_dispatch resolution. The post-pass also reports
@@ -1888,12 +1892,13 @@ impl<'a> TypeInfer<'a> {
                 if let Ty::Enum { variants, .. } = &enum_ty {
                     let variants = variants.clone();
                     if let Some((_, payload)) = variants.iter().find(|(n, _)| *n == *variant)
-                        && payload.len() == patterns.len() {
-                            for (sub, ty) in patterns.iter().zip(payload.iter()) {
-                                self.check_pattern(sub, ty);
-                            }
-                            return;
+                        && payload.len() == patterns.len()
+                    {
+                        for (sub, ty) in patterns.iter().zip(payload.iter()) {
+                            self.check_pattern(sub, ty);
                         }
+                        return;
+                    }
                 }
                 // Fallback when the variant is unknown or arity mismatches:
                 // still walk subpatterns so binding sites are introduced.
