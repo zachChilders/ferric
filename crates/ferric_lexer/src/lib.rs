@@ -201,21 +201,21 @@ impl<'a> Lexer<'a> {
             // Look ahead to see if there's a digit after the '.'
             let mut chars_clone = self.chars.clone();
             chars_clone.next(); // Skip the '.'
-            if let Some(next_ch) = chars_clone.peek() {
-                if next_ch.is_ascii_digit() {
-                    // It's a float
-                    is_float = true;
-                    num_str.push('.');
-                    self.advance();
+            if let Some(next_ch) = chars_clone.peek()
+                && next_ch.is_ascii_digit()
+            {
+                // It's a float
+                is_float = true;
+                num_str.push('.');
+                self.advance();
 
-                    // Lex the fractional part
-                    while let Some(ch) = self.peek() {
-                        if ch.is_ascii_digit() {
-                            num_str.push(ch);
-                            self.advance();
-                        } else {
-                            break;
-                        }
+                // Lex the fractional part
+                while let Some(ch) = self.peek() {
+                    if ch.is_ascii_digit() {
+                        num_str.push(ch);
+                        self.advance();
+                    } else {
+                        break;
                     }
                 }
             }
