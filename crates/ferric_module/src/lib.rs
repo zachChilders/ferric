@@ -156,13 +156,12 @@ impl<'a> ModuleCtx<'a> {
         out: &mut Vec<ResolvedImport>,
     ) {
         for item in &ast.items {
-            if let Item::Import(decl) = item {
-                if let Some(resolved) =
+            if let Item::Import(decl) = item
+                && let Some(resolved) =
                     self.resolve_import_decl(from_file, decl, /*entry*/ true)
                 {
                     out.push(resolved);
                 }
-            }
         }
     }
 

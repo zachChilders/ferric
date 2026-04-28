@@ -940,11 +940,10 @@ fn send_request_inner(req: RequestBuilderRepr) -> Result<ResponseRepr, String> {
         Err(e) => {
             let mut mapped = classify_reqwest_error(&e, &req.url);
             // Patch in the `ms` for timeouts (reqwest doesn't expose it).
-            if let HttpError::Timeout { ms, .. } = &mut mapped {
-                if let Some(m) = req.timeout_ms {
+            if let HttpError::Timeout { ms, .. } = &mut mapped
+                && let Some(m) = req.timeout_ms {
                     *ms = m;
                 }
-            }
             return Err(http_err(mapped));
         }
     };

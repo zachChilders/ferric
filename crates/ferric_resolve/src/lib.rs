@@ -747,12 +747,11 @@ impl Resolver {
 
         if let Some(set_fn) = &req.set_fn {
             // Check arity: set closure must have zero declared parameters
-            if let Expr::Closure { params, span, .. } = set_fn.as_ref() {
-                if !params.is_empty() {
+            if let Expr::Closure { params, span, .. } = set_fn.as_ref()
+                && !params.is_empty() {
                     self.errors
                         .push(ResolveError::RequireSetArity { span: *span });
                 }
-            }
             // Resolve the set_fn expression
             self.resolve_expr(set_fn);
         }
@@ -802,8 +801,8 @@ impl Resolver {
                 }
 
                 // Named-arg validation and canonicalization (only for direct fn calls)
-                if let Expr::Variable { name: fname, .. } = callee.as_ref() {
-                    if let Some(params) = self.fn_params.get(fname).cloned() {
+                if let Expr::Variable { name: fname, .. } = callee.as_ref()
+                    && let Some(params) = self.fn_params.get(fname).cloned() {
                         // Check for unknown arg names
                         for arg in args {
                             if !params.iter().any(|p| p.name == arg.name) {
@@ -835,7 +834,6 @@ impl Resolver {
 
                         self.canonical_call_args.insert(*id, canonical);
                     }
-                }
             }
             Expr::If {
                 cond,

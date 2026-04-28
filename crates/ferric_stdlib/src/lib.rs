@@ -2,6 +2,12 @@
 //!
 //! Provides native functions and the NativeRegistry for runtime function lookup.
 
+// Stdlib tests routinely invoke builtins with `&[v.clone()]` to construct a
+// single-element argument slice. Clippy's `cloned_ref_to_slice_refs` lint
+// prefers `std::slice::from_ref(&v)`, but rewriting hundreds of test
+// callsites costs more than the lint pays. Suppress crate-wide.
+#![allow(clippy::cloned_ref_to_slice_refs)]
+
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::rc::Rc;

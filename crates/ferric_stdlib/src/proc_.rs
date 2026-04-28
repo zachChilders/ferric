@@ -212,14 +212,13 @@ fn run_to_completion(repr: &CommandRepr) -> Result<ProcOutputRepr, String> {
         .spawn()
         .map_err(|e| classify_spawn_error(e, &repr.program))?;
 
-    if let Some(data) = &repr.stdin {
-        if let Some(mut stdin) = child.stdin.take() {
+    if let Some(data) = &repr.stdin
+        && let Some(mut stdin) = child.stdin.take() {
             stdin
                 .write_all(data)
                 .map_err(|e| format!("ProcError::Other: writing stdin: {e}"))?;
             // Closing happens when `stdin` drops here.
         }
-    }
 
     if let Some(ms) = repr.timeout_ms {
         // Busy-poll with try_wait. Avoids the optional `wait-timeout` dep
@@ -433,13 +432,12 @@ fn builtin_proc_spawn_streaming(args: &[NativeValue]) -> Result<NativeValue, Str
 
     // If the builder queued stdin data, push it before handing back the
     // process. Subsequent `write_stdin` calls append more data.
-    if let Some(data) = &repr.stdin {
-        if let Some(stdin) = child.stdin.as_mut() {
+    if let Some(data) = &repr.stdin
+        && let Some(stdin) = child.stdin.as_mut() {
             stdin
                 .write_all(data)
                 .map_err(|e| format!("ProcError::Other: writing stdin: {e}"))?;
         }
-    }
 
     let stdout_reader = child.stdout.take().map(BufReader::new);
 
