@@ -45,14 +45,14 @@ fn check_arg_count(args: &[NativeValue], expected: usize) -> Result<(), String> 
 fn expect_str(value: &NativeValue) -> Result<&String, String> {
     match value {
         NativeValue::Str(s) => Ok(s),
-        other => Err(format!("expected string, got {:?}", other)),
+        other => Err(format!("expected string, got {other:?}")),
     }
 }
 
 fn expect_int(value: &NativeValue) -> Result<i64, String> {
     match value {
         NativeValue::Int(n) => Ok(*n),
-        other => Err(format!("expected int, got {:?}", other)),
+        other => Err(format!("expected int, got {other:?}")),
     }
 }
 
@@ -60,35 +60,35 @@ fn expect_bytes(value: &NativeValue) -> Result<Vec<u8>, String> {
     match value {
         NativeValue::Bytes(b) => Ok(b.clone()),
         NativeValue::BytesMut(buf) => Ok(buf.borrow().clone()),
-        other => Err(format!("expected bytes, got {:?}", other)),
+        other => Err(format!("expected bytes, got {other:?}")),
     }
 }
 
 fn expect_bytes_mut(value: &NativeValue) -> Result<Rc<RefCell<Vec<u8>>>, String> {
     match value {
         NativeValue::BytesMut(buf) => Ok(buf.clone()),
-        other => Err(format!("expected mutable bytes buffer, got {:?}", other)),
+        other => Err(format!("expected mutable bytes buffer, got {other:?}")),
     }
 }
 
 fn expect_tcp_stream(value: &NativeValue) -> Result<Rc<RefCell<TcpStream>>, String> {
     match value {
         NativeValue::TcpStream(s) => Ok(s.clone()),
-        other => Err(format!("expected TcpStream, got {:?}", other)),
+        other => Err(format!("expected TcpStream, got {other:?}")),
     }
 }
 
 fn expect_tcp_listener(value: &NativeValue) -> Result<Rc<TcpListener>, String> {
     match value {
         NativeValue::TcpListener(l) => Ok(l.clone()),
-        other => Err(format!("expected TcpListener, got {:?}", other)),
+        other => Err(format!("expected TcpListener, got {other:?}")),
     }
 }
 
 fn expect_udp_socket(value: &NativeValue) -> Result<Rc<UdpSocket>, String> {
     match value {
         NativeValue::UdpSocket(s) => Ok(s.clone()),
-        other => Err(format!("expected UdpSocket, got {:?}", other)),
+        other => Err(format!("expected UdpSocket, got {other:?}")),
     }
 }
 
@@ -101,30 +101,30 @@ fn expect_udp_socket(value: &NativeValue) -> Result<Rc<UdpSocket>, String> {
 fn map_io_err(e: &std::io::Error, host: &str, port: i64) -> String {
     match e.kind() {
         ErrorKind::ConnectionRefused => {
-            format!("ConnectionRefused: host={} port={}", host, port)
+            format!("ConnectionRefused: host={host} port={port}")
         }
         ErrorKind::ConnectionReset | ErrorKind::ConnectionAborted => {
-            format!("ConnectionReset: {}", e)
+            format!("ConnectionReset: {e}")
         }
         ErrorKind::WouldBlock | ErrorKind::TimedOut => {
-            format!("Timeout: {}", e)
+            format!("Timeout: {e}")
         }
         ErrorKind::AddrInUse => {
-            format!("AddressInUse: port={}", port)
+            format!("AddressInUse: port={port}")
         }
         ErrorKind::AddrNotAvailable | ErrorKind::InvalidInput => {
-            format!("InvalidAddress: {}={}", host, e)
+            format!("InvalidAddress: {host}={e}")
         }
         ErrorKind::UnexpectedEof => {
-            format!("Disconnected: {}", e)
+            format!("Disconnected: {e}")
         }
-        _ => format!("Other: {}", e),
+        _ => format!("Other: {e}"),
     }
 }
 
 fn parse_port(n: i64) -> Result<u16, String> {
     if !(0..=u16::MAX as i64).contains(&n) {
-        Err(format!("InvalidAddress: port {} out of range 0..=65535", n))
+        Err(format!("InvalidAddress: port {n} out of range 0..=65535"))
     } else {
         Ok(n as u16)
     }
@@ -152,7 +152,7 @@ fn builtin_sock_tcp_connect_timeout(args: &[NativeValue]) -> Result<NativeValue,
     let port = parse_port(port_i)?;
     let ms = expect_int(&args[2])?;
     if ms < 0 {
-        return Err(format!("Other: negative timeout {}", ms));
+        return Err(format!("Other: negative timeout {ms}"));
     }
     let dur = Duration::from_millis(ms as u64);
 
@@ -162,7 +162,7 @@ fn builtin_sock_tcp_connect_timeout(args: &[NativeValue]) -> Result<NativeValue,
         .map_err(|e| map_io_err(&e, &host, port_i))?;
     let addr = addrs
         .next()
-        .ok_or_else(|| format!("InvalidAddress: {}:{} resolved to no addresses", host, port))?;
+        .ok_or_else(|| format!("InvalidAddress: {host}:{port} resolved to no addresses"))?;
 
     let stream = TcpStream::connect_timeout(&addr, dur)
         .map_err(|e| map_io_err(&e, &host, port_i))?;
@@ -200,7 +200,7 @@ fn builtin_sock_read_exact(args: &[NativeValue]) -> Result<NativeValue, String> 
     let stream_rc = expect_tcp_stream(&args[0])?;
     let n = expect_int(&args[1])?;
     if n < 0 {
-        return Err(format!("Other: negative byte count {}", n));
+        return Err(format!("Other: negative byte count {n}"));
     }
     let mut buf = vec![0u8; n as usize];
 
@@ -254,7 +254,7 @@ fn builtin_sock_read_line(args: &[NativeValue]) -> Result<NativeValue, String> {
             Err(e) => return Err(map_io_err(&e, "", 0)),
         }
     }
-    let s = String::from_utf8(buf).map_err(|e| format!("Other: invalid UTF-8 in line: {}", e))?;
+    let s = String::from_utf8(buf).map_err(|e| format!("Other: invalid UTF-8 in line: {e}"))?;
     Ok(NativeValue::Str(s))
 }
 
@@ -319,7 +319,7 @@ fn builtin_sock_set_timeout(args: &[NativeValue]) -> Result<NativeValue, String>
     let stream_rc = expect_tcp_stream(&args[0])?;
     let ms = expect_int(&args[1])?;
     if ms < 0 {
-        return Err(format!("Other: negative timeout {}", ms));
+        return Err(format!("Other: negative timeout {ms}"));
     }
     // A timeout of 0 is interpreted as "no timeout" (None), matching the
     // documented contract of std::net::TcpStream::set_read_timeout.
@@ -516,7 +516,7 @@ mod tests {
         let v = builtin_sock_tcp_listen(&[NativeValue::Int(0)]).expect("listen");
         let listener = match &v {
             NativeValue::TcpListener(l) => l.clone(),
-            other => panic!("expected TcpListener, got {:?}", other),
+            other => panic!("expected TcpListener, got {other:?}"),
         };
         let port = listener.local_addr().expect("local_addr").port();
         (v, port)
@@ -526,7 +526,7 @@ mod tests {
         let v = builtin_sock_udp_bind(&[NativeValue::Int(0)]).expect("udp bind");
         let sock = match &v {
             NativeValue::UdpSocket(s) => s.clone(),
-            other => panic!("expected UdpSocket, got {:?}", other),
+            other => panic!("expected UdpSocket, got {other:?}"),
         };
         let port = sock.local_addr().expect("local_addr").port();
         (v, port)
@@ -540,7 +540,7 @@ mod tests {
             NativeValue::TcpListener(l) => l
                 .try_clone()
                 .expect("TcpListener::try_clone in test helper"),
-            other => panic!("expected TcpListener, got {:?}", other),
+            other => panic!("expected TcpListener, got {other:?}"),
         }
     }
 
@@ -571,11 +571,11 @@ mod tests {
             let line = builtin_sock_read_line(&[stream_v.clone()]).expect("read_line");
             let s = match line {
                 NativeValue::Str(s) => s,
-                other => panic!("expected str, got {:?}", other),
+                other => panic!("expected str, got {other:?}"),
             };
             builtin_sock_write_str(&[
                 stream_v.clone(),
-                NativeValue::Str(format!("{}\n", s)),
+                NativeValue::Str(format!("{s}\n")),
             ])
             .expect("write_str");
         });
@@ -607,7 +607,7 @@ mod tests {
             NativeValue::Int(port as i64),
             NativeValue::Int(200),
         ]);
-        assert!(r.is_err(), "expected error connecting to closed port, got {:?}", r);
+        assert!(r.is_err(), "expected error connecting to closed port, got {r:?}");
         let msg = r.unwrap_err();
         assert!(
             msg.starts_with("ConnectionRefused")
@@ -634,7 +634,7 @@ mod tests {
         ])
         .expect("connect");
         let r = builtin_sock_read_exact(&[client.clone(), NativeValue::Int(5)]);
-        assert!(r.is_err(), "expected EOF error, got {:?}", r);
+        assert!(r.is_err(), "expected EOF error, got {r:?}");
         assert!(r.unwrap_err().starts_with("Disconnected"));
         let _ = builtin_sock_close(&[client]);
         server.join().expect("server thread");
@@ -661,7 +661,7 @@ mod tests {
         .expect("connect");
         builtin_sock_set_timeout(&[client.clone(), NativeValue::Int(50)]).expect("set_timeout");
         let r = builtin_sock_read_line(&[client.clone()]);
-        assert!(r.is_err(), "expected timeout, got {:?}", r);
+        assert!(r.is_err(), "expected timeout, got {r:?}");
         assert!(
             r.unwrap_err().starts_with("Timeout"),
             "expected Timeout prefix"
@@ -696,10 +696,10 @@ mod tests {
                 assert_eq!(items[0], NativeValue::Bytes(b"ping".to_vec()));
                 match &items[1] {
                     NativeValue::Str(s) => assert!(s.contains("127.0.0.1")),
-                    other => panic!("expected sender addr str, got {:?}", other),
+                    other => panic!("expected sender addr str, got {other:?}"),
                 }
             }
-            other => panic!("expected Array tuple, got {:?}", other),
+            other => panic!("expected Array tuple, got {other:?}"),
         }
     }
 
@@ -727,7 +727,7 @@ mod tests {
                 assert!(!p.is_empty());
                 assert!(p.contains(&port.to_string()));
             }
-            other => panic!("unexpected addr shape {:?}", other),
+            other => panic!("unexpected addr shape {other:?}"),
         }
         let _ = builtin_sock_close(&[client]);
         server.join().expect("server thread");
@@ -745,7 +745,7 @@ mod tests {
                 .expect("server read_exact");
             let bytes = match r {
                 NativeValue::Bytes(b) => b,
-                other => panic!("expected Bytes, got {:?}", other),
+                other => panic!("expected Bytes, got {other:?}"),
             };
             builtin_sock_write_all(&[stream_v.clone(), NativeValue::Bytes(bytes)])
                 .expect("server write_all");
@@ -784,7 +784,7 @@ mod tests {
         // we assert we got *something* in (0, 16].
         match n {
             NativeValue::Int(k) => assert!(k > 0 && k <= 16, "unexpected read count {k}"),
-            other => panic!("expected Int, got {:?}", other),
+            other => panic!("expected Int, got {other:?}"),
         }
         if let NativeValue::BytesMut(b) = &buf {
             // The first three bytes should match.
@@ -878,7 +878,7 @@ mod tests {
         .expect("listen_addr");
         let l = match r {
             NativeValue::TcpListener(l) => l,
-            other => panic!("expected TcpListener, got {:?}", other),
+            other => panic!("expected TcpListener, got {other:?}"),
         };
         let addr = l.local_addr().expect("local_addr").to_string();
         assert!(addr.starts_with("127.0.0.1:"));
@@ -893,7 +893,7 @@ mod tests {
         .expect("udp_bind_addr");
         let s = match r {
             NativeValue::UdpSocket(s) => s,
-            other => panic!("expected UdpSocket, got {:?}", other),
+            other => panic!("expected UdpSocket, got {other:?}"),
         };
         let addr = s.local_addr().expect("local_addr").to_string();
         assert!(addr.starts_with("127.0.0.1:"));
@@ -950,8 +950,7 @@ mod tests {
             let sym = interner.intern(name);
             assert!(
                 registry.get(sym).is_some(),
-                "expected {} to be registered",
-                name
+                "expected {name} to be registered"
             );
         }
     }

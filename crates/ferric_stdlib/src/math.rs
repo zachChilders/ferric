@@ -42,14 +42,14 @@ fn check_arg_count(args: &[NativeValue], expected: usize) -> Result<(), String> 
 fn expect_int(value: &NativeValue) -> Result<i64, String> {
     match value {
         NativeValue::Int(n) => Ok(*n),
-        other => Err(format!("expected int, got {:?}", other)),
+        other => Err(format!("expected int, got {other:?}")),
     }
 }
 
 fn expect_float(value: &NativeValue) -> Result<f64, String> {
     match value {
         NativeValue::Float(f) => Ok(*f),
-        other => Err(format!("expected float, got {:?}", other)),
+        other => Err(format!("expected float, got {other:?}")),
     }
 }
 
@@ -254,7 +254,7 @@ fn builtin_math_sqrt(args: &[NativeValue]) -> Result<NativeValue, String> {
     check_arg_count(args, 1)?;
     let n = expect_float(&args[0])?;
     if n < 0.0 {
-        return Err(format!("MathError::NegativeSqrt: sqrt({}) is undefined", n));
+        return Err(format!("MathError::NegativeSqrt: sqrt({n}) is undefined"));
     }
     Ok(NativeValue::Float(n.sqrt()))
 }
@@ -276,12 +276,11 @@ fn builtin_math_log(args: &[NativeValue]) -> Result<NativeValue, String> {
     let n = expect_float(&args[0])?;
     let base = expect_float(&args[1])?;
     if n <= 0.0 {
-        return Err(format!("MathError::LogOfNonPositive: log({}) is undefined", n));
+        return Err(format!("MathError::LogOfNonPositive: log({n}) is undefined"));
     }
     if base <= 0.0 || base == 1.0 {
         return Err(format!(
-            "MathError: log base must be positive and != 1, got {}",
-            base
+            "MathError: log base must be positive and != 1, got {base}"
         ));
     }
     Ok(NativeValue::Float(n.log(base)))
@@ -291,7 +290,7 @@ fn builtin_math_ln(args: &[NativeValue]) -> Result<NativeValue, String> {
     check_arg_count(args, 1)?;
     let n = expect_float(&args[0])?;
     if n <= 0.0 {
-        return Err(format!("MathError::LogOfNonPositive: ln({}) is undefined", n));
+        return Err(format!("MathError::LogOfNonPositive: ln({n}) is undefined"));
     }
     Ok(NativeValue::Float(n.ln()))
 }
@@ -300,7 +299,7 @@ fn builtin_math_log2(args: &[NativeValue]) -> Result<NativeValue, String> {
     check_arg_count(args, 1)?;
     let n = expect_float(&args[0])?;
     if n <= 0.0 {
-        return Err(format!("MathError::LogOfNonPositive: log2({}) is undefined", n));
+        return Err(format!("MathError::LogOfNonPositive: log2({n}) is undefined"));
     }
     Ok(NativeValue::Float(n.log2()))
 }
@@ -309,7 +308,7 @@ fn builtin_math_log10(args: &[NativeValue]) -> Result<NativeValue, String> {
     check_arg_count(args, 1)?;
     let n = expect_float(&args[0])?;
     if n <= 0.0 {
-        return Err(format!("MathError::LogOfNonPositive: log10({}) is undefined", n));
+        return Err(format!("MathError::LogOfNonPositive: log10({n}) is undefined"));
     }
     Ok(NativeValue::Float(n.log10()))
 }
@@ -338,7 +337,7 @@ fn builtin_math_asin(args: &[NativeValue]) -> Result<NativeValue, String> {
     check_arg_count(args, 1)?;
     let n = expect_float(&args[0])?;
     if n.abs() > 1.0 {
-        return Err(format!("MathError: asin domain error, |{}| > 1", n));
+        return Err(format!("MathError: asin domain error, |{n}| > 1"));
     }
     Ok(NativeValue::Float(n.asin()))
 }
@@ -347,7 +346,7 @@ fn builtin_math_acos(args: &[NativeValue]) -> Result<NativeValue, String> {
     check_arg_count(args, 1)?;
     let n = expect_float(&args[0])?;
     if n.abs() > 1.0 {
-        return Err(format!("MathError: acos domain error, |{}| > 1", n));
+        return Err(format!("MathError: acos domain error, |{n}| > 1"));
     }
     Ok(NativeValue::Float(n.acos()))
 }
@@ -528,21 +527,21 @@ mod tests {
     fn unwrap_int(v: NativeValue) -> i64 {
         match v {
             NativeValue::Int(n) => n,
-            other => panic!("expected Int, got {:?}", other),
+            other => panic!("expected Int, got {other:?}"),
         }
     }
 
     fn unwrap_float(v: NativeValue) -> f64 {
         match v {
             NativeValue::Float(n) => n,
-            other => panic!("expected Float, got {:?}", other),
+            other => panic!("expected Float, got {other:?}"),
         }
     }
 
     fn unwrap_bool(v: NativeValue) -> bool {
         match v {
             NativeValue::Bool(b) => b,
-            other => panic!("expected Bool, got {:?}", other),
+            other => panic!("expected Bool, got {other:?}"),
         }
     }
 
@@ -1051,8 +1050,7 @@ mod tests {
             let sym = interner.intern(name);
             assert!(
                 registry.get(sym).is_some(),
-                "missing registration for {}",
-                name
+                "missing registration for {name}"
             );
         }
     }

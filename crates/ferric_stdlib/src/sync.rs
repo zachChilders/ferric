@@ -150,35 +150,35 @@ fn check_arg_count(args: &[NativeValue], expected: usize) -> Result<(), String> 
 fn expect_int(value: &NativeValue) -> Result<i64, String> {
     match value {
         NativeValue::Int(n) => Ok(*n),
-        other => Err(format!("expected int, got {:?}", other)),
+        other => Err(format!("expected int, got {other:?}")),
     }
 }
 
 fn expect_sender(value: &NativeValue) -> Result<Rc<SenderRepr>, String> {
     match value {
         NativeValue::SyncSender(s) => Ok(Rc::clone(s)),
-        other => Err(format!("expected Sender, got {:?}", other)),
+        other => Err(format!("expected Sender, got {other:?}")),
     }
 }
 
 fn expect_receiver(value: &NativeValue) -> Result<Rc<ReceiverRepr>, String> {
     match value {
         NativeValue::SyncReceiver(r) => Ok(Rc::clone(r)),
-        other => Err(format!("expected Receiver, got {:?}", other)),
+        other => Err(format!("expected Receiver, got {other:?}")),
     }
 }
 
 fn expect_mutex(value: &NativeValue) -> Result<Rc<MutexRepr>, String> {
     match value {
         NativeValue::SyncMutex(m) => Ok(Rc::clone(m)),
-        other => Err(format!("expected Mutex, got {:?}", other)),
+        other => Err(format!("expected Mutex, got {other:?}")),
     }
 }
 
 fn expect_once(value: &NativeValue) -> Result<Rc<OnceRepr>, String> {
     match value {
         NativeValue::SyncOnce(o) => Ok(Rc::clone(o)),
-        other => Err(format!("expected Once, got {:?}", other)),
+        other => Err(format!("expected Once, got {other:?}")),
     }
 }
 
@@ -226,7 +226,7 @@ fn builtin_sync_channel(args: &[NativeValue]) -> Result<NativeValue, String> {
     check_arg_count(args, 1)?;
     let cap = expect_int(&args[0])?;
     if cap < 0 {
-        return Err(format!("channel capacity must be non-negative, got {}", cap));
+        return Err(format!("channel capacity must be non-negative, got {cap}"));
     }
     let (sender, receiver) = if cap == 0 {
         let (tx, rx) = std::sync::mpsc::channel::<NativeValue>();
@@ -406,9 +406,9 @@ mod tests {
         match v {
             NativeValue::Tuple2(a, b) => match (*a, *b) {
                 (NativeValue::SyncSender(s), NativeValue::SyncReceiver(r)) => (s, r),
-                other => panic!("expected (Sender, Receiver), got {:?}", other),
+                other => panic!("expected (Sender, Receiver), got {other:?}"),
             },
-            other => panic!("expected Tuple2, got {:?}", other),
+            other => panic!("expected Tuple2, got {other:?}"),
         }
     }
 
@@ -416,10 +416,10 @@ mod tests {
         match v {
             NativeValue::Tuple2(tag, payload) => match *tag {
                 NativeValue::Int(0) => *payload,
-                NativeValue::Int(t) => panic!("expected Ok, got Err({})", t),
-                other => panic!("expected Int tag, got {:?}", other),
+                NativeValue::Int(t) => panic!("expected Ok, got Err({t})"),
+                other => panic!("expected Int tag, got {other:?}"),
             },
-            other => panic!("expected Tuple2 result, got {:?}", other),
+            other => panic!("expected Tuple2 result, got {other:?}"),
         }
     }
 
@@ -427,9 +427,9 @@ mod tests {
         match v {
             NativeValue::Tuple2(tag, payload) => match (*tag, *payload) {
                 (NativeValue::Int(1), NativeValue::Int(t)) => t,
-                other => panic!("expected Err(Int), got {:?}", other),
+                other => panic!("expected Err(Int), got {other:?}"),
             },
-            other => panic!("expected Tuple2, got {:?}", other),
+            other => panic!("expected Tuple2, got {other:?}"),
         }
     }
 
@@ -508,7 +508,7 @@ mod tests {
         let empty = builtin_sync_try_recv(&[NativeValue::SyncReceiver(Rc::clone(&r))]).unwrap();
         match empty {
             NativeValue::Tuple2(tag, _) => assert_eq!(*tag, NativeValue::Int(1)),
-            other => panic!("expected Option::None tuple, got {:?}", other),
+            other => panic!("expected Option::None tuple, got {other:?}"),
         }
 
         // After a send, try_recv yields Some.
@@ -519,7 +519,7 @@ mod tests {
                 assert_eq!(*tag, NativeValue::Int(0));
                 assert_eq!(*payload, NativeValue::Int(7));
             }
-            other => panic!("expected Some, got {:?}", other),
+            other => panic!("expected Some, got {other:?}"),
         }
     }
 
@@ -559,7 +559,7 @@ mod tests {
         for _ in 0..3 {
             lock_with(&m, |v| match v {
                 NativeValue::Int(n) => (NativeValue::Int(n + 1), ()),
-                other => panic!("unexpected value {:?}", other),
+                other => panic!("unexpected value {other:?}"),
             })
             .expect("lock should succeed");
         }
@@ -724,8 +724,7 @@ mod tests {
             let sym = interner.intern(name);
             assert!(
                 registry.get(sym).is_some(),
-                "{} should be registered",
-                name
+                "{name} should be registered"
             );
         }
     }

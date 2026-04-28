@@ -68,8 +68,7 @@ impl MapKey {
                 Err("map/set keys may not be Float (NaN forbids ordering)".to_string())
             }
             other => Err(format!(
-                "map/set keys must be Int, Str, or Bool — got {:?}",
-                other
+                "map/set keys must be Int, Str, or Bool — got {other:?}"
             )),
         }
     }
@@ -99,8 +98,10 @@ impl MapKey {
 /// placeholder until VM closure dispatch lands.
 #[derive(Clone)]
 pub struct NativeClosure {
-    inner: Rc<dyn Fn(&[NativeValue]) -> Result<NativeValue, String>>,
+    inner: Rc<NativeClosureFn>,
 }
+
+type NativeClosureFn = dyn Fn(&[NativeValue]) -> Result<NativeValue, String>;
 
 impl NativeClosure {
     /// Wraps a Rust closure into a `NativeClosure`.
@@ -141,8 +142,7 @@ pub fn invoke_closure(c: &NativeValue, args: &[NativeValue]) -> Result<NativeVal
     match c {
         NativeValue::Closure(closure) => closure.call(args),
         other => Err(format!(
-            "expected closure, got {:?} — VM closure bridge is not yet wired",
-            other
+            "expected closure, got {other:?} — VM closure bridge is not yet wired"
         )),
     }
 }
@@ -412,7 +412,7 @@ fn check_arg_count(args: &[NativeValue], expected: usize) -> Result<(), String> 
 fn expect_str(value: &NativeValue) -> Result<&String, String> {
     match value {
         NativeValue::Str(s) => Ok(s),
-        _ => Err(format!("expected string, got {:?}", value)),
+        _ => Err(format!("expected string, got {value:?}")),
     }
 }
 
@@ -420,7 +420,7 @@ fn expect_str(value: &NativeValue) -> Result<&String, String> {
 fn expect_int(value: &NativeValue) -> Result<i64, String> {
     match value {
         NativeValue::Int(n) => Ok(*n),
-        _ => Err(format!("expected int, got {:?}", value)),
+        _ => Err(format!("expected int, got {value:?}")),
     }
 }
 
@@ -428,7 +428,7 @@ fn expect_int(value: &NativeValue) -> Result<i64, String> {
 fn expect_float(value: &NativeValue) -> Result<f64, String> {
     match value {
         NativeValue::Float(f) => Ok(*f),
-        _ => Err(format!("expected float, got {:?}", value)),
+        _ => Err(format!("expected float, got {value:?}")),
     }
 }
 
@@ -436,7 +436,7 @@ fn expect_float(value: &NativeValue) -> Result<f64, String> {
 fn expect_bool(value: &NativeValue) -> Result<bool, String> {
     match value {
         NativeValue::Bool(b) => Ok(*b),
-        _ => Err(format!("expected bool, got {:?}", value)),
+        _ => Err(format!("expected bool, got {value:?}")),
     }
 }
 
@@ -448,7 +448,7 @@ fn expect_bool(value: &NativeValue) -> Result<bool, String> {
 fn builtin_println(args: &[NativeValue]) -> Result<NativeValue, String> {
     check_arg_count(args, 1)?;
     let s = expect_str(&args[0])?;
-    println!("{}", s);
+    println!("{s}");
     Ok(NativeValue::Unit)
 }
 
@@ -456,7 +456,7 @@ fn builtin_println(args: &[NativeValue]) -> Result<NativeValue, String> {
 fn builtin_print(args: &[NativeValue]) -> Result<NativeValue, String> {
     check_arg_count(args, 1)?;
     let s = expect_str(&args[0])?;
-    print!("{}", s);
+    print!("{s}");
     Ok(NativeValue::Unit)
 }
 
@@ -493,7 +493,7 @@ fn builtin_shell_stdout(args: &[NativeValue]) -> Result<NativeValue, String> {
     check_arg_count(args, 1)?;
     match &args[0] {
         NativeValue::ShellOutput(out) => Ok(NativeValue::Str(out.stdout.clone())),
-        other => Err(format!("expected ShellOutput, got {:?}", other)),
+        other => Err(format!("expected ShellOutput, got {other:?}")),
     }
 }
 
@@ -502,7 +502,7 @@ fn builtin_shell_exit_code(args: &[NativeValue]) -> Result<NativeValue, String> 
     check_arg_count(args, 1)?;
     match &args[0] {
         NativeValue::ShellOutput(out) => Ok(NativeValue::Int(out.exit_code as i64)),
-        other => Err(format!("expected ShellOutput, got {:?}", other)),
+        other => Err(format!("expected ShellOutput, got {other:?}")),
     }
 }
 
@@ -547,7 +547,7 @@ fn builtin_shell_exec(args: &[NativeValue]) -> Result<NativeValue, String> {
 fn expect_array(value: &NativeValue) -> Result<&Vec<NativeValue>, String> {
     match value {
         NativeValue::List(elems) | NativeValue::Array(elems) => Ok(elems),
-        other => Err(format!("expected array, got {:?}", other)),
+        other => Err(format!("expected array, got {other:?}")),
     }
 }
 
@@ -589,7 +589,7 @@ fn builtin_str_parse_int(args: &[NativeValue]) -> Result<NativeValue, String> {
     s.trim()
         .parse::<i64>()
         .map(NativeValue::Int)
-        .map_err(|e| format!("parse_int: {}", e))
+        .map_err(|e| format!("parse_int: {e}"))
 }
 
 fn builtin_str_split(args: &[NativeValue]) -> Result<NativeValue, String> {
@@ -658,7 +658,7 @@ fn builtin_read_line(args: &[NativeValue]) -> Result<NativeValue, String> {
     let mut line = String::new();
     std::io::stdin()
         .read_line(&mut line)
-        .map_err(|e| format!("read_line: {}", e))?;
+        .map_err(|e| format!("read_line: {e}"))?;
     while line.ends_with('\n') || line.ends_with('\r') {
         line.pop();
     }
@@ -671,6 +671,7 @@ fn builtin_read_line(args: &[NativeValue]) -> Result<NativeValue, String> {
 
 /// Returns the table of compiler-provided built-in enums (currently `Option`
 /// and `Result`) suitable for [`ferric_resolve::resolve_with_natives_and_builtins`].
+#[allow(clippy::type_complexity)]
 pub fn builtin_enum_table(
     interner: &mut Interner,
 ) -> Vec<(Symbol, Vec<(Symbol, Vec<TypeAnnotation>)>)> {

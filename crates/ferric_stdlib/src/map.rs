@@ -50,21 +50,21 @@ fn check_arg_count(args: &[NativeValue], expected: usize) -> Result<(), String> 
 fn expect_int(v: &NativeValue) -> Result<i64, String> {
     match v {
         NativeValue::Int(n) => Ok(*n),
-        other => Err(format!("expected int, got {:?}", other)),
+        other => Err(format!("expected int, got {other:?}")),
     }
 }
 
 fn expect_list(v: &NativeValue) -> Result<&Vec<NativeValue>, String> {
     match v {
         NativeValue::List(xs) => Ok(xs),
-        other => Err(format!("expected list, got {:?}", other)),
+        other => Err(format!("expected list, got {other:?}")),
     }
 }
 
 fn expect_map(v: &NativeValue) -> Result<&BTreeMap<MapKey, NativeValue>, String> {
     match v {
         NativeValue::Map(m) => Ok(m),
-        other => Err(format!("expected map, got {:?}", other)),
+        other => Err(format!("expected map, got {other:?}")),
     }
 }
 
@@ -73,14 +73,14 @@ fn expect_map_mut(
 ) -> Result<&Rc<RefCell<BTreeMap<MapKey, NativeValue>>>, String> {
     match v {
         NativeValue::MapMut(m) => Ok(m),
-        other => Err(format!("expected map builder, got {:?}", other)),
+        other => Err(format!("expected map builder, got {other:?}")),
     }
 }
 
 fn expect_tuple2(v: &NativeValue) -> Result<(&NativeValue, &NativeValue), String> {
     match v {
         NativeValue::Tuple2(a, b) => Ok((a.as_ref(), b.as_ref())),
-        other => Err(format!("expected (key, value) tuple, got {:?}", other)),
+        other => Err(format!("expected (key, value) tuple, got {other:?}")),
     }
 }
 

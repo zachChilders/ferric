@@ -43,7 +43,7 @@ fn build_grammar() -> Value {
     // descending so multi-character operators (`==`, `<=`, `&&`) match before
     // their single-character prefixes (`=`, `<`).
     let mut ops: Vec<&&str> = OPERATORS.iter().collect();
-    ops.sort_by(|a, b| b.len().cmp(&a.len()));
+    ops.sort_by_key(|s| std::cmp::Reverse(s.len()));
     let op_pattern = ops
         .iter()
         .map(|op| regex_escape(op))

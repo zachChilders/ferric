@@ -16,7 +16,7 @@
 //! full convention.
 
 use std::fs::{self, File};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 #[test]
@@ -56,7 +56,7 @@ fn examples() {
     );
 }
 
-fn run_example(root: &PathBuf, name: &str) -> Result<(), String> {
+fn run_example(root: &Path, name: &str) -> Result<(), String> {
     let dir = root.join(name);
     let script = dir.join("test.fe");
     let expected = fs::read_to_string(dir.join("expected.txt"))

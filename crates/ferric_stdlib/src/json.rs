@@ -70,45 +70,45 @@ fn check_arg_count(args: &[NativeValue], expected: usize) -> Result<(), String> 
     }
 }
 
-fn expect_str<'a>(value: &'a NativeValue) -> Result<&'a String, String> {
+fn expect_str(value: &NativeValue) -> Result<&String, String> {
     match value {
         NativeValue::Str(s) => Ok(s),
-        other => Err(format!("expected string, got {:?}", other)),
+        other => Err(format!("expected string, got {other:?}")),
     }
 }
 
 fn expect_int(value: &NativeValue) -> Result<i64, String> {
     match value {
         NativeValue::Int(n) => Ok(*n),
-        other => Err(format!("expected int, got {:?}", other)),
+        other => Err(format!("expected int, got {other:?}")),
     }
 }
 
 fn expect_float(value: &NativeValue) -> Result<f64, String> {
     match value {
         NativeValue::Float(f) => Ok(*f),
-        other => Err(format!("expected float, got {:?}", other)),
+        other => Err(format!("expected float, got {other:?}")),
     }
 }
 
 fn expect_bool(value: &NativeValue) -> Result<bool, String> {
     match value {
         NativeValue::Bool(b) => Ok(*b),
-        other => Err(format!("expected bool, got {:?}", other)),
+        other => Err(format!("expected bool, got {other:?}")),
     }
 }
 
-fn expect_array<'a>(value: &'a NativeValue) -> Result<&'a Vec<NativeValue>, String> {
+fn expect_array(value: &NativeValue) -> Result<&Vec<NativeValue>, String> {
     match value {
         NativeValue::Array(a) => Ok(a),
-        other => Err(format!("expected array, got {:?}", other)),
+        other => Err(format!("expected array, got {other:?}")),
     }
 }
 
-fn expect_json<'a>(value: &'a NativeValue) -> Result<&'a JsonRepr, String> {
+fn expect_json(value: &NativeValue) -> Result<&JsonRepr, String> {
     match value {
         NativeValue::Json(j) => Ok(j.as_ref()),
-        other => Err(format!("expected Json, got {:?}", other)),
+        other => Err(format!("expected Json, got {other:?}")),
     }
 }
 
@@ -174,7 +174,7 @@ fn write_compact(out: &mut String, v: &JsonRepr) {
         JsonRepr::Int(n) => out.push_str(&n.to_string()),
         JsonRepr::Float(f) => {
             if f.is_finite() {
-                let mut s = format!("{}", f);
+                let mut s = format!("{f}");
                 if !s.contains('.') && !s.contains('e') && !s.contains('E') {
                     s.push_str(".0");
                 }
@@ -363,7 +363,7 @@ impl<'a> Parser<'a> {
                 Some(c) if c == byte => {
                     self.bump();
                 }
-                _ => return Err(self.err(format!("invalid literal, expected '{}'", kw))),
+                _ => return Err(self.err(format!("invalid literal, expected '{kw}'"))),
             }
         }
         Ok(val)
@@ -849,6 +849,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::approx_constant)]
     fn parse_float() {
         assert_eq!(parse("3.14").unwrap(), JsonRepr::Float(3.14));
         assert_eq!(parse("1e3").unwrap(), JsonRepr::Float(1000.0));
@@ -971,7 +972,7 @@ mod tests {
         for v in cases {
             let s = to_str(&v);
             let v2 = parse(&s).unwrap();
-            assert_eq!(v, v2, "roundtrip failed for {}", s);
+            assert_eq!(v, v2, "roundtrip failed for {s}");
         }
     }
 

@@ -35,14 +35,14 @@ fn check_arg_count(args: &[NativeValue], expected: usize) -> Result<(), String> 
 fn expect_str(value: &NativeValue) -> Result<&String, String> {
     match value {
         NativeValue::Str(s) => Ok(s),
-        other => Err(format!("expected string, got {:?}", other)),
+        other => Err(format!("expected string, got {other:?}")),
     }
 }
 
 fn expect_int(value: &NativeValue) -> Result<i64, String> {
     match value {
         NativeValue::Int(n) => Ok(*n),
-        other => Err(format!("expected int, got {:?}", other)),
+        other => Err(format!("expected int, got {other:?}")),
     }
 }
 
@@ -50,21 +50,21 @@ fn expect_bytes(value: &NativeValue) -> Result<Vec<u8>, String> {
     match value {
         NativeValue::Bytes(b) => Ok(b.clone()),
         NativeValue::BytesMut(rc) => Ok(rc.borrow().clone()),
-        other => Err(format!("expected bytes, got {:?}", other)),
+        other => Err(format!("expected bytes, got {other:?}")),
     }
 }
 
 fn expect_bytes_mut(value: &NativeValue) -> Result<Rc<RefCell<Vec<u8>>>, String> {
     match value {
         NativeValue::BytesMut(rc) => Ok(rc.clone()),
-        other => Err(format!("expected BytesMut, got {:?}", other)),
+        other => Err(format!("expected BytesMut, got {other:?}")),
     }
 }
 
 fn expect_array(value: &NativeValue) -> Result<&Vec<NativeValue>, String> {
     match value {
         NativeValue::Array(v) => Ok(v),
-        other => Err(format!("expected list, got {:?}", other)),
+        other => Err(format!("expected list, got {other:?}")),
     }
 }
 
@@ -87,7 +87,7 @@ fn lang_none() -> NativeValue {
 }
 
 fn bytes_err_out_of_bounds(idx: i64, len: usize) -> String {
-    format!("BytesError::OutOfBounds {{ index: {}, len: {} }}", idx, len)
+    format!("BytesError::OutOfBounds {{ index: {idx}, len: {len} }}")
 }
 
 fn bytes_err_invalid_hex() -> String {
@@ -99,7 +99,7 @@ fn bytes_err_invalid_base64() -> String {
 }
 
 fn bytes_err_invalid_byte(value: i64) -> String {
-    format!("BytesError::InvalidByte {{ value: {} }}", value)
+    format!("BytesError::InvalidByte {{ value: {value} }}")
 }
 
 fn bytes_err_invalid_utf8() -> String {
@@ -156,7 +156,7 @@ fn hex_decode(s: &str) -> Option<Vec<u8>> {
 fn b64_encode(bytes: &[u8]) -> String {
     const ALPHA: &[u8; 64] =
         b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::with_capacity(((bytes.len() + 2) / 3) * 4);
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
     let mut i = 0;
     while i + 3 <= bytes.len() {
         let b0 = bytes[i] as u32;
@@ -332,12 +332,7 @@ fn find_subsequence(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     if needle.len() > haystack.len() {
         return None;
     }
-    for i in 0..=haystack.len() - needle.len() {
-        if &haystack[i..i + needle.len()] == needle {
-            return Some(i);
-        }
-    }
-    None
+    (0..=haystack.len() - needle.len()).find(|&i| &haystack[i..i + needle.len()] == needle)
 }
 
 fn builtin_bytes_contains(args: &[NativeValue]) -> Result<NativeValue, String> {
@@ -577,7 +572,7 @@ mod tests {
                 assert_eq!(tag, NativeValue::Str("Ok".to_string()));
                 payload
             }
-            other => panic!("expected Ok-encoded array, got {:?}", other),
+            other => panic!("expected Ok-encoded array, got {other:?}"),
         }
     }
 
@@ -588,10 +583,10 @@ mod tests {
                 assert_eq!(xs[0], NativeValue::Str("Err".to_string()));
                 match &xs[1] {
                     NativeValue::Str(s) => s.clone(),
-                    other => panic!("expected Err payload string, got {:?}", other),
+                    other => panic!("expected Err payload string, got {other:?}"),
                 }
             }
-            other => panic!("expected Err-encoded array, got {:?}", other),
+            other => panic!("expected Err-encoded array, got {other:?}"),
         }
     }
 
@@ -604,7 +599,7 @@ mod tests {
                 assert_eq!(tag, NativeValue::Str("Some".to_string()));
                 payload
             }
-            other => panic!("expected Some-encoded array, got {:?}", other),
+            other => panic!("expected Some-encoded array, got {other:?}"),
         }
     }
 
@@ -614,14 +609,14 @@ mod tests {
                 assert_eq!(xs.len(), 1);
                 assert_eq!(xs[0], NativeValue::Str("None".to_string()));
             }
-            other => panic!("expected None-encoded array, got {:?}", other),
+            other => panic!("expected None-encoded array, got {other:?}"),
         }
     }
 
     fn unwrap_bytes(v: NativeValue) -> Vec<u8> {
         match v {
             NativeValue::Bytes(b) => b,
-            other => panic!("expected Bytes, got {:?}", other),
+            other => panic!("expected Bytes, got {other:?}"),
         }
     }
 
@@ -647,14 +642,14 @@ mod tests {
     fn from_hex_odd_length_errs() {
         let r = builtin_bytes_from_hex(&[s("abc")]).unwrap();
         let msg = assert_err(r);
-        assert!(msg.contains("InvalidHex"), "got: {}", msg);
+        assert!(msg.contains("InvalidHex"), "got: {msg}");
     }
 
     #[test]
     fn from_hex_non_hex_errs() {
         let r = builtin_bytes_from_hex(&[s("zz")]).unwrap();
         let msg = assert_err(r);
-        assert!(msg.contains("InvalidHex"), "got: {}", msg);
+        assert!(msg.contains("InvalidHex"), "got: {msg}");
     }
 
     #[test]
@@ -700,7 +695,7 @@ mod tests {
     fn base64_invalid_errs() {
         let r = builtin_bytes_from_base64(&[s("Not!Valid")]).unwrap();
         let msg = assert_err(r);
-        assert!(msg.contains("InvalidBase64"), "got: {}", msg);
+        assert!(msg.contains("InvalidBase64"), "got: {msg}");
     }
 
     #[test]
@@ -726,14 +721,14 @@ mod tests {
     fn get_out_of_bounds() {
         let r = builtin_bytes_get(&[b(b"AB"), i(5)]).unwrap();
         let msg = assert_err(r);
-        assert!(msg.contains("OutOfBounds"), "got: {}", msg);
+        assert!(msg.contains("OutOfBounds"), "got: {msg}");
     }
 
     #[test]
     fn get_negative_oob() {
         let r = builtin_bytes_get(&[b(b"AB"), i(-1)]).unwrap();
         let msg = assert_err(r);
-        assert!(msg.contains("OutOfBounds"), "got: {}", msg);
+        assert!(msg.contains("OutOfBounds"), "got: {msg}");
     }
 
     #[test]
@@ -746,7 +741,7 @@ mod tests {
     fn slice_oob() {
         let r = builtin_bytes_slice(&[b(b"ab"), i(0), i(99)]).unwrap();
         let msg = assert_err(r);
-        assert!(msg.contains("OutOfBounds"), "got: {}", msg);
+        assert!(msg.contains("OutOfBounds"), "got: {msg}");
     }
 
     #[test]
@@ -793,7 +788,7 @@ mod tests {
     fn to_str_invalid_errs() {
         let r = builtin_bytes_to_str(&[b(&[0xff, 0xfe])]).unwrap();
         let msg = assert_err(r);
-        assert!(msg.contains("InvalidUtf8"), "got: {}", msg);
+        assert!(msg.contains("InvalidUtf8"), "got: {msg}");
     }
 
     #[test]
@@ -807,7 +802,7 @@ mod tests {
                 assert_eq!(v[1], NativeValue::Int(127));
                 assert_eq!(v[2], NativeValue::Int(255));
             }
-            other => panic!("expected array, got {:?}", other),
+            other => panic!("expected array, got {other:?}"),
         }
         let back = builtin_bytes_from_list(&[list]).unwrap();
         assert_eq!(unwrap_bytes(unwrap_ok(back)), vec![0, 127, 255]);
@@ -818,7 +813,7 @@ mod tests {
         let arr = NativeValue::Array(vec![i(0), i(256)]);
         let r = builtin_bytes_from_list(&[arr]).unwrap();
         let msg = assert_err(r);
-        assert!(msg.contains("InvalidByte"), "got: {}", msg);
+        assert!(msg.contains("InvalidByte"), "got: {msg}");
     }
 
     #[test]
@@ -826,7 +821,7 @@ mod tests {
         let arr = NativeValue::Array(vec![i(0), i(-1)]);
         let r = builtin_bytes_from_list(&[arr]).unwrap();
         let msg = assert_err(r);
-        assert!(msg.contains("InvalidByte"), "got: {}", msg);
+        assert!(msg.contains("InvalidByte"), "got: {msg}");
     }
 
     #[test]

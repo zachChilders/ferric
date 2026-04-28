@@ -124,9 +124,7 @@ fn collect_for_expr(expr: &Expr, cx: &Ctx, hints: &mut Vec<InlayHint>) {
             for a in args { collect_for_expr(&a.value, cx, hints); }
             collect_for_expr(callee, cx, hints);
         }
-        Expr::Return { expr: inner, .. } => {
-            if let Some(e) = inner { collect_for_expr(e, cx, hints); }
-        }
+        Expr::Return { expr: Some(e), .. } => collect_for_expr(e, cx, hints),
         Expr::Closure { params, body, id, .. } => {
             push_closure_param_hints(*id, params, cx, hints);
             collect_for_expr(body, cx, hints);

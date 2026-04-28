@@ -31,21 +31,21 @@ fn check_arg_count(args: &[NativeValue], expected: usize) -> Result<(), String> 
 fn expect_str(value: &NativeValue) -> Result<&String, String> {
     match value {
         NativeValue::Str(s) => Ok(s),
-        other => Err(format!("expected string, got {:?}", other)),
+        other => Err(format!("expected string, got {other:?}")),
     }
 }
 
 fn expect_int(value: &NativeValue) -> Result<i64, String> {
     match value {
         NativeValue::Int(n) => Ok(*n),
-        other => Err(format!("expected int, got {:?}", other)),
+        other => Err(format!("expected int, got {other:?}")),
     }
 }
 
 fn expect_bytes(value: &NativeValue) -> Result<&Vec<u8>, String> {
     match value {
         NativeValue::Bytes(b) => Ok(b),
-        other => Err(format!("expected bytes, got {:?}", other)),
+        other => Err(format!("expected bytes, got {other:?}")),
     }
 }
 
@@ -90,11 +90,11 @@ fn lang_none() -> NativeValue {
 }
 
 fn str_err_out_of_bounds(idx: i64, len: usize) -> String {
-    format!("StrError::OutOfBounds {{ index: {}, len: {} }}", idx, len)
+    format!("StrError::OutOfBounds {{ index: {idx}, len: {len} }}")
 }
 
 fn str_err_parse_failed(input: &str) -> String {
-    format!("StrError::ParseFailed {{ input: {:?} }}", input)
+    format!("StrError::ParseFailed {{ input: {input:?} }}")
 }
 
 fn str_err_invalid_utf8() -> String {
@@ -357,9 +357,9 @@ fn pad_with_repeat(s: &str, target_chars: usize, with: &str, at_start: bool) -> 
         pad.push(with_chars[i % with_len]);
     }
     if at_start {
-        format!("{}{}", pad, s)
+        format!("{pad}{s}")
     } else {
-        format!("{}{}", s, pad)
+        format!("{s}{pad}")
     }
 }
 
@@ -411,7 +411,7 @@ fn builtin_str_center(args: &[NativeValue]) -> Result<NativeValue, String> {
     for i in 0..right_pad {
         right.push(with_chars[i % with_len]);
     }
-    Ok(NativeValue::Str(format!("{}{}{}", left, s, right)))
+    Ok(NativeValue::Str(format!("{left}{s}{right}")))
 }
 
 // ---------------------------------------------------------------------------
@@ -462,7 +462,7 @@ fn builtin_str_join(args: &[NativeValue]) -> Result<NativeValue, String> {
     check_arg_count(args, 2)?;
     let parts = match &args[0] {
         NativeValue::Array(v) => v,
-        other => return Err(format!("expected list, got {:?}", other)),
+        other => return Err(format!("expected list, got {other:?}")),
     };
     let sep = expect_str(&args[1])?;
     let mut out = String::new();
@@ -472,7 +472,7 @@ fn builtin_str_join(args: &[NativeValue]) -> Result<NativeValue, String> {
         }
         match p {
             NativeValue::Str(s) => out.push_str(s),
-            other => return Err(format!("expected list of strings, got {:?}", other)),
+            other => return Err(format!("expected list of strings, got {other:?}")),
         }
     }
     Ok(NativeValue::Str(out))
@@ -653,7 +653,7 @@ mod tests {
                 assert_eq!(tag, NativeValue::Str("Ok".to_string()));
                 payload
             }
-            other => panic!("expected Ok-encoded array, got {:?}", other),
+            other => panic!("expected Ok-encoded array, got {other:?}"),
         }
     }
 
@@ -664,10 +664,10 @@ mod tests {
                 assert_eq!(xs[0], NativeValue::Str("Err".to_string()));
                 match &xs[1] {
                     NativeValue::Str(s) => s.clone(),
-                    other => panic!("expected Err payload string, got {:?}", other),
+                    other => panic!("expected Err payload string, got {other:?}"),
                 }
             }
-            other => panic!("expected Err-encoded array, got {:?}", other),
+            other => panic!("expected Err-encoded array, got {other:?}"),
         }
     }
 
@@ -680,7 +680,7 @@ mod tests {
                 assert_eq!(tag, NativeValue::Str("Some".to_string()));
                 payload
             }
-            other => panic!("expected Some-encoded array, got {:?}", other),
+            other => panic!("expected Some-encoded array, got {other:?}"),
         }
     }
 
@@ -690,7 +690,7 @@ mod tests {
                 assert_eq!(xs.len(), 1);
                 assert_eq!(xs[0], NativeValue::Str("None".to_string()));
             }
-            other => panic!("expected None-encoded array, got {:?}", other),
+            other => panic!("expected None-encoded array, got {other:?}"),
         }
     }
 
@@ -728,7 +728,7 @@ mod tests {
     fn slice_out_of_bounds() {
         let r = builtin_str_slice(&[s("hi"), i(0), i(99)]).unwrap();
         let msg = assert_err(r);
-        assert!(msg.contains("OutOfBounds"), "got: {}", msg);
+        assert!(msg.contains("OutOfBounds"), "got: {msg}");
     }
 
     #[test]
@@ -777,7 +777,7 @@ mod tests {
                 assert_eq!(v[1], NativeValue::Str("b".to_string()));
                 assert_eq!(v[2], NativeValue::Str("c".to_string()));
             }
-            other => panic!("expected array, got {:?}", other),
+            other => panic!("expected array, got {other:?}"),
         }
     }
 
@@ -789,7 +789,7 @@ mod tests {
                 assert_eq!(v.len(), 1);
                 assert_eq!(v[0], NativeValue::Str("".to_string()));
             }
-            other => panic!("expected array, got {:?}", other),
+            other => panic!("expected array, got {other:?}"),
         }
     }
 
@@ -802,7 +802,7 @@ mod tests {
                 assert_eq!(v[0], NativeValue::Str("a".to_string()));
                 assert_eq!(v[1], NativeValue::Str("b=c".to_string()));
             }
-            other => panic!("expected array tuple, got {:?}", other),
+            other => panic!("expected array tuple, got {other:?}"),
         }
     }
 
@@ -822,7 +822,7 @@ mod tests {
                 assert_eq!(v[1], NativeValue::Str("b".to_string()));
                 assert_eq!(v[2], NativeValue::Str("c".to_string()));
             }
-            other => panic!("expected array, got {:?}", other),
+            other => panic!("expected array, got {other:?}"),
         }
     }
 
@@ -918,15 +918,16 @@ mod tests {
     fn parse_int_err() {
         let r = builtin_str_parse_int(&[s("foo")]).unwrap();
         let msg = assert_err(r);
-        assert!(msg.contains("ParseFailed"), "got: {}", msg);
+        assert!(msg.contains("ParseFailed"), "got: {msg}");
     }
 
     #[test]
+    #[allow(clippy::approx_constant)]
     fn parse_float_ok_and_err() {
         let ok = builtin_str_parse_float(&[s("3.14")]).unwrap();
         match unwrap_ok(ok) {
             NativeValue::Float(f) => assert!((f - 3.14).abs() < 1e-9),
-            other => panic!("expected float, got {:?}", other),
+            other => panic!("expected float, got {other:?}"),
         }
         let err = builtin_str_parse_float(&[s("nope")]).unwrap();
         let msg = assert_err(err);
@@ -964,7 +965,7 @@ mod tests {
         let bytes = builtin_str_to_bytes(&[s("hello")]).unwrap();
         match &bytes {
             NativeValue::Bytes(b) => assert_eq!(b, b"hello"),
-            other => panic!("expected bytes, got {:?}", other),
+            other => panic!("expected bytes, got {other:?}"),
         }
         let back = builtin_str_from_bytes(&[bytes]).unwrap();
         assert_eq!(unwrap_ok(back), NativeValue::Str("hello".to_string()));
@@ -984,9 +985,9 @@ mod tests {
         let r = builtin_str_from_bytes_lossy(&[bad]).unwrap();
         match r {
             NativeValue::Str(s) => {
-                assert!(s.contains('\u{FFFD}'), "expected U+FFFD in {:?}", s);
+                assert!(s.contains('\u{FFFD}'), "expected U+FFFD in {s:?}");
             }
-            other => panic!("expected str, got {:?}", other),
+            other => panic!("expected str, got {other:?}"),
         }
     }
 
@@ -1048,7 +1049,7 @@ mod tests {
                 assert_eq!(v[1], NativeValue::Int(2));
                 assert_eq!(v[2], NativeValue::Int(4));
             }
-            other => panic!("expected array, got {:?}", other),
+            other => panic!("expected array, got {other:?}"),
         }
     }
 
@@ -1062,7 +1063,7 @@ mod tests {
                 assert_eq!(v[1], NativeValue::Str("b".to_string()));
                 assert_eq!(v[2], NativeValue::Str("c".to_string()));
             }
-            other => panic!("expected array, got {:?}", other),
+            other => panic!("expected array, got {other:?}"),
         }
     }
 

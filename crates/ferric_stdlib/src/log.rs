@@ -123,21 +123,21 @@ fn check_arg_count(args: &[NativeValue], expected: usize) -> Result<(), String> 
 fn expect_str(value: &NativeValue) -> Result<&String, String> {
     match value {
         NativeValue::Str(s) => Ok(s),
-        other => Err(format!("expected string, got {:?}", other)),
+        other => Err(format!("expected string, got {other:?}")),
     }
 }
 
 fn expect_log_level(value: &NativeValue) -> Result<LogLevelRepr, String> {
     match value {
         NativeValue::LogLevel(l) => Ok(*l),
-        other => Err(format!("expected LogLevel, got {:?}", other)),
+        other => Err(format!("expected LogLevel, got {other:?}")),
     }
 }
 
 fn expect_logger(value: &NativeValue) -> Result<Rc<LoggerRepr>, String> {
     match value {
         NativeValue::Logger(l) => Ok(l.clone()),
-        other => Err(format!("expected Logger, got {:?}", other)),
+        other => Err(format!("expected Logger, got {other:?}")),
     }
 }
 
@@ -157,14 +157,14 @@ fn expect_str_str_map(value: &NativeValue) -> Result<Vec<(String, String)>, Stri
                 let v_str = match v {
                     NativeValue::Str(s) => s.clone(),
                     other => {
-                        return Err(format!("expected Str map value, got {:?}", other));
+                        return Err(format!("expected Str map value, got {other:?}"));
                     }
                 };
                 out.push((k_str, v_str));
             }
             Ok(out)
         }
-        other => Err(format!("expected Map<Str,Str>, got {:?}", other)),
+        other => Err(format!("expected Map<Str,Str>, got {other:?}")),
     }
 }
 
@@ -224,7 +224,7 @@ fn render_with(
             out.push(' ');
             // 5-char-wide level column (longest is "DEBUG"/"ERROR" = 5)
             // followed by two spaces.
-            out.push_str(&format!("{:<5}", level));
+            out.push_str(&format!("{level:<5}"));
             out.push(' ');
             out.push_str(msg);
             for (k, v) in &sorted {
@@ -291,7 +291,7 @@ fn emit(level: LogLevelRepr, msg: &str, fields: &[(String, String)]) {
         return;
     }
     let line = render(level.label(), msg, fields);
-    eprintln!("{}", line);
+    eprintln!("{line}");
 }
 
 // ---------------------------------------------------------------------------
@@ -598,7 +598,7 @@ mod tests {
         let _ = builtin_log_set_level(&[NativeValue::LogLevel(LogLevelRepr::Error)]).unwrap();
         match builtin_log_get_level(&[]).unwrap() {
             NativeValue::LogLevel(l) => assert_eq!(l, LogLevelRepr::Error),
-            other => panic!("expected LogLevel, got {:?}", other),
+            other => panic!("expected LogLevel, got {other:?}"),
         }
     }
 
@@ -629,7 +629,7 @@ mod tests {
                     ("b".to_string(), "2".to_string()),
                 ]);
             }
-            other => panic!("expected Logger, got {:?}", other),
+            other => panic!("expected Logger, got {other:?}"),
         }
     }
 
@@ -735,8 +735,7 @@ mod tests {
             let sym = interner.intern(name);
             assert!(
                 registry.get(sym).is_some(),
-                "expected {} to be registered",
-                name
+                "expected {name} to be registered"
             );
         }
     }

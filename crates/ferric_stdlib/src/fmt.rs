@@ -32,45 +32,45 @@ fn check_arg_count(args: &[NativeValue], expected: usize) -> Result<(), String> 
     }
 }
 
-fn expect_str<'a>(value: &'a NativeValue) -> Result<&'a String, String> {
+fn expect_str(value: &NativeValue) -> Result<&String, String> {
     match value {
         NativeValue::Str(s) => Ok(s),
-        other => Err(format!("expected string, got {:?}", other)),
+        other => Err(format!("expected string, got {other:?}")),
     }
 }
 
 fn expect_int(value: &NativeValue) -> Result<i64, String> {
     match value {
         NativeValue::Int(n) => Ok(*n),
-        other => Err(format!("expected int, got {:?}", other)),
+        other => Err(format!("expected int, got {other:?}")),
     }
 }
 
 fn expect_float(value: &NativeValue) -> Result<f64, String> {
     match value {
         NativeValue::Float(f) => Ok(*f),
-        other => Err(format!("expected float, got {:?}", other)),
+        other => Err(format!("expected float, got {other:?}")),
     }
 }
 
 fn expect_bool(value: &NativeValue) -> Result<bool, String> {
     match value {
         NativeValue::Bool(b) => Ok(*b),
-        other => Err(format!("expected bool, got {:?}", other)),
+        other => Err(format!("expected bool, got {other:?}")),
     }
 }
 
-fn expect_array<'a>(value: &'a NativeValue) -> Result<&'a Vec<NativeValue>, String> {
+fn expect_array(value: &NativeValue) -> Result<&Vec<NativeValue>, String> {
     match value {
         NativeValue::Array(a) => Ok(a),
-        other => Err(format!("expected array, got {:?}", other)),
+        other => Err(format!("expected array, got {other:?}")),
     }
 }
 
-fn expect_json<'a>(value: &'a NativeValue) -> Result<&'a JsonRepr, String> {
+fn expect_json(value: &NativeValue) -> Result<&JsonRepr, String> {
     match value {
         NativeValue::Json(j) => Ok(j.as_ref()),
-        other => Err(format!("expected Json, got {:?}", other)),
+        other => Err(format!("expected Json, got {other:?}")),
     }
 }
 
@@ -120,10 +120,11 @@ pub fn format_template(template: &str, args: &[String]) -> Result<String, String
 }
 
 fn utf8_char_len(b: u8) -> usize {
-    if b < 0x80 {
+    if b < 0xC0 {
+        // ASCII (< 0x80) or stray continuation byte (0x80..0xC0). Both are
+        // treated as one-byte advances; continuation bytes shouldn't start
+        // a char, but be defensive.
         1
-    } else if b < 0xC0 {
-        1 // continuation byte; should not start a char, but be defensive
     } else if b < 0xE0 {
         2
     } else if b < 0xF0 {
@@ -156,8 +157,7 @@ pub fn format_int_radix(n: i64, radix: i64) -> Result<String, String> {
         10 => Ok(n.to_string()),
         16 => Ok(format_signed_radix(n, 16)),
         other => Err(format!(
-            "fmt::int: radix must be 2, 8, 10, or 16; got {}",
-            other
+            "fmt::int: radix must be 2, 8, 10, or 16; got {other}"
         )),
     }
 }
@@ -167,7 +167,7 @@ fn format_signed_radix(n: i64, radix: u32) -> String {
         // Use unsigned magnitude so i64::MIN does not overflow.
         let mag = (n as i128).unsigned_abs();
         let body = format_unsigned_radix(mag, radix);
-        format!("-{}", body)
+        format!("-{body}")
     } else {
         format_unsigned_radix(n as u128, radix)
     }
@@ -192,14 +192,12 @@ fn format_unsigned_radix(mut n: u128, radix: u32) -> String {
 pub fn pad_left(s: &str, width: i64, pad: &str) -> Result<String, String> {
     if pad.chars().count() != 1 {
         return Err(format!(
-            "fmt::int_padded: pad must be exactly 1 character, got {:?}",
-            pad
+            "fmt::int_padded: pad must be exactly 1 character, got {pad:?}"
         ));
     }
     if width < 0 {
         return Err(format!(
-            "fmt::int_padded: width must be non-negative, got {}",
-            width
+            "fmt::int_padded: width must be non-negative, got {width}"
         ));
     }
     let cur = s.chars().count() as i64;
@@ -260,8 +258,7 @@ fn builtin_fmt_float(args: &[NativeValue]) -> Result<NativeValue, String> {
     let decimals = expect_int(&args[1])?;
     if decimals < 0 {
         return Err(format!(
-            "fmt::float: decimals must be non-negative, got {}",
-            decimals
+            "fmt::float: decimals must be non-negative, got {decimals}"
         ));
     }
     Ok(NativeValue::Str(format!("{:.*}", decimals as usize, n)))
@@ -273,8 +270,7 @@ fn builtin_fmt_float_exp(args: &[NativeValue]) -> Result<NativeValue, String> {
     let decimals = expect_int(&args[1])?;
     if decimals < 0 {
         return Err(format!(
-            "fmt::float_exp: decimals must be non-negative, got {}",
-            decimals
+            "fmt::float_exp: decimals must be non-negative, got {decimals}"
         ));
     }
     Ok(NativeValue::Str(format!("{:.*e}", decimals as usize, n)))
@@ -455,7 +451,7 @@ mod tests {
     #[test]
     fn fmt_float_two_decimals() {
         let out =
-            builtin_fmt_float(&[NativeValue::Float(3.14159), NativeValue::Int(2)])
+            builtin_fmt_float(&[NativeValue::Float(std::f64::consts::PI), NativeValue::Int(2)])
                 .unwrap();
         assert_eq!(out, NativeValue::Str("3.14".to_string()));
     }
@@ -516,7 +512,7 @@ mod tests {
                 assert!(s.contains("\"a\""));
                 assert!(s.contains("\"b\""));
             }
-            other => panic!("expected Str, got {:?}", other),
+            other => panic!("expected Str, got {other:?}"),
         }
     }
 }

@@ -342,7 +342,7 @@ impl<'a> ModuleCtx<'a> {
                     .workspace_root
                     .join(".ferric")
                     .join("cache")
-                    .join(format!("{}-{}", name, version));
+                    .join(format!("{name}-{version}"));
                 if !cache_dir.exists() {
                     self.errors.push(ModuleError::CacheMiss {
                         name: name.clone(),

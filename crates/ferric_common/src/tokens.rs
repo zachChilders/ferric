@@ -182,8 +182,8 @@ impl TokenKind {
     /// Returns a human-readable description of this token kind.
     pub fn description(&self) -> String {
         match self {
-            TokenKind::IntLit(n) => format!("integer literal '{}'", n),
-            TokenKind::FloatLit(f) => format!("float literal '{}'", f),
+            TokenKind::IntLit(n) => format!("integer literal '{n}'"),
+            TokenKind::FloatLit(f) => format!("float literal '{f}'"),
             TokenKind::StrLit(_) => "string literal".to_string(),
             TokenKind::True => "keyword 'true'".to_string(),
             TokenKind::False => "keyword 'false'".to_string(),

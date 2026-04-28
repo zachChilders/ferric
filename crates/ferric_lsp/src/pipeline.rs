@@ -229,6 +229,7 @@ where
 /// Built-in enum table mirroring `ferric_stdlib::builtin_enum_table`. The
 /// LSP intentionally does not depend on `ferric_stdlib` (it has no native
 /// runtime to register), so this is duplicated. Must be kept in sync.
+#[allow(clippy::type_complexity)]
 fn stdlib_builtin_enum_table(
     interner: &mut Interner,
 ) -> Vec<(Symbol, Vec<(Symbol, Vec<TypeAnnotation>)>)> {

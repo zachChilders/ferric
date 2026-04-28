@@ -148,35 +148,35 @@ fn check_arg_count(args: &[NativeValue], expected: usize) -> Result<(), String> 
 fn expect_str(value: &NativeValue) -> Result<&String, String> {
     match value {
         NativeValue::Str(s) => Ok(s),
-        other => Err(format!("expected string, got {:?}", other)),
+        other => Err(format!("expected string, got {other:?}")),
     }
 }
 
 fn expect_int(value: &NativeValue) -> Result<i64, String> {
     match value {
         NativeValue::Int(n) => Ok(*n),
-        other => Err(format!("expected int, got {:?}", other)),
+        other => Err(format!("expected int, got {other:?}")),
     }
 }
 
 fn expect_server(value: &NativeValue) -> Result<Rc<RefCell<ServerRepr>>, String> {
     match value {
         NativeValue::ServeServer(s) => Ok(s.clone()),
-        other => Err(format!("expected Server, got {:?}", other)),
+        other => Err(format!("expected Server, got {other:?}")),
     }
 }
 
 fn expect_request(value: &NativeValue) -> Result<Rc<RequestRepr>, String> {
     match value {
         NativeValue::ServeRequest(r) => Ok(r.clone()),
-        other => Err(format!("expected Request, got {:?}", other)),
+        other => Err(format!("expected Request, got {other:?}")),
     }
 }
 
 fn expect_response(value: &NativeValue) -> Result<Rc<RefCell<ResponseRepr>>, String> {
     match value {
         NativeValue::ServeResponse(r) => Ok(r.clone()),
-        other => Err(format!("expected Response, got {:?}", other)),
+        other => Err(format!("expected Response, got {other:?}")),
     }
 }
 
@@ -184,7 +184,7 @@ fn expect_bytes(value: &NativeValue) -> Result<Vec<u8>, String> {
     match value {
         NativeValue::Bytes(b) => Ok(b.clone()),
         NativeValue::Str(s) => Ok(s.as_bytes().to_vec()),
-        other => Err(format!("expected bytes, got {:?}", other)),
+        other => Err(format!("expected bytes, got {other:?}")),
     }
 }
 
@@ -253,11 +253,11 @@ fn join_paths(prefix: &str, suffix: &str) -> String {
     let p = prefix.trim_end_matches('/');
     let s = suffix.trim_start_matches('/');
     if p.is_empty() {
-        format!("/{}", s)
+        format!("/{s}")
     } else if s.is_empty() {
         p.to_string()
     } else {
-        format!("{}/{}", p, s)
+        format!("{p}/{s}")
     }
 }
 
@@ -464,7 +464,7 @@ fn builtin_serve_listen(args: &[NativeValue]) -> Result<NativeValue, String> {
     let port = expect_int(&args[1])?;
     listen_on(server, "0.0.0.0", port as u16)
         .map(|()| NativeValue::Unit)
-        .map_err(|e| format!("listen: {}", e))
+        .map_err(|e| format!("listen: {e}"))
 }
 
 fn builtin_serve_listen_addr(args: &[NativeValue]) -> Result<NativeValue, String> {
@@ -474,7 +474,7 @@ fn builtin_serve_listen_addr(args: &[NativeValue]) -> Result<NativeValue, String
     let port = expect_int(&args[2])?;
     listen_on(server, &addr, port as u16)
         .map(|()| NativeValue::Unit)
-        .map_err(|e| format!("listen: {}", e))
+        .map_err(|e| format!("listen: {e}"))
 }
 
 // ----- Request introspection ------------------------------------------------
@@ -534,7 +534,7 @@ fn builtin_serve_body_str(args: &[NativeValue]) -> Result<NativeValue, String> {
     let r = expect_request(&args[0])?;
     String::from_utf8(r.body.clone())
         .map(NativeValue::Str)
-        .map_err(|e| format!("body_str: invalid UTF-8: {}", e))
+        .map_err(|e| format!("body_str: invalid UTF-8: {e}"))
 }
 
 fn builtin_serve_body_json(args: &[NativeValue]) -> Result<NativeValue, String> {
@@ -551,7 +551,7 @@ fn builtin_serve_response(args: &[NativeValue]) -> Result<NativeValue, String> {
     let status = expect_int(&args[0])?;
     let body = expect_bytes(&args[1])?;
     if !(100..=599).contains(&status) {
-        return Err(format!("response: status {} out of range", status));
+        return Err(format!("response: status {status} out of range"));
     }
     Ok(make_response(status as u16, body))
 }
@@ -577,12 +577,12 @@ fn builtin_serve_ok_json(args: &[NativeValue]) -> Result<NativeValue, String> {
     // Accept anything serialisable; for now we accept Json (post-integration)
     // or fall back to a string body.
     let body = match &args[0] {
-        NativeValue::Json(j) => format!("{:?}", j).into_bytes(),
+        NativeValue::Json(j) => format!("{j:?}").into_bytes(),
         NativeValue::Str(s) => s.as_bytes().to_vec(),
         NativeValue::Int(i) => i.to_string().into_bytes(),
         NativeValue::Bool(b) => b.to_string().into_bytes(),
         NativeValue::Bytes(b) => b.clone(),
-        other => return Err(format!("ok_json: unsupported body type {:?}", other)),
+        other => return Err(format!("ok_json: unsupported body type {other:?}")),
     };
     Ok(make_response_with_ct(200, body, "application/json"))
 }
@@ -590,10 +590,10 @@ fn builtin_serve_ok_json(args: &[NativeValue]) -> Result<NativeValue, String> {
 fn builtin_serve_created(args: &[NativeValue]) -> Result<NativeValue, String> {
     check_arg_count(args, 1)?;
     let body = match &args[0] {
-        NativeValue::Json(j) => format!("{:?}", j).into_bytes(),
+        NativeValue::Json(j) => format!("{j:?}").into_bytes(),
         NativeValue::Str(s) => s.as_bytes().to_vec(),
         NativeValue::Bytes(b) => b.clone(),
-        other => return Err(format!("created: unsupported body type {:?}", other)),
+        other => return Err(format!("created: unsupported body type {other:?}")),
     };
     Ok(make_response_with_ct(201, body, "application/json"))
 }
@@ -675,12 +675,12 @@ fn builtin_serve_with_headers(args: &[NativeValue]) -> Result<NativeValue, Strin
                 };
                 let val = match v {
                     NativeValue::Str(s) => s.clone(),
-                    other => return Err(format!("with_headers: header value must be Str, got {:?}", other)),
+                    other => return Err(format!("with_headers: header value must be Str, got {other:?}")),
                 };
                 r.borrow_mut().headers.insert(key, val);
             }
         }
-        other => return Err(format!("with_headers: expected Map, got {:?}", other)),
+        other => return Err(format!("with_headers: expected Map, got {other:?}")),
     }
     Ok(NativeValue::ServeResponse(r))
 }
@@ -728,24 +728,24 @@ fn listen_on(
     addr: &str,
     port: u16,
 ) -> Result<(), String> {
-    let socket_addr = format!("{}:{}", addr, port);
+    let socket_addr = format!("{addr}:{port}");
     let listener = TcpListener::bind(
         socket_addr
             .to_socket_addrs()
-            .map_err(|e| format!("invalid address {}: {}", socket_addr, e))?
+            .map_err(|e| format!("invalid address {socket_addr}: {e}"))?
             .collect::<Vec<_>>()
             .as_slice(),
     )
-    .map_err(|e| format!("bind failed: {}", e))?;
+    .map_err(|e| format!("bind failed: {e}"))?;
 
     for incoming in listener.incoming() {
         match incoming {
             Ok(stream) => {
                 if let Err(e) = handle_connection(stream, &server) {
-                    eprintln!("serve: connection error: {}", e);
+                    eprintln!("serve: connection error: {e}");
                 }
             }
-            Err(e) => return Err(format!("accept failed: {}", e)),
+            Err(e) => return Err(format!("accept failed: {e}")),
         }
     }
     Ok(())
@@ -764,7 +764,7 @@ pub fn handle_connection(
     loop {
         let n = stream
             .read(&mut tmp)
-            .map_err(|e| format!("read: {}", e))?;
+            .map_err(|e| format!("read: {e}"))?;
         if n == 0 {
             return Err("client closed before sending request".to_string());
         }
@@ -778,7 +778,7 @@ pub fn handle_connection(
         }
     }
     let header_text = std::str::from_utf8(&buf[..header_end])
-        .map_err(|e| format!("non-utf8 headers: {}", e))?
+        .map_err(|e| format!("non-utf8 headers: {e}"))?
         .to_string();
     let req = parse_request_head(&header_text)?;
     let mut req = req;
@@ -799,7 +799,7 @@ pub fn handle_connection(
     while body.len() < want {
         let n = stream
             .read(&mut tmp)
-            .map_err(|e| format!("body read: {}", e))?;
+            .map_err(|e| format!("body read: {e}"))?;
         if n == 0 {
             break;
         }
@@ -819,12 +819,7 @@ fn find_header_end(buf: &[u8]) -> Option<usize> {
     if buf.len() < 4 {
         return None;
     }
-    for i in 0..buf.len().saturating_sub(3) {
-        if &buf[i..i + 4] == b"\r\n\r\n" {
-            return Some(i);
-        }
-    }
-    None
+    (0..buf.len().saturating_sub(3)).find(|&i| &buf[i..i + 4] == b"\r\n\r\n")
 }
 
 fn parse_request_head(head: &str) -> Result<RequestRepr, String> {
@@ -901,7 +896,7 @@ fn write_response(stream: &mut TcpStream, resp: &ResponseRepr) -> Result<(), Str
         if k.eq_ignore_ascii_case("connection") {
             have_conn = true;
         }
-        header.push_str(&format!("{}: {}\r\n", k, v));
+        header.push_str(&format!("{k}: {v}\r\n"));
     }
     if !have_cl {
         header.push_str(&format!("Content-Length: {}\r\n", resp.body.len()));
@@ -912,11 +907,11 @@ fn write_response(stream: &mut TcpStream, resp: &ResponseRepr) -> Result<(), Str
     header.push_str("\r\n");
     stream
         .write_all(header.as_bytes())
-        .map_err(|e| format!("write header: {}", e))?;
+        .map_err(|e| format!("write header: {e}"))?;
     stream
         .write_all(&resp.body)
-        .map_err(|e| format!("write body: {}", e))?;
-    stream.flush().map_err(|e| format!("flush: {}", e))?;
+        .map_err(|e| format!("write body: {e}"))?;
+    stream.flush().map_err(|e| format!("flush: {e}"))?;
     Ok(())
 }
 
@@ -1005,7 +1000,6 @@ pub fn register(registry: &mut NativeRegistry, interner: &mut Interner) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::{Read as _, Write as _};
     use std::net::TcpStream as StdTcpStream;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc as StdArc;
@@ -1259,7 +1253,7 @@ mod tests {
     fn resp_of(v: NativeValue) -> Rc<RefCell<ResponseRepr>> {
         match v {
             NativeValue::ServeResponse(r) => r,
-            other => panic!("not a response: {:?}", other),
+            other => panic!("not a response: {other:?}"),
         }
     }
 
@@ -1319,7 +1313,8 @@ mod tests {
 
     #[test]
     fn error_status_codes_are_correct() {
-        let cases: Vec<(fn(&[NativeValue]) -> Result<NativeValue, String>, u16)> = vec![
+        type Builder = fn(&[NativeValue]) -> Result<NativeValue, String>;
+        let cases: Vec<(Builder, u16)> = vec![
             (builtin_serve_unauthorized, 401),
             (builtin_serve_forbidden, 403),
             (builtin_serve_not_found, 404),
@@ -1448,8 +1443,7 @@ mod tests {
             let sym = interner.intern(name);
             assert!(
                 reg.get(sym).is_some(),
-                "expected `{}` to be registered",
-                name
+                "expected `{name}` to be registered"
             );
         }
     }
@@ -1497,13 +1491,11 @@ mod tests {
         let text = String::from_utf8_lossy(&buf);
         assert!(
             text.starts_with("HTTP/1.1 200 OK"),
-            "expected 200 OK, got: {}",
-            text
+            "expected 200 OK, got: {text}"
         );
         assert!(
             text.ends_with("pong") || text.contains("\r\n\r\npong"),
-            "expected body `pong` at end, got: {}",
-            text
+            "expected body `pong` at end, got: {text}"
         );
     }
 }

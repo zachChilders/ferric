@@ -295,7 +295,7 @@ impl<'a> Compiler<'a> {
         let chunk = self.current_chunk_mut();
         match &mut chunk.code[addr] {
             Op::Jump(o) | Op::JumpIfFalse(o) | Op::JumpIfTrue(o) => *o = offset,
-            other => panic!("patch_jump on non-jump op: {:?}", other),
+            other => panic!("patch_jump on non-jump op: {other:?}"),
         }
     }
 
@@ -1108,9 +1108,8 @@ impl<'a> Compiler<'a> {
     fn emit_native_call(&mut self, name: &str, argc: u8) {
         let sym = self.interner.lookup(name).unwrap_or_else(|| {
             panic!(
-                "native '{}' was not interned before compile() ran; ensure \
-                 register_stdlib runs first",
-                name
+                "native '{name}' was not interned before compile() ran; ensure \
+                 register_stdlib runs first"
             )
         });
         let idx = self.add_constant(Constant::NativeFn(sym));
@@ -1286,23 +1285,23 @@ mod tests {
     fn integer_addition_uses_add_int() {
         let (program, _) = compile_source("1 + 2");
         let code = entry_code(&program);
-        assert!(code.contains(&Op::AddInt), "expected AddInt: {:?}", code);
-        assert!(!code.contains(&Op::AddFloat), "should not pick float: {:?}", code);
+        assert!(code.contains(&Op::AddInt), "expected AddInt: {code:?}");
+        assert!(!code.contains(&Op::AddFloat), "should not pick float: {code:?}");
     }
 
     #[test]
     fn float_addition_uses_add_float() {
         let (program, _) = compile_source("1.0 + 2.0");
         let code = entry_code(&program);
-        assert!(code.contains(&Op::AddFloat), "expected AddFloat: {:?}", code);
-        assert!(!code.contains(&Op::AddInt), "should not pick int: {:?}", code);
+        assert!(code.contains(&Op::AddFloat), "expected AddFloat: {code:?}");
+        assert!(!code.contains(&Op::AddInt), "should not pick int: {code:?}");
     }
 
     #[test]
     fn string_concat_uses_concat_op() {
         let (program, _) = compile_source(r#""a" + "b""#);
         let code = entry_code(&program);
-        assert!(code.contains(&Op::Concat), "expected Concat: {:?}", code);
+        assert!(code.contains(&Op::Concat), "expected Concat: {code:?}");
     }
 
     #[test]
@@ -1311,8 +1310,8 @@ mod tests {
         let code = entry_code(&program);
         let store = code.iter().find_map(|op| if let Op::StoreSlot(s) = op { Some(*s) } else { None });
         let load = code.iter().find_map(|op| if let Op::LoadSlot(s) = op { Some(*s) } else { None });
-        assert_eq!(store, Some(0), "expected StoreSlot(0): {:?}", code);
-        assert_eq!(load, Some(0), "expected LoadSlot(0): {:?}", code);
+        assert_eq!(store, Some(0), "expected StoreSlot(0): {code:?}");
+        assert_eq!(load, Some(0), "expected LoadSlot(0): {code:?}");
     }
 
     #[test]
@@ -1321,8 +1320,8 @@ mod tests {
         let code = entry_code(&program);
         let has_jif = code.iter().any(|op| matches!(op, Op::JumpIfFalse(_)));
         let has_jmp = code.iter().any(|op| matches!(op, Op::Jump(_)));
-        assert!(has_jif, "expected JumpIfFalse: {:?}", code);
-        assert!(has_jmp, "expected Jump over else: {:?}", code);
+        assert!(has_jif, "expected JumpIfFalse: {code:?}");
+        assert!(has_jmp, "expected Jump over else: {code:?}");
     }
 
     #[test]
@@ -1331,9 +1330,9 @@ mod tests {
         let code = entry_code(&program);
         // A while emits at least one negative-offset Jump (the backward jump).
         let has_back = code.iter().any(|op| matches!(op, Op::Jump(o) if *o < 0));
-        assert!(has_back, "expected backward Jump: {:?}", code);
+        assert!(has_back, "expected backward Jump: {code:?}");
         let has_jif = code.iter().any(|op| matches!(op, Op::JumpIfFalse(_)));
-        assert!(has_jif, "expected JumpIfFalse exit: {:?}", code);
+        assert!(has_jif, "expected JumpIfFalse exit: {code:?}");
     }
 
     #[test]
@@ -1344,7 +1343,7 @@ mod tests {
         let break_jumps: Vec<i16> = code.iter().filter_map(|op| {
             if let Op::Jump(o) = op { Some(*o) } else { None }
         }).collect();
-        assert!(break_jumps.iter().any(|o| *o >= 0), "expected forward Jump for break: {:?}", code);
+        assert!(break_jumps.iter().any(|o| *o >= 0), "expected forward Jump for break: {code:?}");
     }
 
     #[test]

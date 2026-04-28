@@ -57,14 +57,14 @@ fn check_arg_count(args: &[NativeValue], expected: usize) -> Result<(), String> 
 fn expect_str(value: &NativeValue) -> Result<&str, String> {
     match value {
         NativeValue::Str(s) => Ok(s.as_str()),
-        other => Err(format!("expected string, got {:?}", other)),
+        other => Err(format!("expected string, got {other:?}")),
     }
 }
 
 fn expect_int(value: &NativeValue) -> Result<i64, String> {
     match value {
         NativeValue::Int(n) => Ok(*n),
-        other => Err(format!("expected int, got {:?}", other)),
+        other => Err(format!("expected int, got {other:?}")),
     }
 }
 
@@ -91,12 +91,12 @@ fn err(e: NativeValue) -> NativeValue {
 /// Build an `EnvError::NotSet { name }` payload as a string. Once integration
 /// rewires error variants this can be swapped to a structured value.
 fn env_error_not_set(name: &str) -> NativeValue {
-    NativeValue::Str(format!("EnvError::NotSet {{ name: {:?} }}", name))
+    NativeValue::Str(format!("EnvError::NotSet {{ name: {name:?} }}"))
 }
 
 /// Build an `IoError::Other { message }` payload as a string. Same caveat.
 fn io_error_other(message: &str) -> NativeValue {
-    NativeValue::Str(format!("IoError::Other {{ message: {:?} }}", message))
+    NativeValue::Str(format!("IoError::Other {{ message: {message:?} }}"))
 }
 
 // ---------------------------------------------------------------------------
@@ -200,7 +200,7 @@ fn builtin_env_cwd(args: &[NativeValue]) -> Result<NativeValue, String> {
     check_arg_count(args, 0)?;
     match std::env::current_dir() {
         Ok(path) => Ok(ok(NativeValue::Str(path.to_string_lossy().into_owned()))),
-        Err(e) => Ok(err(io_error_other(&format!("cwd: {}", e)))),
+        Err(e) => Ok(err(io_error_other(&format!("cwd: {e}")))),
     }
 }
 
@@ -254,6 +254,7 @@ fn builtin_env_exit(args: &[NativeValue]) -> Result<NativeValue, String> {
 /// `docs/tasks/stdlib-00-overview.md` §8: e.g. `env::get` is registered as
 /// the native `env_get`.
 pub fn register(registry: &mut NativeRegistry, interner: &mut Interner) {
+    #[allow(clippy::type_complexity)]
     let entries: &[(&str, fn(&[NativeValue]) -> Result<NativeValue, String>)] = &[
         ("env_get",       builtin_env_get),
         ("env_get_or",    builtin_env_get_or),
@@ -424,9 +425,9 @@ mod tests {
         match got {
             NativeValue::Result(boxed) => match *boxed {
                 Err(_) => {}
-                other => panic!("expected Result::Err, got {:?}", other),
+                other => panic!("expected Result::Err, got {other:?}"),
             },
-            other => panic!("expected Result, got {:?}", other),
+            other => panic!("expected Result, got {other:?}"),
         }
     }
 
@@ -448,7 +449,7 @@ mod tests {
                 let v = m.get(&MapKey::Str(name.clone()));
                 assert_eq!(v, Some(&NativeValue::Str("present".to_string())));
             }
-            other => panic!("expected Map, got {:?}", other),
+            other => panic!("expected Map, got {other:?}"),
         }
     }
 
@@ -463,7 +464,7 @@ mod tests {
                 // First arg should at least be a Str.
                 assert!(matches!(&items[0], NativeValue::Str(_)));
             }
-            other => panic!("expected Array, got {:?}", other),
+            other => panic!("expected Array, got {other:?}"),
         }
     }
 
@@ -475,9 +476,9 @@ mod tests {
         match v {
             NativeValue::Result(boxed) => match *boxed {
                 Ok(NativeValue::Str(s)) => assert!(!s.is_empty(), "cwd should not be empty"),
-                other => panic!("expected Result::Ok(Str), got {:?}", other),
+                other => panic!("expected Result::Ok(Str), got {other:?}"),
             },
-            other => panic!("expected Result, got {:?}", other),
+            other => panic!("expected Result, got {other:?}"),
         }
     }
 
@@ -488,7 +489,7 @@ mod tests {
         let v = call(builtin_env_temp_dir, vec![]).unwrap();
         match v {
             NativeValue::Str(s) => assert!(!s.is_empty(), "temp_dir should not be empty"),
-            other => panic!("expected Str, got {:?}", other),
+            other => panic!("expected Str, got {other:?}"),
         }
     }
 
@@ -540,18 +541,38 @@ mod tests {
         assert_eq!(got, none());
     }
 
-    // -------- exit (never tested) ----------------------------------------
+    // -------- exit (subprocess test) -------------------------------------
 
-    /// Placeholder. Calling `env::exit` would terminate the test runner, so
-    /// we only assert that the function is registered and document the
-    /// behaviour. Keep `#[ignore]` so `cargo test` skips it by default.
+    /// `env::exit` calls `std::process::exit`, which terminates the whole
+    /// process. To test it we spawn a small Rust subprocess that invokes
+    /// `builtin_env_exit` and check the exit code from the parent.
     #[test]
-    #[ignore = "env::exit terminates the process; do not run in unit tests"]
-    fn exit_terminates_process_placeholder() {
-        // If you ever want to verify behaviour manually, run the test in a
-        // subprocess and inspect the exit code:
-        //   let _ = builtin_env_exit(&[NativeValue::Int(7)]);
-        unreachable!("not run by default");
+    fn exit_terminates_process_with_given_code() {
+        // Spawn the current test binary with `FERRIC_ENV_EXIT_CODE=7`. The
+        // helper test below picks that up, calls `builtin_env_exit`, and
+        // never returns. The parent observes the exit code.
+        let exe = std::env::current_exe().expect("current_exe");
+        let output = std::process::Command::new(&exe)
+            .args(["--exact", "env::tests::__env_exit_helper", "--nocapture"])
+            .env("FERRIC_ENV_EXIT_CODE", "7")
+            .output()
+            .expect("spawn child");
+        assert_eq!(output.status.code(), Some(7), "stderr: {}", String::from_utf8_lossy(&output.stderr));
+    }
+
+    /// Helper invoked only by the parent test above (recognised by the
+    /// `FERRIC_ENV_EXIT_CODE` env var). Hidden from default runs by checking
+    /// the env var first; if absent, the test is a no-op so it doesn't
+    /// pollute the suite.
+    #[test]
+    fn __env_exit_helper() {
+        if let Ok(s) = std::env::var("FERRIC_ENV_EXIT_CODE") {
+            let code: i64 = s.parse().expect("FERRIC_ENV_EXIT_CODE must parse");
+            // Calls std::process::exit; never returns.
+            let _ = builtin_env_exit(&[NativeValue::Int(code)]);
+            unreachable!("env::exit must terminate the process");
+        }
+        // No env var set → no-op (default test runs).
     }
 
     // -------- registration ------------------------------------------------
@@ -579,8 +600,7 @@ mod tests {
             let sym = interner.intern(name);
             assert!(
                 registry.get(sym).is_some(),
-                "expected `{}` to be registered",
-                name,
+                "expected `{name}` to be registered",
             );
         }
     }

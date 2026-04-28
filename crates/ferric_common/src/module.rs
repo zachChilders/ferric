@@ -70,10 +70,10 @@ impl ManifestError {
     pub fn description(&self) -> String {
         match self {
             ManifestError::ParseError { message, .. } => {
-                format!("failed to parse Ferric.toml: {}", message)
+                format!("failed to parse Ferric.toml: {message}")
             }
             ManifestError::ConflictingManifest { path, .. } => {
-                format!("submodule `{}` has its own Ferric.toml", path)
+                format!("submodule `{path}` has its own Ferric.toml")
             }
         }
     }
@@ -195,13 +195,13 @@ impl ModuleError {
                 format!("circular import: {}", cycle.join(" → "))
             }
             ModuleError::UnknownExport { path, .. } => {
-                format!("imported name is not exported from \"{}\"", path)
+                format!("imported name is not exported from \"{path}\"")
             }
             ModuleError::NoManifest { path, .. } => {
-                format!("import \"{}\" requires a Ferric.toml manifest", path)
+                format!("import \"{path}\" requires a Ferric.toml manifest")
             }
             ModuleError::CacheMiss { name, .. } => {
-                format!("cache package `{}` not found in .ferric/cache/", name)
+                format!("cache package `{name}` not found in .ferric/cache/")
             }
             ModuleError::DefaultImport { .. } => {
                 "default imports are not supported in Ferric".to_string()

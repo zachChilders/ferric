@@ -33,7 +33,7 @@ pub fn load_manifest(workspace_root: &Path) -> ManifestResult {
             return ManifestResult::new(
                 None,
                 vec![ManifestError::ParseError {
-                    message: format!("could not read Ferric.toml: {}", e),
+                    message: format!("could not read Ferric.toml: {e}"),
                     span: Span::new(0, 0),
                 }],
             );

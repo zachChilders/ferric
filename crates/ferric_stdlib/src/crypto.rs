@@ -40,7 +40,6 @@ use argon2::password_hash::{
     rand_core::OsRng as ArgonOsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString,
 };
 use argon2::Argon2;
-use chacha20poly1305::aead::{Aead as ChaAead, KeyInit as ChaKeyInit};
 use chacha20poly1305::{ChaCha20Poly1305, Key as ChaKey, Nonce as ChaNonce};
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use hmac::{Hmac, Mac};
@@ -79,21 +78,21 @@ fn check_arg_count(args: &[NativeValue], expected: usize) -> Result<(), String> 
 fn expect_bytes(value: &NativeValue) -> Result<&[u8], String> {
     match value {
         NativeValue::Bytes(b) => Ok(b.as_slice()),
-        other => Err(format!("expected Bytes, got {:?}", other)),
+        other => Err(format!("expected Bytes, got {other:?}")),
     }
 }
 
 fn expect_str(value: &NativeValue) -> Result<&str, String> {
     match value {
         NativeValue::Str(s) => Ok(s.as_str()),
-        other => Err(format!("expected Str, got {:?}", other)),
+        other => Err(format!("expected Str, got {other:?}")),
     }
 }
 
 fn expect_int(value: &NativeValue) -> Result<i64, String> {
     match value {
         NativeValue::Int(n) => Ok(*n),
-        other => Err(format!("expected Int, got {:?}", other)),
+        other => Err(format!("expected Int, got {other:?}")),
     }
 }
 
@@ -163,7 +162,7 @@ fn builtin_crypto_hmac_sha256(args: &[NativeValue]) -> Result<NativeValue, Strin
     let key = expect_bytes(&args[0])?;
     let data = expect_bytes(&args[1])?;
     let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(key)
-        .map_err(|e| format!("InternalError: hmac_sha256: {}", e))?;
+        .map_err(|e| format!("InternalError: hmac_sha256: {e}"))?;
     mac.update(data);
     Ok(bytes(mac.finalize().into_bytes().to_vec()))
 }
@@ -173,7 +172,7 @@ fn builtin_crypto_hmac_sha512(args: &[NativeValue]) -> Result<NativeValue, Strin
     let key = expect_bytes(&args[0])?;
     let data = expect_bytes(&args[1])?;
     let mut mac = <Hmac<Sha512> as Mac>::new_from_slice(key)
-        .map_err(|e| format!("InternalError: hmac_sha512: {}", e))?;
+        .map_err(|e| format!("InternalError: hmac_sha512: {e}"))?;
     mac.update(data);
     Ok(bytes(mac.finalize().into_bytes().to_vec()))
 }
@@ -345,7 +344,7 @@ fn builtin_crypto_hash_password(args: &[NativeValue]) -> Result<NativeValue, Str
     let argon2 = Argon2::default();
     let hash = argon2
         .hash_password(password.as_bytes(), &salt)
-        .map_err(|e| format!("InternalError: hash_password: {}", e))?
+        .map_err(|e| format!("InternalError: hash_password: {e}"))?
         .to_string();
     Ok(NativeValue::Str(hash))
 }
@@ -359,7 +358,7 @@ fn builtin_crypto_verify_password(args: &[NativeValue]) -> Result<NativeValue, S
     match Argon2::default().verify_password(password.as_bytes(), &parsed) {
         Ok(()) => Ok(NativeValue::Bool(true)),
         Err(argon2::password_hash::Error::Password) => Ok(NativeValue::Bool(false)),
-        Err(e) => Err(format!("InternalError: verify_password: {}", e)),
+        Err(e) => Err(format!("InternalError: verify_password: {e}")),
     }
 }
 
@@ -426,7 +425,7 @@ fn builtin_crypto_ed25519_verify(args: &[NativeValue]) -> Result<NativeValue, St
         .try_into()
         .map_err(|_| "InternalError: ed25519 sig length".to_string())?;
     let verifying = VerifyingKey::from_bytes(&pk_arr)
-        .map_err(|e| format!("InternalError: ed25519 pk: {}", e))?;
+        .map_err(|e| format!("InternalError: ed25519 pk: {e}"))?;
     let sig = Signature::from_bytes(&sig_arr);
     Ok(NativeValue::Bool(verifying.verify(message, &sig).is_ok()))
 }
@@ -439,7 +438,7 @@ fn builtin_crypto_random_bytes(args: &[NativeValue]) -> Result<NativeValue, Stri
     check_arg_count(args, 1)?;
     let n = expect_int(&args[0])?;
     if n < 0 {
-        return Err(format!("InternalError: random_bytes: negative length {}", n));
+        return Err(format!("InternalError: random_bytes: negative length {n}"));
     }
     let mut buf = vec![0u8; n as usize];
     OsRng.fill_bytes(&mut buf);
@@ -452,8 +451,7 @@ fn builtin_crypto_random_int(args: &[NativeValue]) -> Result<NativeValue, String
     let high = expect_int(&args[1])?;
     if low > high {
         return Err(format!(
-            "InternalError: random_int: low ({}) > high ({})",
-            low, high
+            "InternalError: random_int: low ({low}) > high ({high})"
         ));
     }
     // Inclusive range. Compute span as u128 to avoid i64 overflow when
@@ -607,28 +605,28 @@ mod tests {
     fn unwrap_bytes(v: NativeValue) -> Vec<u8> {
         match v {
             NativeValue::Bytes(b) => b,
-            other => panic!("expected Bytes, got {:?}", other),
+            other => panic!("expected Bytes, got {other:?}"),
         }
     }
 
     fn unwrap_bool(v: NativeValue) -> bool {
         match v {
             NativeValue::Bool(b) => b,
-            other => panic!("expected Bool, got {:?}", other),
+            other => panic!("expected Bool, got {other:?}"),
         }
     }
 
     fn unwrap_str(v: NativeValue) -> String {
         match v {
             NativeValue::Str(s) => s,
-            other => panic!("expected Str, got {:?}", other),
+            other => panic!("expected Str, got {other:?}"),
         }
     }
 
     fn unwrap_int(v: NativeValue) -> i64 {
         match v {
             NativeValue::Int(n) => n,
-            other => panic!("expected Int, got {:?}", other),
+            other => panic!("expected Int, got {other:?}"),
         }
     }
 
@@ -782,8 +780,7 @@ mod tests {
         let err = builtin_crypto_chacha_decrypt(&[key, nonce, b(&tampered)]).unwrap_err();
         assert!(
             err.contains("DecryptionFailed"),
-            "expected DecryptionFailed, got: {}",
-            err
+            "expected DecryptionFailed, got: {err}"
         );
     }
 
@@ -796,7 +793,7 @@ mod tests {
             b(b"plain"),
         ])
         .unwrap_err();
-        assert!(err.contains("InvalidKeyLength"), "got: {}", err);
+        assert!(err.contains("InvalidKeyLength"), "got: {err}");
     }
 
     #[test]
@@ -808,7 +805,7 @@ mod tests {
             b(b"plain"),
         ])
         .unwrap_err();
-        assert!(err.contains("InvalidNonceLength"), "got: {}", err);
+        assert!(err.contains("InvalidNonceLength"), "got: {err}");
     }
 
     // --- AES-GCM ------------------------------------------------------------
@@ -847,7 +844,7 @@ mod tests {
         let mid = tampered.len() / 2;
         tampered[mid] ^= 0x80;
         let err = builtin_crypto_aes_gcm_decrypt(&[key, nonce, b(&tampered)]).unwrap_err();
-        assert!(err.contains("DecryptionFailed"), "got: {}", err);
+        assert!(err.contains("DecryptionFailed"), "got: {err}");
     }
 
     #[test]
@@ -858,7 +855,7 @@ mod tests {
             b(b"x"),
         ])
         .unwrap_err();
-        assert!(err.contains("InvalidKeyLength"), "got: {}", err);
+        assert!(err.contains("InvalidKeyLength"), "got: {err}");
     }
 
     // --- password hashing ---------------------------------------------------
@@ -868,8 +865,7 @@ mod tests {
         let h = unwrap_str(builtin_crypto_hash_password(&[s("hunter2")]).unwrap());
         assert!(
             h.starts_with("$argon2"),
-            "expected PHC string starting with $argon2, got: {}",
-            h
+            "expected PHC string starting with $argon2, got: {h}"
         );
     }
 
@@ -893,7 +889,7 @@ mod tests {
     #[test]
     fn verify_password_garbage_errs() {
         let err = builtin_crypto_verify_password(&[s("x"), s("garbage")]).unwrap_err();
-        assert!(err.contains("InvalidHashFormat"), "got: {}", err);
+        assert!(err.contains("InvalidHashFormat"), "got: {err}");
     }
 
     // --- Ed25519 ------------------------------------------------------------
@@ -902,7 +898,7 @@ mod tests {
         let kp = builtin_crypto_ed25519_keypair(&[]).unwrap();
         match kp {
             NativeValue::Tuple2(sk, pk) => (*sk, *pk),
-            other => panic!("expected Tuple2, got {:?}", other),
+            other => panic!("expected Tuple2, got {other:?}"),
         }
     }
 
@@ -960,14 +956,14 @@ mod tests {
     fn random_int_dice_in_range() {
         for _ in 0..100 {
             let v = unwrap_int(builtin_crypto_random_int(&[i(1), i(6)]).unwrap());
-            assert!((1..=6).contains(&v), "out of range: {}", v);
+            assert!((1..=6).contains(&v), "out of range: {v}");
         }
     }
 
     #[test]
     fn random_int_low_greater_than_high_errs() {
         let err = builtin_crypto_random_int(&[i(10), i(1)]).unwrap_err();
-        assert!(err.contains("InternalError"), "got: {}", err);
+        assert!(err.contains("InternalError"), "got: {err}");
     }
 
     // --- registration -------------------------------------------------------
@@ -1007,8 +1003,7 @@ mod tests {
             let sym = interner.intern(name);
             assert!(
                 registry.get(sym).is_some(),
-                "{} not registered",
-                name
+                "{name} not registered"
             );
         }
     }

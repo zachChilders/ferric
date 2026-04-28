@@ -44,14 +44,14 @@ fn check_arg_count(args: &[NativeValue], expected: usize) -> Result<(), String> 
 fn expect_set(v: &NativeValue) -> Result<&BTreeSet<MapKey>, String> {
     match v {
         NativeValue::Set(s) => Ok(s),
-        other => Err(format!("expected set, got {:?}", other)),
+        other => Err(format!("expected set, got {other:?}")),
     }
 }
 
 fn expect_list(v: &NativeValue) -> Result<&Vec<NativeValue>, String> {
     match v {
         NativeValue::List(xs) => Ok(xs),
-        other => Err(format!("expected list, got {:?}", other)),
+        other => Err(format!("expected list, got {other:?}")),
     }
 }
 

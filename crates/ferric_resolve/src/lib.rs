@@ -39,6 +39,7 @@ pub fn resolve_with_natives(ast: &ParseResult, native_fns: &[(Symbol, Vec<Symbol
 /// tuples used to surface compiler-provided enums (currently `Option` and
 /// `Result`) so user code can construct and match their variants without a
 /// hand-written enum declaration.
+#[allow(clippy::type_complexity)]
 pub fn resolve_with_natives_and_builtins(
     ast: &ParseResult,
     native_fns: &[(Symbol, Vec<Symbol>)],
@@ -73,6 +74,7 @@ pub fn resolve_with_imports(
 
 /// Like [`resolve_with_imports`], with pre-registered built-in enums (e.g.
 /// `Option`, `Result`) added to the resolver's type-def table.
+#[allow(clippy::type_complexity)]
 pub fn resolve_with_imports_and_builtins(
     ast: &ParseResult,
     native_fns: &[(Symbol, Vec<Symbol>)],

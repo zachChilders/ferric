@@ -33,14 +33,14 @@ fn check_arg_count(args: &[NativeValue], expected: usize) -> Result<(), String> 
 fn expect_str(value: &NativeValue) -> Result<&String, String> {
     match value {
         NativeValue::Str(s) => Ok(s),
-        other => Err(format!("expected string, got {:?}", other)),
+        other => Err(format!("expected string, got {other:?}")),
     }
 }
 
 fn expect_bytes(value: &NativeValue) -> Result<&Vec<u8>, String> {
     match value {
         NativeValue::Bytes(b) => Ok(b),
-        other => Err(format!("expected bytes, got {:?}", other)),
+        other => Err(format!("expected bytes, got {other:?}")),
     }
 }
 
@@ -50,10 +50,10 @@ fn expect_list_of_str(value: &NativeValue) -> Result<Vec<&String>, String> {
             .iter()
             .map(|v| match v {
                 NativeValue::Str(s) => Ok(s),
-                other => Err(format!("expected list of strings, found {:?}", other)),
+                other => Err(format!("expected list of strings, found {other:?}")),
             })
             .collect(),
-        other => Err(format!("expected list of strings, got {:?}", other)),
+        other => Err(format!("expected list of strings, got {other:?}")),
     }
 }
 
@@ -483,21 +483,21 @@ mod tests {
     fn unwrap_str(v: NativeValue) -> String {
         match v {
             NativeValue::Str(s) => s,
-            other => panic!("expected Str, got {:?}", other),
+            other => panic!("expected Str, got {other:?}"),
         }
     }
 
     fn unwrap_bytes(v: NativeValue) -> Vec<u8> {
         match v {
             NativeValue::Bytes(b) => b,
-            other => panic!("expected Bytes, got {:?}", other),
+            other => panic!("expected Bytes, got {other:?}"),
         }
     }
 
     fn unwrap_array(v: NativeValue) -> Vec<NativeValue> {
         match v {
             NativeValue::Array(a) => a,
-            other => panic!("expected Array, got {:?}", other),
+            other => panic!("expected Array, got {other:?}"),
         }
     }
 

@@ -414,11 +414,8 @@ impl<'a> Parser<'a> {
             let mut payload: Vec<TypeAnnotation> = Vec::new();
             if self.match_token(&TokenKind::LParen) {
                 if !self.check(&TokenKind::RParen) {
-                    loop {
-                        match self.parse_type() {
-                            Some(t) => payload.push(t),
-                            None => break,
-                        }
+                    while let Some(t) = self.parse_type() {
+                        payload.push(t);
                         if !self.match_token(&TokenKind::Comma) {
                             break;
                         }
@@ -1646,11 +1643,7 @@ impl<'a> Parser<'a> {
         self.advance(); // consume 'let'
 
         // Check for 'mut' keyword
-        let mutable = if self.match_token(&TokenKind::Mut) {
-            true
-        } else {
-            false
-        };
+        let mutable = self.match_token(&TokenKind::Mut);
 
         // Parse variable name
         let name = match &self.peek().kind {
@@ -2298,7 +2291,6 @@ impl<'a> Parser<'a> {
                         if self.is_named_arg_start() {
                             // Named arg: consume `name ':'`
                             let name = if let TokenKind::Ident(sym) = self.peek().kind {
-                                let sym = sym;
                                 self.advance(); // consume name
                                 self.advance(); // consume ':'
                                 sym
@@ -2420,7 +2412,6 @@ impl<'a> Parser<'a> {
             let arg_start = self.peek().span;
             if self.is_named_arg_start() {
                 let name = if let TokenKind::Ident(sym) = self.peek().kind {
-                    let sym = sym;
                     self.advance();
                     self.advance();
                     sym
@@ -2863,11 +2854,10 @@ impl<'a> Parser<'a> {
                 message = Some(Box::new(self.parse_expr()));
 
                 // Second optional comma-separated part (set:)
-                if self.match_token(&TokenKind::Comma) {
-                    if self.is_set_label_start() {
+                if self.match_token(&TokenKind::Comma)
+                    && self.is_set_label_start() {
                         set_fn = self.parse_set_clause();
                     }
-                }
             }
         }
 
@@ -3374,7 +3364,7 @@ mod tests {
         // Parser should not panic
         assert_eq!(result.items.len(), 1);
         // Should have an error about missing brace
-        assert!(result.errors.len() > 0);
+        assert!(!result.errors.is_empty());
     }
 
     #[test]
@@ -3428,10 +3418,10 @@ mod tests {
                         assert_eq!(items[1].alias.map(|s| interner.resolve(s).to_string()),
                                    Some("d".to_string()));
                     }
-                    other => panic!("expected named imports, got {:?}", other),
+                    other => panic!("expected named imports, got {other:?}"),
                 }
             }
-            other => panic!("expected import, got {:?}", other),
+            other => panic!("expected import, got {other:?}"),
         }
     }
 
@@ -3442,7 +3432,7 @@ mod tests {
         match &result.items[0] {
             Item::Import(decl) => match &decl.items {
                 ImportItems::Namespace(sym) => assert_eq!(interner.resolve(*sym), "db"),
-                other => panic!("expected namespace import, got {:?}", other),
+                other => panic!("expected namespace import, got {other:?}"),
             },
             _ => panic!("expected import"),
         }
@@ -3591,7 +3581,7 @@ mod tests {
                 Expr::Binary { op: BinOp::Add, right, .. } => {
                     assert!(matches!(**right, Expr::Cast(_)));
                 }
-                other => panic!("expected `+` at the root, got {:?}", other),
+                other => panic!("expected `+` at the root, got {other:?}"),
             },
             _ => panic!("expected let"),
         }
@@ -3605,7 +3595,7 @@ mod tests {
         match &result.items[0] {
             Item::Script { stmt: Stmt::Let { init, .. }, .. } => match init {
                 Expr::Cast(c) => assert!(matches!(*c.expr, Expr::FieldAccess { .. })),
-                other => panic!("expected cast at the root, got {:?}", other),
+                other => panic!("expected cast at the root, got {other:?}"),
             },
             _ => panic!("expected let"),
         }
@@ -3628,7 +3618,7 @@ mod tests {
                 assert_eq!(interner.resolve(decl.item.name), "fetch");
                 assert_eq!(decl.item.params.len(), 1);
             }
-            other => panic!("expected Item::AsyncFn, got {:?}", other),
+            other => panic!("expected Item::AsyncFn, got {other:?}"),
         }
     }
 
@@ -3658,11 +3648,11 @@ mod tests {
             Item::AsyncFn(decl) => match &decl.item.body {
                 Expr::Block { expr: Some(tail), .. } => {
                     assert!(matches!(tail.as_ref(), Expr::Await(_)),
-                        "tail expr should be Await, got {:?}", tail);
+                        "tail expr should be Await, got {tail:?}");
                 }
-                other => panic!("expected block body, got {:?}", other),
+                other => panic!("expected block body, got {other:?}"),
             },
-            other => panic!("expected AsyncFn, got {:?}", other),
+            other => panic!("expected AsyncFn, got {other:?}"),
         }
     }
 
@@ -3718,9 +3708,9 @@ mod tests {
         match &result.items[0] {
             Item::Script { stmt: Stmt::Let { init, .. }, .. } => {
                 assert!(matches!(init, Expr::AsyncBlock(_)),
-                    "init should be AsyncBlock, got {:?}", init);
+                    "init should be AsyncBlock, got {init:?}");
             }
-            other => panic!("expected let, got {:?}", other),
+            other => panic!("expected let, got {other:?}"),
         }
     }
 
@@ -3752,9 +3742,9 @@ mod tests {
                     assert_eq!(interner.resolve(*head), "Async");
                     assert_eq!(args.len(), 1);
                 }
-                other => panic!("expected Generic type annotation, got {:?}", other),
+                other => panic!("expected Generic type annotation, got {other:?}"),
             },
-            other => panic!("expected let with type annotation, got {:?}", other),
+            other => panic!("expected let with type annotation, got {other:?}"),
         }
     }
 
@@ -3767,9 +3757,9 @@ mod tests {
                 TypeAnnotation::Generic { head, .. } => {
                     assert_eq!(interner.resolve(*head), "Handle");
                 }
-                other => panic!("expected Generic, got {:?}", other),
+                other => panic!("expected Generic, got {other:?}"),
             },
-            other => panic!("expected fn, got {:?}", other),
+            other => panic!("expected fn, got {other:?}"),
         }
     }
 }

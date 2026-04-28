@@ -75,28 +75,28 @@ fn check_arg_count(args: &[NativeValue], expected: usize) -> Result<(), String> 
 fn expect_int(value: &NativeValue) -> Result<i64, String> {
     match value {
         NativeValue::Int(n) => Ok(*n),
-        other => Err(format!("expected int, got {:?}", other)),
+        other => Err(format!("expected int, got {other:?}")),
     }
 }
 
 fn expect_str(value: &NativeValue) -> Result<&String, String> {
     match value {
         NativeValue::Str(s) => Ok(s),
-        other => Err(format!("expected string, got {:?}", other)),
+        other => Err(format!("expected string, got {other:?}")),
     }
 }
 
 fn expect_time(value: &NativeValue) -> Result<TimeRepr, String> {
     match value {
         NativeValue::Time(t) => Ok(*t),
-        other => Err(format!("expected Time, got {:?}", other)),
+        other => Err(format!("expected Time, got {other:?}")),
     }
 }
 
 fn expect_duration(value: &NativeValue) -> Result<DurationRepr, String> {
     match value {
         NativeValue::Duration(d) => Ok(*d),
-        other => Err(format!("expected Duration, got {:?}", other)),
+        other => Err(format!("expected Duration, got {other:?}")),
     }
 }
 
@@ -319,7 +319,7 @@ fn builtin_time_format(args: &[NativeValue]) -> Result<NativeValue, String> {
     let result = std::panic::catch_unwind(|| dt.format(&layout_owned).to_string());
     match result {
         Ok(s) => Ok(NativeValue::Str(s)),
-        Err(_) => Err(format!("invalid format layout: {:?}", layout)),
+        Err(_) => Err(format!("invalid format layout: {layout:?}")),
     }
 }
 
@@ -365,8 +365,7 @@ fn builtin_time_parse(args: &[NativeValue]) -> Result<NativeValue, String> {
         return Ok(NativeValue::Time(chrono_utc_to_time(dt)));
     }
     Err(format!(
-        "parse: failed to parse {:?} with layout {:?}",
-        input, layout
+        "parse: failed to parse {input:?} with layout {layout:?}"
     ))
 }
 
@@ -376,7 +375,7 @@ fn builtin_time_parse_iso(args: &[NativeValue]) -> Result<NativeValue, String> {
     // RFC 3339 covers both `Z` and `+HH:MM` zone suffixes.
     match DateTime::parse_from_rfc3339(input) {
         Ok(dt) => Ok(NativeValue::Time(chrono_utc_to_time(dt.with_timezone(&Utc)))),
-        Err(e) => Err(format!("parse_iso: {}", e)),
+        Err(e) => Err(format!("parse_iso: {e}")),
     }
 }
 
@@ -504,28 +503,28 @@ mod tests {
     fn unwrap_time(v: NativeValue) -> TimeRepr {
         match v {
             NativeValue::Time(t) => t,
-            other => panic!("expected Time, got {:?}", other),
+            other => panic!("expected Time, got {other:?}"),
         }
     }
 
     fn unwrap_duration(v: NativeValue) -> DurationRepr {
         match v {
             NativeValue::Duration(d) => d,
-            other => panic!("expected Duration, got {:?}", other),
+            other => panic!("expected Duration, got {other:?}"),
         }
     }
 
     fn unwrap_int(v: NativeValue) -> i64 {
         match v {
             NativeValue::Int(n) => n,
-            other => panic!("expected Int, got {:?}", other),
+            other => panic!("expected Int, got {other:?}"),
         }
     }
 
     fn unwrap_str(v: NativeValue) -> String {
         match v {
             NativeValue::Str(s) => s,
-            other => panic!("expected Str, got {:?}", other),
+            other => panic!("expected Str, got {other:?}"),
         }
     }
 
@@ -537,8 +536,8 @@ mod tests {
         let secs = t.unix_ns / 1_000_000_000;
         // After 2023-11-14 (1_700_000_000), well before any reasonable
         // far-future timestamp.
-        assert!(secs > 1_700_000_000, "now() unix secs = {}", secs);
-        assert!(secs < 10_000_000_000, "now() unix secs = {}", secs);
+        assert!(secs > 1_700_000_000, "now() unix secs = {secs}");
+        assert!(secs < 10_000_000_000, "now() unix secs = {secs}");
     }
 
     #[test]
@@ -569,7 +568,7 @@ mod tests {
         let t = builtin_time_from_unix_ns(&[NativeValue::Int(987_654_321)]).unwrap();
         match t {
             NativeValue::Time(repr) => assert_eq!(repr.unix_ns, 987_654_321),
-            other => panic!("expected Time, got {:?}", other),
+            other => panic!("expected Time, got {other:?}"),
         }
     }
 
@@ -734,7 +733,7 @@ mod tests {
     fn test_monotonic_is_non_decreasing() {
         let a = unwrap_int(builtin_time_monotonic(&[]).unwrap());
         let b = unwrap_int(builtin_time_monotonic(&[]).unwrap());
-        assert!(b >= a, "monotonic went backwards: {} -> {}", a, b);
+        assert!(b >= a, "monotonic went backwards: {a} -> {b}");
     }
 
     #[test]
@@ -774,7 +773,7 @@ mod tests {
         ];
         for n in names {
             let sym = interner.intern(n);
-            assert!(registry.get(sym).is_some(), "missing registration: {}", n);
+            assert!(registry.get(sym).is_some(), "missing registration: {n}");
         }
     }
 

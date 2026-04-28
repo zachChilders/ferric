@@ -108,7 +108,7 @@ impl Ty {
                     .map(|t| t.description())
                     .collect::<Vec<_>>()
                     .join(", ");
-                format!("({})", parts)
+                format!("({parts})")
             }
             Ty::Struct { fields, .. } => {
                 let parts = fields
@@ -116,7 +116,7 @@ impl Ty {
                     .map(|(_, t)| t.description())
                     .collect::<Vec<_>>()
                     .join(", ");
-                format!("struct {{ {} }}", parts)
+                format!("struct {{ {parts} }}")
             }
             Ty::Enum { variants, .. } => {
                 let parts = variants
@@ -127,11 +127,11 @@ impl Ty {
                             .map(|t| t.description())
                             .collect::<Vec<_>>()
                             .join(", ");
-                        format!("({})", inner)
+                        format!("({inner})")
                     })
                     .collect::<Vec<_>>()
                     .join(" | ");
-                format!("enum [ {} ]", parts)
+                format!("enum [ {parts} ]")
             }
             Ty::Var(v) => format!("?T{}", v.0),
             Ty::Array(elem) => format!("[{}]", elem.description()),

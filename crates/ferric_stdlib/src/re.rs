@@ -76,28 +76,28 @@ fn check_arg_count(args: &[NativeValue], expected: usize) -> Result<(), String> 
 fn expect_str(value: &NativeValue) -> Result<&String, String> {
     match value {
         NativeValue::Str(s) => Ok(s),
-        other => Err(format!("expected string, got {:?}", other)),
+        other => Err(format!("expected string, got {other:?}")),
     }
 }
 
 fn expect_int(value: &NativeValue) -> Result<i64, String> {
     match value {
         NativeValue::Int(n) => Ok(*n),
-        other => Err(format!("expected int, got {:?}", other)),
+        other => Err(format!("expected int, got {other:?}")),
     }
 }
 
 fn expect_regex(value: &NativeValue) -> Result<&Rc<regex::Regex>, String> {
     match value {
         NativeValue::Regex(r) => Ok(r),
-        other => Err(format!("expected regex, got {:?}", other)),
+        other => Err(format!("expected regex, got {other:?}")),
     }
 }
 
 fn expect_match(value: &NativeValue) -> Result<&MatchRepr, String> {
     match value {
         NativeValue::Match(m) => Ok(m),
-        other => Err(format!("expected match, got {:?}", other)),
+        other => Err(format!("expected match, got {other:?}")),
     }
 }
 
@@ -113,11 +113,9 @@ fn build_match_repr(re: &regex::Regex, caps: &regex::Captures<'_>) -> MatchRepr 
     }
 
     let mut named_captures: BTreeMap<String, String> = BTreeMap::new();
-    for name_opt in re.capture_names() {
-        if let Some(name) = name_opt {
-            if let Some(m) = caps.name(name) {
-                named_captures.insert(name.to_string(), m.as_str().to_string());
-            }
+    for name in re.capture_names().flatten() {
+        if let Some(m) = caps.name(name) {
+            named_captures.insert(name.to_string(), m.as_str().to_string());
         }
     }
 
@@ -127,20 +125,6 @@ fn build_match_repr(re: &regex::Regex, caps: &regex::Captures<'_>) -> MatchRepr 
         end,
         captures,
         named_captures,
-    }
-}
-
-fn build_match_repr_simple(m: &regex::Match<'_>) -> MatchRepr {
-    // Used inside `replace_all` callbacks where we have a `Match`, not a
-    // full `Captures`. Positional/named groups beyond group 0 are not
-    // available in this context.
-    let text = m.as_str().to_string();
-    MatchRepr {
-        text: text.clone(),
-        start: m.start(),
-        end: m.end(),
-        captures: vec![Some(text)],
-        named_captures: BTreeMap::new(),
     }
 }
 
@@ -154,8 +138,7 @@ fn builtin_re_compile(args: &[NativeValue]) -> Result<NativeValue, String> {
     match regex::Regex::new(pattern) {
         Ok(r) => Ok(NativeValue::Regex(Rc::new(r))),
         Err(e) => Err(format!(
-            "ReError::InvalidPattern: pattern={:?} message={}",
-            pattern, e
+            "ReError::InvalidPattern: pattern={pattern:?} message={e}"
         )),
     }
 }
@@ -172,8 +155,7 @@ fn builtin_re_compile_flags(args: &[NativeValue]) -> Result<NativeValue, String>
             'i' | 'm' | 's' | 'x' | 'U' => {}
             _ => {
                 return Err(format!(
-                    "ReError::InvalidFlags: flags={:?} unknown flag {:?}",
-                    flags, ch
+                    "ReError::InvalidFlags: flags={flags:?} unknown flag {ch:?}"
                 ));
             }
         }
@@ -182,14 +164,13 @@ fn builtin_re_compile_flags(args: &[NativeValue]) -> Result<NativeValue, String>
     let composed = if flags.is_empty() {
         pattern.clone()
     } else {
-        format!("(?{}){}", flags, pattern)
+        format!("(?{flags}){pattern}")
     };
 
     match regex::Regex::new(&composed) {
         Ok(r) => Ok(NativeValue::Regex(Rc::new(r))),
         Err(e) => Err(format!(
-            "ReError::InvalidPattern: pattern={:?} message={}",
-            pattern, e
+            "ReError::InvalidPattern: pattern={pattern:?} message={e}"
         )),
     }
 }
@@ -311,25 +292,36 @@ fn builtin_re_replace_fn(args: &[NativeValue]) -> Result<NativeValue, String> {
     check_arg_count(args, 3)?;
     let r = expect_regex(&args[0])?;
     let s = expect_str(&args[1])?;
-    // The third argument is the closure. NativeValue does not yet model
-    // closures; integration will add a `Closure` variant and an
-    // `invoke_closure` helper. Until then, the closure is opaque and we
-    // fall back to substituting the original match text.
-    let _f = &args[2];
+    let f = &args[2];
 
+    // `regex::Regex::replace_all` takes a `FnMut(&Captures) -> Cow<str>`.
+    // It does not allow the callback to return an error; we capture any
+    // closure error in a cell and surface it after the replacement runs.
+    let mut closure_err: Option<String> = None;
     let out = r
         .replace_all(s, |caps: &regex::Captures<'_>| {
+            if closure_err.is_some() {
+                return String::new();
+            }
             let match_repr = build_match_repr(r, caps);
-            // Pseudocode (will be wired up in integration):
-            //
-            //     match invoke_closure(_f, &[NativeValue::Match(match_repr.clone())]) {
-            //         Ok(NativeValue::Str(rep)) => rep,
-            //         Ok(other) => panic!("replace_fn: closure must return Str, got {:?}", other),
-            //         Err(e) => panic!("replace_fn: closure error: {}", e),
-            //     }
-            match_repr.text
+            match crate::invoke_closure(f, &[NativeValue::Match(match_repr.clone())]) {
+                Ok(NativeValue::Str(rep)) => rep,
+                Ok(other) => {
+                    closure_err = Some(format!(
+                        "replace_fn: closure must return Str, got {other:?}"
+                    ));
+                    String::new()
+                }
+                Err(e) => {
+                    closure_err = Some(format!("replace_fn: closure error: {e}"));
+                    String::new()
+                }
+            }
         })
         .to_string();
+    if let Some(e) = closure_err {
+        return Err(e);
+    }
     Ok(NativeValue::Str(out))
 }
 
@@ -354,7 +346,7 @@ fn builtin_re_split_n(args: &[NativeValue]) -> Result<NativeValue, String> {
     let s = expect_str(&args[1])?;
     let n = expect_int(&args[2])?;
     if n < 0 {
-        return Err(format!("re::split_n: n must be non-negative, got {}", n));
+        return Err(format!("re::split_n: n must be non-negative, got {n}"));
     }
     let parts: Vec<NativeValue> = r
         .splitn(s, n as usize)
@@ -484,7 +476,7 @@ mod tests {
                 assert_eq!(mr.start, 3);
                 assert_eq!(mr.end, 6);
             }
-            other => panic!("expected Match, got {:?}", other),
+            other => panic!("expected Match, got {other:?}"),
         }
     }
 
@@ -511,7 +503,7 @@ mod tests {
                     .collect();
                 assert_eq!(texts, vec!["1", "22", "333"]);
             }
-            other => panic!("expected Array, got {:?}", other),
+            other => panic!("expected Array, got {other:?}"),
         }
     }
 
@@ -590,11 +582,17 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "replace_fn requires invoke_closure (not yet wired up at parallel-build time)"]
     fn replace_fn_doubles_each_digit_run() {
-        // When invoke_closure exists, this should produce "11 22 33":
         // re::replace_fn(re("\\d+"), "1 2 3", |m| str::repeat(re::match_str(m), 2))
-        let _ = builtin_re_replace_fn(&[re(r"\d+"), s("1 2 3"), NativeValue::Unit]);
+        // → "11 22 33"
+        let double_match = NativeValue::Closure(crate::NativeClosure::new(|args| {
+            match &args[0] {
+                NativeValue::Match(m) => Ok(NativeValue::Str(m.text.repeat(2))),
+                other => Err(format!("expected Match, got {other:?}")),
+            }
+        }));
+        let r = builtin_re_replace_fn(&[re(r"\d+"), s("1 2 3"), double_match]).unwrap();
+        assert_eq!(r, s("11 22 33"));
     }
 
     // -- split ----------------------------------------------------------
@@ -647,7 +645,7 @@ mod tests {
                 assert_eq!(mr.text, "dog");
                 assert_eq!(mr.captures.get(1).cloned().flatten(), Some("dog".to_string()));
             }
-            other => panic!("expected Match, got {:?}", other),
+            other => panic!("expected Match, got {other:?}"),
         }
     }
 
@@ -679,8 +677,7 @@ mod tests {
             let sym = interner.intern(name);
             assert!(
                 registry.get(sym).is_some(),
-                "missing registration for {}",
-                name
+                "missing registration for {name}"
             );
         }
     }

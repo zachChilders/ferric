@@ -33,7 +33,6 @@ fn native_fn_table(interner: &mut Interner) -> Vec<(Symbol, Vec<Symbol>)> {
         ("int_to_float",    &["n"]),
         ("shell_stdout",    &["output"]),
         ("shell_exit_code", &["output"]),
-        // M6
         ("array_len",       &["arr"]),
         ("str_len",         &["s"]),
         ("str_trim",        &["s"]),
@@ -49,9 +48,6 @@ fn native_fn_table(interner: &mut Interner) -> Vec<(Symbol, Vec<Symbol>)> {
         ("floor",           &["n"]),
         ("ceil",            &["n"]),
         ("read_line",       &[]),
-        // M8: async stdlib functions. The runtime impls land in M8 Task 5;
-        // for now they're registered here so the resolver and type checker
-        // recognise the names. Calling them at runtime panics until Task 5.
         ("spawn",           &["task"]),
         ("join",            &["a", "b"]),
         ("sleep",           &["ms"]),
@@ -101,7 +97,7 @@ fn main() {
 fn dump_ast(filename: &str) {
     let source = fs::read_to_string(filename)
         .unwrap_or_else(|e| {
-            eprintln!("Error reading file '{}': {}", filename, e);
+            eprintln!("Error reading file '{filename}': {e}");
             process::exit(1);
         });
 
@@ -111,10 +107,10 @@ fn dump_ast(filename: &str) {
 
     match ferric_common::ast_to_json(&parse_result) {
         Ok(json) => {
-            println!("{}", json);
+            println!("{json}");
         }
         Err(e) => {
-            eprintln!("Error serialising AST: {}", e);
+            eprintln!("Error serialising AST: {e}");
             process::exit(1);
         }
     }
@@ -123,7 +119,7 @@ fn dump_ast(filename: &str) {
 fn run_file(filename: &str) {
     let source = fs::read_to_string(filename)
         .unwrap_or_else(|e| {
-            eprintln!("Error reading file '{}': {}", filename, e);
+            eprintln!("Error reading file '{filename}': {e}");
             process::exit(1);
         });
 
@@ -282,7 +278,7 @@ fn run_repl() {
                 session = candidate;
             }
             Err(message) => {
-                eprintln!("{}", message);
+                eprintln!("{message}");
             }
         }
     }
@@ -403,10 +399,10 @@ fn run_session(source: &str) -> Result<(), String> {
 fn print_repl_value(value: &Value) {
     match value {
         Value::Unit => {}
-        Value::Int(n) => println!("{}", n),
-        Value::Float(f) => println!("{}", f),
-        Value::Bool(b) => println!("{}", b),
-        Value::Str(s) => println!("{:?}", s),
+        Value::Int(n) => println!("{n}"),
+        Value::Float(f) => println!("{f}"),
+        Value::Bool(b) => println!("{b}"),
+        Value::Str(s) => println!("{s:?}"),
         Value::Fn(_) | Value::NativeFn(_) => println!("<function>"),
         Value::ShellOutput(out) => {
             println!(
@@ -414,16 +410,17 @@ fn print_repl_value(value: &Value) {
                 out.exit_code, out.stdout
             )
         }
-        Value::Struct(fields) => println!("Struct({:?})", fields),
-        Value::Variant(idx, fields) => println!("Variant({}, {:?})", idx, fields),
-        Value::Tuple(elems) => println!("Tuple({:?})", elems),
-        Value::Array(elems) => println!("{:?}", elems),
+        Value::Struct(fields) => println!("Struct({fields:?})"),
+        Value::Variant(idx, fields) => println!("Variant({idx}, {fields:?})"),
+        Value::Tuple(elems) => println!("Tuple({elems:?})"),
+        Value::Array(elems) => println!("{elems:?}"),
         Value::Closure { .. } => println!("<closure>"),
-        Value::Async(inner) => println!("Async({:?})", inner),
-        Value::Handle(id) => println!("Handle({})", id),
+        Value::Async(inner) => println!("Async({inner:?})"),
+        Value::Handle(id) => println!("Handle({id})"),
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn report_errors(
     source: &str,
     interner: &Interner,

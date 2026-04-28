@@ -46,7 +46,7 @@ impl LexError {
     pub fn description(&self) -> String {
         match self {
             LexError::UnexpectedChar { ch, .. } => {
-                format!("unexpected character '{}'", ch)
+                format!("unexpected character '{ch}'")
             }
             LexError::UnterminatedString { .. } => {
                 "unterminated string literal".to_string()
@@ -368,7 +368,7 @@ impl ResolveError {
                 "wrong number of arguments to enum variant".to_string()
             }
             ResolveError::PrivateImport { path, .. } => {
-                format!("imported name is not exported from \"{}\"", path)
+                format!("imported name is not exported from \"{path}\"")
             }
         }
     }
@@ -624,7 +624,7 @@ impl TypeError {
                 "cannot infer a concrete type for this expression".to_string()
             }
             TypeError::WrongArgumentCount { expected, found, .. } => {
-                format!("expected {} argument(s), found {}", expected, found)
+                format!("expected {expected} argument(s), found {found}")
             }
             TypeError::NotCallable { ty, .. } => {
                 format!("cannot call value of type {}", ty.description())

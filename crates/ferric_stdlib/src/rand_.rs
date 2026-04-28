@@ -71,21 +71,21 @@ fn check_arg_count(args: &[NativeValue], expected: usize) -> Result<(), String> 
 fn expect_int(value: &NativeValue) -> Result<i64, String> {
     match value {
         NativeValue::Int(n) => Ok(*n),
-        other => Err(format!("expected int, got {:?}", other)),
+        other => Err(format!("expected int, got {other:?}")),
     }
 }
 
 fn expect_array(value: &NativeValue) -> Result<&Vec<NativeValue>, String> {
     match value {
         NativeValue::Array(elems) => Ok(elems),
-        other => Err(format!("expected list, got {:?}", other)),
+        other => Err(format!("expected list, got {other:?}")),
     }
 }
 
 fn expect_rng(value: &NativeValue) -> Result<Rc<RefCell<RngRepr>>, String> {
     match value {
         NativeValue::Rng(handle) => Ok(handle.clone()),
-        other => Err(format!("expected Rng, got {:?}", other)),
+        other => Err(format!("expected Rng, got {other:?}")),
     }
 }
 
@@ -110,8 +110,7 @@ fn tuple2(a: NativeValue, b: NativeValue) -> NativeValue {
 fn gen_int_inclusive<R: RngCore>(rng: &mut R, low: i64, high: i64) -> Result<i64, String> {
     if low > high {
         return Err(format!(
-            "rand::int: low ({}) must be <= high ({})",
-            low, high
+            "rand::int: low ({low}) must be <= high ({high})"
         ));
     }
     // `gen_range(low..=high)` would suffice, but callers in `rand` 0.8 prefer
@@ -210,7 +209,7 @@ fn builtin_rand_sample(args: &[NativeValue]) -> Result<NativeValue, String> {
     let items = expect_array(&args[0])?;
     let n = expect_int(&args[1])?;
     if n < 0 {
-        return Err(format!("rand::sample: n ({}) must be non-negative", n));
+        return Err(format!("rand::sample: n ({n}) must be non-negative"));
     }
     let mut rng = rand::thread_rng();
     let picked = sample_without_replacement(&mut rng, items, n as usize)?;
@@ -323,28 +322,28 @@ mod tests {
     fn unwrap_tuple(v: &NativeValue) -> &Vec<NativeValue> {
         match v {
             NativeValue::Tuple(parts) => parts,
-            other => panic!("expected Tuple, got {:?}", other),
+            other => panic!("expected Tuple, got {other:?}"),
         }
     }
 
     fn unwrap_int(v: &NativeValue) -> i64 {
         match v {
             NativeValue::Int(n) => *n,
-            other => panic!("expected Int, got {:?}", other),
+            other => panic!("expected Int, got {other:?}"),
         }
     }
 
     fn unwrap_float(v: &NativeValue) -> f64 {
         match v {
             NativeValue::Float(f) => *f,
-            other => panic!("expected Float, got {:?}", other),
+            other => panic!("expected Float, got {other:?}"),
         }
     }
 
     fn unwrap_array(v: &NativeValue) -> &Vec<NativeValue> {
         match v {
             NativeValue::Array(a) => a,
-            other => panic!("expected Array, got {:?}", other),
+            other => panic!("expected Array, got {other:?}"),
         }
     }
 
@@ -356,7 +355,7 @@ mod tests {
         for _ in 0..100 {
             let v = builtin_rand_int(&[NativeValue::Int(1), NativeValue::Int(10)]).unwrap();
             let n = unwrap_int(&v);
-            assert!((1..=10).contains(&n), "value {} outside [1, 10]", n);
+            assert!((1..=10).contains(&n), "value {n} outside [1, 10]");
         }
     }
 
@@ -372,7 +371,7 @@ mod tests {
     #[test]
     fn rand_int_rejects_inverted_range() {
         let err = builtin_rand_int(&[NativeValue::Int(10), NativeValue::Int(1)]).unwrap_err();
-        assert!(err.contains("low"), "unexpected err: {}", err);
+        assert!(err.contains("low"), "unexpected err: {err}");
     }
 
     // ---------- Unseeded: `float`, `bool` ----------
@@ -382,7 +381,7 @@ mod tests {
         for _ in 0..100 {
             let v = builtin_rand_float(&[]).unwrap();
             let f = unwrap_float(&v);
-            assert!((0.0..1.0).contains(&f), "value {} outside [0.0, 1.0)", f);
+            assert!((0.0..1.0).contains(&f), "value {f} outside [0.0, 1.0)");
         }
     }
 
@@ -395,7 +394,7 @@ mod tests {
             match builtin_rand_bool(&[]).unwrap() {
                 NativeValue::Bool(true) => saw_true = true,
                 NativeValue::Bool(false) => saw_false = true,
-                other => panic!("expected Bool, got {:?}", other),
+                other => panic!("expected Bool, got {other:?}"),
             }
             if saw_true && saw_false {
                 break;
@@ -440,7 +439,7 @@ mod tests {
         as_ints.dedup();
         assert_eq!(as_ints.len(), 3, "sample produced duplicates");
         for n in &as_ints {
-            assert!((1..=5).contains(n), "sample item {} outside source", n);
+            assert!((1..=5).contains(n), "sample item {n} outside source");
         }
     }
 
@@ -448,7 +447,7 @@ mod tests {
     fn rand_sample_rejects_n_larger_than_list() {
         let pool = ints(&[1, 2, 3, 4, 5]);
         let err = builtin_rand_sample(&[pool, NativeValue::Int(6)]).unwrap_err();
-        assert!(err.contains("sample"), "unexpected err: {}", err);
+        assert!(err.contains("sample"), "unexpected err: {err}");
     }
 
     #[test]
@@ -546,7 +545,7 @@ mod tests {
         }
         // Range check is unconditional — survives a lock-in mismatch.
         for n in &got {
-            assert!((0..=100).contains(n), "rng_int produced {} outside [0, 100]", n);
+            assert!((0..=100).contains(n), "rng_int produced {n} outside [0, 100]");
         }
         assert_eq!(
             got,
@@ -592,7 +591,7 @@ mod tests {
             let out = builtin_rand_rng_float(&[r]).unwrap();
             let parts = unwrap_tuple(&out);
             let f = unwrap_float(&parts[0]);
-            assert!((0.0..1.0).contains(&f), "rng_float produced {}", f);
+            assert!((0.0..1.0).contains(&f), "rng_float produced {f}");
             r = parts[1].clone();
         }
     }
@@ -639,7 +638,7 @@ mod tests {
             NativeValue::Int(10),
         ])
         .unwrap_err();
-        assert!(err.contains("expected Rng"), "unexpected err: {}", err);
+        assert!(err.contains("expected Rng"), "unexpected err: {err}");
     }
 
     // ---------- Registration smoke test ----------
@@ -665,8 +664,7 @@ mod tests {
             let sym = interner.intern(name);
             assert!(
                 registry.get(sym).is_some(),
-                "expected `{}` to be registered",
-                name
+                "expected `{name}` to be registered"
             );
         }
     }

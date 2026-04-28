@@ -112,49 +112,49 @@ fn check_arg_count(args: &[NativeValue], expected: usize) -> Result<(), String> 
 fn expect_str(value: &NativeValue) -> Result<&String, String> {
     match value {
         NativeValue::Str(s) => Ok(s),
-        other => Err(format!("expected string, got {:?}", other)),
+        other => Err(format!("expected string, got {other:?}")),
     }
 }
 
 fn expect_int(value: &NativeValue) -> Result<i64, String> {
     match value {
         NativeValue::Int(n) => Ok(*n),
-        other => Err(format!("expected int, got {:?}", other)),
+        other => Err(format!("expected int, got {other:?}")),
     }
 }
 
 fn expect_bytes(value: &NativeValue) -> Result<&Vec<u8>, String> {
     match value {
         NativeValue::Bytes(b) => Ok(b),
-        other => Err(format!("expected bytes, got {:?}", other)),
+        other => Err(format!("expected bytes, got {other:?}")),
     }
 }
 
 fn expect_list(value: &NativeValue) -> Result<&Vec<NativeValue>, String> {
     match value {
         NativeValue::Array(items) => Ok(items),
-        other => Err(format!("expected list, got {:?}", other)),
+        other => Err(format!("expected list, got {other:?}")),
     }
 }
 
 fn expect_command(value: &NativeValue) -> Result<Rc<RefCell<CommandRepr>>, String> {
     match value {
         NativeValue::ProcCommand(c) => Ok(c.clone()),
-        other => Err(format!("expected ProcCommand, got {:?}", other)),
+        other => Err(format!("expected ProcCommand, got {other:?}")),
     }
 }
 
 fn expect_output(value: &NativeValue) -> Result<Rc<ProcOutputRepr>, String> {
     match value {
         NativeValue::ProcOutput(o) => Ok(o.clone()),
-        other => Err(format!("expected ProcOutput, got {:?}", other)),
+        other => Err(format!("expected ProcOutput, got {other:?}")),
     }
 }
 
 fn expect_process(value: &NativeValue) -> Result<Rc<RefCell<ProcessRepr>>, String> {
     match value {
         NativeValue::ProcProcess(p) => Ok(p.clone()),
-        other => Err(format!("expected ProcProcess, got {:?}", other)),
+        other => Err(format!("expected ProcProcess, got {other:?}")),
     }
 }
 
@@ -163,11 +163,11 @@ fn expect_process(value: &NativeValue) -> Result<Rc<RefCell<ProcessRepr>>, Strin
 /// once the error enum is wired through `NativeValue`.
 fn classify_spawn_error(err: std::io::Error, program: &str) -> String {
     match err.kind() {
-        std::io::ErrorKind::NotFound => format!("ProcError::NotFound: {}", program),
+        std::io::ErrorKind::NotFound => format!("ProcError::NotFound: {program}"),
         std::io::ErrorKind::PermissionDenied => {
-            format!("ProcError::PermissionDenied: {}", program)
+            format!("ProcError::PermissionDenied: {program}")
         }
-        _ => format!("ProcError::Other: {}", err),
+        _ => format!("ProcError::Other: {err}"),
     }
 }
 
@@ -216,7 +216,7 @@ fn run_to_completion(repr: &CommandRepr) -> Result<ProcOutputRepr, String> {
         if let Some(mut stdin) = child.stdin.take() {
             stdin
                 .write_all(data)
-                .map_err(|e| format!("ProcError::Other: writing stdin: {}", e))?;
+                .map_err(|e| format!("ProcError::Other: writing stdin: {e}"))?;
             // Closing happens when `stdin` drops here.
         }
     }
@@ -234,14 +234,14 @@ fn run_to_completion(repr: &CommandRepr) -> Result<ProcOutputRepr, String> {
                         // errors (process may have just exited).
                         let _ = child.kill();
                         let _ = child.wait();
-                        return Err(format!("ProcError::Timeout: {} ms", ms));
+                        return Err(format!("ProcError::Timeout: {ms} ms"));
                     }
                     std::thread::sleep(Duration::from_millis(5));
                 }
                 Err(e) => {
                     let _ = child.kill();
                     let _ = child.wait();
-                    return Err(format!("ProcError::Other: {}", e));
+                    return Err(format!("ProcError::Other: {e}"));
                 }
             }
         }
@@ -249,7 +249,7 @@ fn run_to_completion(repr: &CommandRepr) -> Result<ProcOutputRepr, String> {
 
     let output = child
         .wait_with_output()
-        .map_err(|e| format!("ProcError::Other: {}", e))?;
+        .map_err(|e| format!("ProcError::Other: {e}"))?;
 
     Ok(ProcOutputRepr {
         stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
@@ -437,7 +437,7 @@ fn builtin_proc_spawn_streaming(args: &[NativeValue]) -> Result<NativeValue, Str
         if let Some(stdin) = child.stdin.as_mut() {
             stdin
                 .write_all(data)
-                .map_err(|e| format!("ProcError::Other: writing stdin: {}", e))?;
+                .map_err(|e| format!("ProcError::Other: writing stdin: {e}"))?;
         }
     }
 
@@ -463,7 +463,7 @@ fn builtin_proc_write_stdin(args: &[NativeValue]) -> Result<NativeValue, String>
         .ok_or_else(|| "ProcError::Other: stdin not piped".to_string())?;
     stdin
         .write_all(&data)
-        .map_err(|e| format!("ProcError::Other: {}", e))?;
+        .map_err(|e| format!("ProcError::Other: {e}"))?;
     Ok(NativeValue::Unit)
 }
 
@@ -478,7 +478,7 @@ fn builtin_proc_read_stdout_line(args: &[NativeValue]) -> Result<NativeValue, St
     let mut line = String::new();
     let n = reader
         .read_line(&mut line)
-        .map_err(|e| format!("ProcError::Other: {}", e))?;
+        .map_err(|e| format!("ProcError::Other: {e}"))?;
     if n == 0 {
         return Err("ProcError::Other: EOF".to_string());
     }
@@ -495,7 +495,7 @@ fn builtin_proc_wait(args: &[NativeValue]) -> Result<NativeValue, String> {
     let status = p
         .child
         .wait()
-        .map_err(|e| format!("ProcError::Other: {}", e))?;
+        .map_err(|e| format!("ProcError::Other: {e}"))?;
     Ok(NativeValue::Int(status.code().unwrap_or(-1) as i64))
 }
 
@@ -508,7 +508,7 @@ fn builtin_proc_kill(args: &[NativeValue]) -> Result<NativeValue, String> {
     match p.child.kill() {
         Ok(()) => {}
         Err(e) if e.kind() == std::io::ErrorKind::InvalidInput => {}
-        Err(e) => return Err(format!("ProcError::Other: {}", e)),
+        Err(e) => return Err(format!("ProcError::Other: {e}")),
     }
     // Reap to avoid a zombie. Ignore the result: if kill was a no-op
     // because the child already exited, wait may have already been called.
@@ -590,7 +590,7 @@ mod tests {
     fn output_of(v: &NativeValue) -> Rc<ProcOutputRepr> {
         match v {
             NativeValue::ProcOutput(o) => o.clone(),
-            other => panic!("expected ProcOutput, got {:?}", other),
+            other => panic!("expected ProcOutput, got {other:?}"),
         }
     }
 
@@ -735,8 +735,7 @@ mod tests {
         // macOS reports `/private/tmp` for `/tmp`; accept either.
         assert!(
             trimmed == "/tmp" || trimmed == "/private/tmp",
-            "expected /tmp or /private/tmp, got {:?}",
-            trimmed
+            "expected /tmp or /private/tmp, got {trimmed:?}"
         );
     }
 
@@ -778,11 +777,10 @@ mod tests {
         let c = arg(&c, "5");
         let c = builtin_proc_timeout(&[c, NativeValue::Int(50)]).unwrap();
         let result = builtin_proc_spawn(&[c]);
-        assert!(result.is_err(), "expected timeout error, got {:?}", result);
+        assert!(result.is_err(), "expected timeout error, got {result:?}");
         assert!(
             result.as_ref().unwrap_err().contains("Timeout"),
-            "expected Timeout error, got {:?}",
-            result
+            "expected Timeout error, got {result:?}"
         );
     }
 
@@ -856,8 +854,7 @@ mod tests {
         let err = result.unwrap_err();
         assert!(
             err.contains("NotFound"),
-            "expected NotFound error, got {:?}",
-            err
+            "expected NotFound error, got {err:?}"
         );
     }
 
@@ -909,8 +906,7 @@ mod tests {
             let sym = interner.intern(name);
             assert!(
                 registry.get(sym).is_some(),
-                "{} not registered",
-                name
+                "{name} not registered"
             );
         }
     }

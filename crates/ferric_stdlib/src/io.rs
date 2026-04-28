@@ -42,7 +42,7 @@ fn check_arg_count(args: &[NativeValue], expected: usize) -> Result<(), String> 
 fn expect_str(value: &NativeValue) -> Result<&String, String> {
     match value {
         NativeValue::Str(s) => Ok(s),
-        other => Err(format!("expected string, got {:?}", other)),
+        other => Err(format!("expected string, got {other:?}")),
     }
 }
 
@@ -50,7 +50,7 @@ fn expect_str(value: &NativeValue) -> Result<&String, String> {
 fn expect_int(value: &NativeValue) -> Result<i64, String> {
     match value {
         NativeValue::Int(n) => Ok(*n),
-        other => Err(format!("expected int, got {:?}", other)),
+        other => Err(format!("expected int, got {other:?}")),
     }
 }
 
@@ -58,9 +58,9 @@ fn expect_int(value: &NativeValue) -> Result<i64, String> {
 fn io_err(path: &str, e: io::Error) -> String {
     use io::ErrorKind::*;
     match e.kind() {
-        NotFound => format!("IoError::NotFound {{ path: {:?} }}", path),
-        PermissionDenied => format!("IoError::PermissionDenied {{ path: {:?} }}", path),
-        AlreadyExists => format!("IoError::AlreadyExists {{ path: {:?} }}", path),
+        NotFound => format!("IoError::NotFound {{ path: {path:?} }}"),
+        PermissionDenied => format!("IoError::PermissionDenied {{ path: {path:?} }}"),
+        AlreadyExists => format!("IoError::AlreadyExists {{ path: {path:?} }}"),
         Interrupted => "IoError::Interrupted {}".to_string(),
         // Two best-effort kinds — std::io currently doesn't expose stable
         // IsADirectory/NotADirectory on stable, so map via raw OS error
@@ -71,13 +71,13 @@ fn io_err(path: &str, e: io::Error) -> String {
                 if let Some(code) = e.raw_os_error() {
                     // EISDIR == 21, ENOTDIR == 20, ENOTEMPTY == 66 (mac) / 39 (linux)
                     if code == 21 {
-                        return format!("IoError::IsDirectory {{ path: {:?} }}", path);
+                        return format!("IoError::IsDirectory {{ path: {path:?} }}");
                     }
                     if code == 20 {
-                        return format!("IoError::IsFile {{ path: {:?} }}", path);
+                        return format!("IoError::IsFile {{ path: {path:?} }}");
                     }
                     if code == 66 || code == 39 {
-                        return format!("IoError::NotEmpty {{ path: {:?} }}", path);
+                        return format!("IoError::NotEmpty {{ path: {path:?} }}");
                     }
                 }
             }
@@ -93,28 +93,28 @@ fn io_err(path: &str, e: io::Error) -> String {
 fn builtin_io_print(args: &[NativeValue]) -> Result<NativeValue, String> {
     check_arg_count(args, 1)?;
     let s = expect_str(&args[0])?;
-    print!("{}", s);
+    print!("{s}");
     Ok(NativeValue::Unit)
 }
 
 fn builtin_io_println(args: &[NativeValue]) -> Result<NativeValue, String> {
     check_arg_count(args, 1)?;
     let s = expect_str(&args[0])?;
-    println!("{}", s);
+    println!("{s}");
     Ok(NativeValue::Unit)
 }
 
 fn builtin_io_eprint(args: &[NativeValue]) -> Result<NativeValue, String> {
     check_arg_count(args, 1)?;
     let s = expect_str(&args[0])?;
-    eprint!("{}", s);
+    eprint!("{s}");
     Ok(NativeValue::Unit)
 }
 
 fn builtin_io_eprintln(args: &[NativeValue]) -> Result<NativeValue, String> {
     check_arg_count(args, 1)?;
     let s = expect_str(&args[0])?;
-    eprintln!("{}", s);
+    eprintln!("{s}");
     Ok(NativeValue::Unit)
 }
 
@@ -215,14 +215,14 @@ fn array_to_bytes(value: &NativeValue) -> Result<Vec<u8>, String> {
                 match it {
                     NativeValue::Int(n) if (0..=255).contains(n) => out.push(*n as u8),
                     NativeValue::Int(n) => {
-                        return Err(format!("byte out of range 0..=255: {}", n));
+                        return Err(format!("byte out of range 0..=255: {n}"));
                     }
-                    other => return Err(format!("expected byte (Int), got {:?}", other)),
+                    other => return Err(format!("expected byte (Int), got {other:?}")),
                 }
             }
             Ok(out)
         }
-        other => Err(format!("expected bytes, got {:?}", other)),
+        other => Err(format!("expected bytes, got {other:?}")),
     }
 }
 
@@ -403,8 +403,8 @@ fn builtin_io_copy(args: &[NativeValue]) -> Result<NativeValue, String> {
 // needs to swap the handle representation, not the semantics.
 
 thread_local! {
-    static FILE_WRITERS: RefCell<Vec<Option<BufWriter<File>>>> = RefCell::new(Vec::new());
-    static FILE_WRITER_PATHS: RefCell<Vec<String>> = RefCell::new(Vec::new());
+    static FILE_WRITERS: RefCell<Vec<Option<BufWriter<File>>>> = const { RefCell::new(Vec::new()) };
+    static FILE_WRITER_PATHS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
 }
 
 const FILE_WRITER_TAG: &str = "__ferric_filewriter__:";
@@ -423,15 +423,15 @@ fn fw_alloc(path: String, writer: BufWriter<File>) -> usize {
 }
 
 fn fw_handle_to_str(idx: usize) -> String {
-    format!("{}{}", FILE_WRITER_TAG, idx)
+    format!("{FILE_WRITER_TAG}{idx}")
 }
 
 fn fw_str_to_idx(s: &str) -> Result<usize, String> {
     let rest = s
         .strip_prefix(FILE_WRITER_TAG)
-        .ok_or_else(|| format!("expected FileWriter handle, got {:?}", s))?;
+        .ok_or_else(|| format!("expected FileWriter handle, got {s:?}"))?;
     rest.parse::<usize>()
-        .map_err(|_| format!("invalid FileWriter handle: {:?}", s))
+        .map_err(|_| format!("invalid FileWriter handle: {s:?}"))
 }
 
 fn fw_path(idx: usize) -> String {
@@ -452,7 +452,7 @@ where
         let mut slots = cell.borrow_mut();
         match slots.get_mut(idx).and_then(|slot| slot.as_mut()) {
             Some(w) => f(w).map_err(|e| io_err(&path, e)),
-            None => Err(format!("IoError::Other {{ message: \"FileWriter is closed\" }}")),
+            None => Err("IoError::Other { message: \"FileWriter is closed\" }".to_string()),
         }
     })
 }
@@ -517,7 +517,7 @@ fn builtin_io_close(args: &[NativeValue]) -> Result<NativeValue, String> {
     let idx = fw_str_to_idx(handle)?;
     let path = fw_path(idx);
     let mut writer = fw_take(idx)
-        .ok_or_else(|| format!("IoError::Other {{ message: \"FileWriter already closed\" }}"))?;
+        .ok_or_else(|| "IoError::Other { message: \"FileWriter already closed\" }".to_string())?;
     writer.flush().map_err(|e| io_err(&path, e))?;
     drop(writer); // closes the file
     Ok(NativeValue::Unit)
@@ -869,7 +869,7 @@ mod tests {
         let tp = unique_temp("missing_read");
         let p = tp.as_str();
         let err = builtin_io_read_file(&[s(&p)]).unwrap_err();
-        assert!(err.starts_with("IoError::NotFound"), "got: {}", err);
+        assert!(err.starts_with("IoError::NotFound"), "got: {err}");
     }
 
     #[test]
@@ -877,7 +877,7 @@ mod tests {
         let dir = unique_temp_dir("dup");
         let p = dir.as_str();
         let err = builtin_io_make_dir(&[s(&p)]).unwrap_err();
-        assert!(err.starts_with("IoError::AlreadyExists"), "got: {}", err);
+        assert!(err.starts_with("IoError::AlreadyExists"), "got: {err}");
     }
 
     // ---- list_dir / list_dir_recursive ----------------------------------
@@ -931,9 +931,9 @@ mod tests {
             // Paths are relative to the input directory and OS-native slashes.
             let sub_str = "sub";
             let inner_str = format!("sub{}inner.txt", std::path::MAIN_SEPARATOR);
-            assert!(names.contains(&sub_str.to_string()), "{:?}", names);
-            assert!(names.contains(&inner_str), "{:?}", names);
-            assert!(names.contains(&"top.txt".to_string()), "{:?}", names);
+            assert!(names.contains(&sub_str.to_string()), "{names:?}");
+            assert!(names.contains(&inner_str), "{names:?}");
+            assert!(names.contains(&"top.txt".to_string()), "{names:?}");
         } else {
             panic!("expected Array");
         }
@@ -967,7 +967,7 @@ mod tests {
         let handle = builtin_io_file_writer(&[s(&p)]).unwrap();
         builtin_io_close(&[handle.clone()]).unwrap();
         let err = builtin_io_write(&[handle, s("x")]).unwrap_err();
-        assert!(err.contains("closed"), "got: {}", err);
+        assert!(err.contains("closed"), "got: {err}");
     }
 
     #[test]
@@ -1010,7 +1010,7 @@ mod tests {
             "io_close",
         ] {
             let sym = int.intern(name);
-            assert!(reg.get(sym).is_some(), "missing native: {}", name);
+            assert!(reg.get(sym).is_some(), "missing native: {name}");
         }
     }
 }

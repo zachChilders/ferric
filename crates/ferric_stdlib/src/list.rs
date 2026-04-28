@@ -35,13 +35,7 @@ use ferric_common::Interner;
 
 /// Invoke a closure-shaped `NativeValue` with the given arguments.
 ///
-/// During the parallel build phase this is a stub that errors out. The
-/// integration task replaces it (or wires the real plumbing through the VM)
-/// so that `map`, `filter`, etc. can call user code.
-#[allow(dead_code)]
-fn invoke_closure(_c: &NativeValue, _args: &[NativeValue]) -> Result<NativeValue, String> {
-    Err("invoke_closure: closure invocation is not yet wired (integration task)".to_string())
-}
+use crate::invoke_closure;
 
 // ---------------------------------------------------------------------------
 // Local helpers (private to this module — integration may dedupe later)
@@ -62,21 +56,21 @@ fn check_arg_count(args: &[NativeValue], expected: usize) -> Result<(), String> 
 fn expect_int(v: &NativeValue) -> Result<i64, String> {
     match v {
         NativeValue::Int(n) => Ok(*n),
-        other => Err(format!("list: expected Int, got {:?}", other)),
+        other => Err(format!("list: expected Int, got {other:?}")),
     }
 }
 
 fn expect_list(v: &NativeValue) -> Result<&Vec<NativeValue>, String> {
     match v {
         NativeValue::Array(items) => Ok(items),
-        other => Err(format!("list: expected List, got {:?}", other)),
+        other => Err(format!("list: expected List, got {other:?}")),
     }
 }
 
-fn expect_str<'a>(v: &'a NativeValue) -> Result<&'a String, String> {
+fn expect_str(v: &NativeValue) -> Result<&String, String> {
     match v {
         NativeValue::Str(s) => Ok(s),
-        other => Err(format!("list: expected Str, got {:?}", other)),
+        other => Err(format!("list: expected Str, got {other:?}")),
     }
 }
 
@@ -113,7 +107,7 @@ fn values_equal(a: &NativeValue, b: &NativeValue) -> bool {
 fn is_truthy(v: &NativeValue) -> Result<bool, String> {
     match v {
         NativeValue::Bool(b) => Ok(*b),
-        other => Err(format!("list: expected Bool from predicate, got {:?}", other)),
+        other => Err(format!("list: expected Bool from predicate, got {other:?}")),
     }
 }
 
@@ -135,7 +129,7 @@ fn builtin_list_repeat(args: &[NativeValue]) -> Result<NativeValue, String> {
     let item = args[0].clone();
     let n = expect_int(&args[1])?;
     if n < 0 {
-        return Err(format!("list::repeat: negative count {}", n));
+        return Err(format!("list::repeat: negative count {n}"));
     }
     Ok(NativeValue::Array(vec![item; n as usize]))
 }
@@ -330,7 +324,7 @@ fn builtin_list_filter_map(args: &[NativeValue]) -> Result<NativeValue, String> 
             NativeValue::Array(mut inner) if inner.len() == 1 => {
                 out.push(inner.pop().unwrap());
             }
-            other => return Err(format!("list::filter_map: expected Option, got {:?}", other)),
+            other => return Err(format!("list::filter_map: expected Option, got {other:?}")),
         }
     }
     Ok(NativeValue::Array(out))
@@ -429,7 +423,7 @@ fn builtin_list_chunk(args: &[NativeValue]) -> Result<NativeValue, String> {
     let l = expect_list(&args[0])?;
     let size = expect_int(&args[1])?;
     if size <= 0 {
-        return Err(format!("list::chunk: invalid chunk size {}", size));
+        return Err(format!("list::chunk: invalid chunk size {size}"));
     }
     let size = size as usize;
     let out: Vec<NativeValue> = l
@@ -444,7 +438,7 @@ fn builtin_list_window(args: &[NativeValue]) -> Result<NativeValue, String> {
     let l = expect_list(&args[0])?;
     let size = expect_int(&args[1])?;
     if size <= 0 {
-        return Err(format!("list::window: invalid window size {}", size));
+        return Err(format!("list::window: invalid window size {size}"));
     }
     let size = size as usize;
     let mut out = Vec::new();
@@ -589,7 +583,7 @@ fn builtin_list_sum(args: &[NativeValue]) -> Result<NativeValue, String> {
     for item in l {
         match item {
             NativeValue::Int(n) => total = total.wrapping_add(*n),
-            other => return Err(format!("list::sum: expected Int, got {:?}", other)),
+            other => return Err(format!("list::sum: expected Int, got {other:?}")),
         }
     }
     Ok(NativeValue::Int(total))
@@ -602,7 +596,7 @@ fn builtin_list_sum_float(args: &[NativeValue]) -> Result<NativeValue, String> {
     for item in l {
         match item {
             NativeValue::Float(f) => total += *f,
-            other => return Err(format!("list::sum_float: expected Float, got {:?}", other)),
+            other => return Err(format!("list::sum_float: expected Float, got {other:?}")),
         }
     }
     Ok(NativeValue::Float(total))
@@ -617,8 +611,7 @@ fn cmp_ord_supported(a: &NativeValue, b: &NativeValue) -> Result<std::cmp::Order
         }
         (NativeValue::Str(x), NativeValue::Str(y)) => Ok(x.cmp(y)),
         _ => Err(format!(
-            "list: min/max only support uniform Int / Float / Str (got {:?} vs {:?})",
-            a, b
+            "list: min/max only support uniform Int / Float / Str (got {a:?} vs {b:?})"
         )),
     }
     .map(|o| match o {
@@ -780,8 +773,10 @@ fn builtin_list_join_str(args: &[NativeValue]) -> Result<NativeValue, String> {
 // only used inside this module's tests; integration replaces it with the
 // real `ListMut(Rc<RefCell<...>>)` variant.
 
+type ListBuilderSlot = Option<Rc<RefCell<Vec<NativeValue>>>>;
+
 thread_local! {
-    static LIST_BUILDERS: RefCell<Vec<Option<Rc<RefCell<Vec<NativeValue>>>>>> =
+    static LIST_BUILDERS: RefCell<Vec<ListBuilderSlot>> =
         const { RefCell::new(Vec::new()) };
 }
 
@@ -802,10 +797,10 @@ where
         let v = cell.borrow();
         let slot = v
             .get(id as usize)
-            .ok_or_else(|| format!("list: invalid builder handle {}", id))?;
+            .ok_or_else(|| format!("list: invalid builder handle {id}"))?;
         let b = slot
             .as_ref()
-            .ok_or_else(|| format!("list: builder {} already consumed", id))?;
+            .ok_or_else(|| format!("list: builder {id} already consumed"))?;
         Ok(f(b))
     })
 }
@@ -815,10 +810,10 @@ fn take_builder(id: i64) -> Result<Vec<NativeValue>, String> {
         let mut v = cell.borrow_mut();
         let slot = v
             .get_mut(id as usize)
-            .ok_or_else(|| format!("list: invalid builder handle {}", id))?;
+            .ok_or_else(|| format!("list: invalid builder handle {id}"))?;
         let b = slot
             .take()
-            .ok_or_else(|| format!("list: builder {} already consumed", id))?;
+            .ok_or_else(|| format!("list: builder {id} already consumed"))?;
         let inner = Rc::try_unwrap(b)
             .map_err(|_| "list: builder still has outstanding references".to_string())?
             .into_inner();
@@ -937,6 +932,7 @@ pub fn register(registry: &mut NativeRegistry, interner: &mut Interner) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::NativeClosure;
 
     fn ints(xs: &[i64]) -> NativeValue {
         NativeValue::Array(xs.iter().map(|n| NativeValue::Int(*n)).collect())
@@ -948,6 +944,22 @@ mod tests {
                 .map(|s| NativeValue::Str(s.to_string()))
                 .collect(),
         )
+    }
+
+    /// Build a `NativeValue::Closure` from a Rust closure for testing
+    /// higher-order list functions.
+    fn closure<F>(f: F) -> NativeValue
+    where
+        F: Fn(&[NativeValue]) -> Result<NativeValue, String> + 'static,
+    {
+        NativeValue::Closure(NativeClosure::new(f))
+    }
+
+    fn unwrap_int(v: &NativeValue) -> i64 {
+        match v {
+            NativeValue::Int(n) => *n,
+            other => panic!("expected Int, got {other:?}"),
+        }
     }
 
     // --- Construction ------------------------------------------------------
@@ -1090,46 +1102,97 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires invoke_closure plumbing from integration step"]
     fn find_with_predicate() {
-        // intent: find(is_even, [1,2,3,4]) -> Some(2)
+        let is_even = closure(|args| Ok(NativeValue::Bool(unwrap_int(&args[0]) % 2 == 0)));
+        let r = builtin_list_find(&[ints(&[1, 2, 3, 4]), is_even]).unwrap();
+        assert_eq!(r, option_some(NativeValue::Int(2)));
+
+        let always_false = closure(|_| Ok(NativeValue::Bool(false)));
+        let r = builtin_list_find(&[ints(&[1, 2, 3]), always_false]).unwrap();
+        assert_eq!(r, option_none());
     }
 
     #[test]
-    #[ignore = "requires invoke_closure plumbing from integration step"]
     fn find_index_with_predicate() {
-        // intent: find_index(is_even, [1,2,3,4]) -> Some(1)
+        let is_even = closure(|args| Ok(NativeValue::Bool(unwrap_int(&args[0]) % 2 == 0)));
+        let r = builtin_list_find_index(&[ints(&[1, 2, 3, 4]), is_even]).unwrap();
+        assert_eq!(r, option_some(NativeValue::Int(1)));
     }
 
     // --- Transform ---------------------------------------------------------
 
     #[test]
-    #[ignore = "requires invoke_closure: map(double, [1,2,3]) == [2,4,6]"]
-    fn map_doubles_each_element() {}
+    fn map_doubles_each_element() {
+        let double = closure(|args| Ok(NativeValue::Int(unwrap_int(&args[0]) * 2)));
+        let r = builtin_list_map(&[ints(&[1, 2, 3]), double]).unwrap();
+        assert_eq!(r, ints(&[2, 4, 6]));
+    }
 
     #[test]
-    #[ignore = "requires invoke_closure: filter(is_even, [1,2,3,4]) == [2,4]"]
-    fn filter_keeps_truthy() {}
+    fn filter_keeps_truthy() {
+        let is_even = closure(|args| Ok(NativeValue::Bool(unwrap_int(&args[0]) % 2 == 0)));
+        let r = builtin_list_filter(&[ints(&[1, 2, 3, 4]), is_even]).unwrap();
+        assert_eq!(r, ints(&[2, 4]));
+    }
 
     #[test]
-    #[ignore = "requires invoke_closure: fold(add, 0, [1,2,3]) == 6"]
-    fn fold_sums() {}
+    fn fold_sums() {
+        let add = closure(|args| {
+            Ok(NativeValue::Int(unwrap_int(&args[0]) + unwrap_int(&args[1])))
+        });
+        let r = builtin_list_fold(&[ints(&[1, 2, 3]), NativeValue::Int(0), add]).unwrap();
+        assert_eq!(r, NativeValue::Int(6));
+    }
 
     #[test]
-    #[ignore = "requires invoke_closure: reduce(add, [1,2,3]) == Some(6); reduce(add, []) == None"]
-    fn reduce_handles_empty_and_nonempty() {}
+    fn reduce_handles_empty_and_nonempty() {
+        let add = closure(|args| {
+            Ok(NativeValue::Int(unwrap_int(&args[0]) + unwrap_int(&args[1])))
+        });
+        let r = builtin_list_reduce(&[ints(&[1, 2, 3]), add]).unwrap();
+        assert_eq!(r, option_some(NativeValue::Int(6)));
+
+        let add2 = closure(|args| {
+            Ok(NativeValue::Int(unwrap_int(&args[0]) + unwrap_int(&args[1])))
+        });
+        let r = builtin_list_reduce(&[ints(&[]), add2]).unwrap();
+        assert_eq!(r, option_none());
+    }
 
     #[test]
-    #[ignore = "requires invoke_closure: flat_map(|n| [n, n], [1,2]) == [1,1,2,2]"]
-    fn flat_map_concatenates_results() {}
+    fn flat_map_concatenates_results() {
+        let dup = closure(|args| {
+            let n = args[0].clone();
+            Ok(NativeValue::Array(vec![n.clone(), n]))
+        });
+        let r = builtin_list_flat_map(&[ints(&[1, 2]), dup]).unwrap();
+        assert_eq!(r, ints(&[1, 1, 2, 2]));
+    }
 
     #[test]
-    #[ignore = "requires invoke_closure: filter_map(parse_int, ...) drops Nones"]
-    fn filter_map_drops_nones() {}
+    fn filter_map_drops_nones() {
+        // Map evens to Some(double), odds to None.
+        let f = closure(|args| {
+            let n = unwrap_int(&args[0]);
+            if n % 2 == 0 {
+                Ok(option_some(NativeValue::Int(n * 2)))
+            } else {
+                Ok(option_none())
+            }
+        });
+        let r = builtin_list_filter_map(&[ints(&[1, 2, 3, 4]), f]).unwrap();
+        assert_eq!(r, ints(&[4, 8]));
+    }
 
     #[test]
-    #[ignore = "requires invoke_closure: scan(add, 0, [1,2,3]) == [0,1,3,6]"]
-    fn scan_collects_intermediate_states() {}
+    fn scan_collects_intermediate_states() {
+        let add = closure(|args| {
+            Ok(NativeValue::Int(unwrap_int(&args[0]) + unwrap_int(&args[1])))
+        });
+        let r = builtin_list_scan(&[ints(&[1, 2, 3]), NativeValue::Int(0), add]).unwrap();
+        // scan includes the initial accumulator: [0, 0+1, 1+2, 3+3].
+        assert_eq!(r, ints(&[0, 1, 3, 6]));
+    }
 
     #[test]
     fn zip_pairs_min_length() {
@@ -1223,12 +1286,22 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires invoke_closure: take_while/drop_while predicate behaviour"]
-    fn take_while_and_drop_while() {}
+    fn take_while_and_drop_while() {
+        let lt3 = closure(|args| Ok(NativeValue::Bool(unwrap_int(&args[0]) < 3)));
+        let r = builtin_list_take_while(&[ints(&[1, 2, 3, 4, 1]), lt3]).unwrap();
+        assert_eq!(r, ints(&[1, 2]));
+
+        let lt3b = closure(|args| Ok(NativeValue::Bool(unwrap_int(&args[0]) < 3)));
+        let r = builtin_list_drop_while(&[ints(&[1, 2, 3, 4, 1]), lt3b]).unwrap();
+        assert_eq!(r, ints(&[3, 4, 1]));
+    }
 
     #[test]
-    #[ignore = "requires invoke_closure: partition(is_even, [1,2,3,4]) == ([2,4],[1,3])"]
-    fn partition_splits_truthy_from_falsy() {}
+    fn partition_splits_truthy_from_falsy() {
+        let is_even = closure(|args| Ok(NativeValue::Bool(unwrap_int(&args[0]) % 2 == 0)));
+        let r = builtin_list_partition(&[ints(&[1, 2, 3, 4]), is_even]).unwrap();
+        assert_eq!(r, pair(ints(&[2, 4]), ints(&[1, 3])));
+    }
 
     #[test]
     fn unzip_inverts_zip() {
@@ -1240,8 +1313,27 @@ mod tests {
     // --- Aggregation -------------------------------------------------------
 
     #[test]
-    #[ignore = "requires invoke_closure: any/all/count predicate behaviour"]
-    fn any_all_count() {}
+    fn any_all_count() {
+        let is_even = closure(|args| Ok(NativeValue::Bool(unwrap_int(&args[0]) % 2 == 0)));
+        let r = builtin_list_any(&[ints(&[1, 3, 5, 4]), is_even]).unwrap();
+        assert_eq!(r, NativeValue::Bool(true));
+
+        let is_even2 = closure(|args| Ok(NativeValue::Bool(unwrap_int(&args[0]) % 2 == 0)));
+        let r = builtin_list_any(&[ints(&[1, 3, 5]), is_even2]).unwrap();
+        assert_eq!(r, NativeValue::Bool(false));
+
+        let pos = closure(|args| Ok(NativeValue::Bool(unwrap_int(&args[0]) > 0)));
+        let r = builtin_list_all(&[ints(&[1, 2, 3]), pos]).unwrap();
+        assert_eq!(r, NativeValue::Bool(true));
+
+        let pos2 = closure(|args| Ok(NativeValue::Bool(unwrap_int(&args[0]) > 0)));
+        let r = builtin_list_all(&[ints(&[1, -2, 3]), pos2]).unwrap();
+        assert_eq!(r, NativeValue::Bool(false));
+
+        let is_even3 = closure(|args| Ok(NativeValue::Bool(unwrap_int(&args[0]) % 2 == 0)));
+        let r = builtin_list_count(&[ints(&[1, 2, 3, 4, 5, 6]), is_even3]).unwrap();
+        assert_eq!(r, NativeValue::Int(3));
+    }
 
     #[test]
     fn sum_int() {
@@ -1462,8 +1554,7 @@ mod tests {
             let sym = interner.intern(name);
             assert!(
                 registry.get(sym).is_some(),
-                "expected list register to include `{}`",
-                name
+                "expected list register to include `{name}`"
             );
         }
     }

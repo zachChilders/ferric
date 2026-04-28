@@ -500,7 +500,7 @@ impl BytecodeVM {
                     } else {
                         msg
                     };
-                    eprintln!("warning: require failed: {}", display);
+                    eprintln!("warning: require failed: {display}");
                 }
 
                 // ---------------- M4: structs / enums / tuples ------------
@@ -519,7 +519,7 @@ impl BytecodeVM {
                         Value::Struct(fields) => {
                             let v = fields.get(idx as usize).cloned().ok_or_else(|| {
                                 RuntimeError::InvalidOperation {
-                                    op: format!("GetField({}) out of range", idx),
+                                    op: format!("GetField({idx}) out of range"),
                                     span: dummy_span(),
                                 }
                             })?;
@@ -572,7 +572,7 @@ impl BytecodeVM {
                         Value::Tuple(elems) => {
                             let v = elems.get(idx as usize).cloned().ok_or_else(|| {
                                 RuntimeError::InvalidOperation {
-                                    op: format!("GetTupleField({}) out of range", idx),
+                                    op: format!("GetTupleField({idx}) out of range"),
                                     span: dummy_span(),
                                 }
                             })?;
@@ -1231,7 +1231,7 @@ require x > 0, \"x must be positive\"
             RuntimeError::RequireError { message, .. } => {
                 assert_eq!(message.as_deref(), Some("x must be positive"));
             }
-            other => panic!("expected RequireError, got {:?}", other),
+            other => panic!("expected RequireError, got {other:?}"),
         }
     }
 

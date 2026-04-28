@@ -117,16 +117,16 @@ impl HttpError {
 impl std::fmt::Display for HttpError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            HttpError::InvalidUrl(u) => write!(f, "InvalidUrl: {}", u),
+            HttpError::InvalidUrl(u) => write!(f, "InvalidUrl: {u}"),
             HttpError::ConnectionFailed { url, reason } => {
-                write!(f, "ConnectionFailed: {} ({})", url, reason)
+                write!(f, "ConnectionFailed: {url} ({reason})")
             }
             HttpError::Timeout { url, ms } => {
-                write!(f, "Timeout: {} after {}ms", url, ms)
+                write!(f, "Timeout: {url} after {ms}ms")
             }
-            HttpError::TlsError(reason) => write!(f, "TlsError: {}", reason),
-            HttpError::RedirectLoop(u) => write!(f, "RedirectLoop: {}", u),
-            HttpError::InvalidResponse(r) => write!(f, "InvalidResponse: {}", r),
+            HttpError::TlsError(reason) => write!(f, "TlsError: {reason}"),
+            HttpError::RedirectLoop(u) => write!(f, "RedirectLoop: {u}"),
+            HttpError::InvalidResponse(r) => write!(f, "InvalidResponse: {r}"),
         }
     }
 }
@@ -201,21 +201,21 @@ fn check_arg_count(args: &[NativeValue], expected: usize) -> Result<(), String> 
 fn expect_str(value: &NativeValue) -> Result<&String, String> {
     match value {
         NativeValue::Str(s) => Ok(s),
-        other => Err(format!("expected string, got {:?}", other)),
+        other => Err(format!("expected string, got {other:?}")),
     }
 }
 
 fn expect_int(value: &NativeValue) -> Result<i64, String> {
     match value {
         NativeValue::Int(n) => Ok(*n),
-        other => Err(format!("expected int, got {:?}", other)),
+        other => Err(format!("expected int, got {other:?}")),
     }
 }
 
 fn expect_bool(value: &NativeValue) -> Result<bool, String> {
     match value {
         NativeValue::Bool(b) => Ok(*b),
-        other => Err(format!("expected bool, got {:?}", other)),
+        other => Err(format!("expected bool, got {other:?}")),
     }
 }
 
@@ -225,7 +225,7 @@ fn expect_bytes(value: &NativeValue) -> Result<Vec<u8>, String> {
         // Allow Str fallback — convenient for test paths that hand strings
         // to byte-typed slots before `Bytes` lands.
         NativeValue::Str(s) => Ok(s.as_bytes().to_vec()),
-        other => Err(format!("expected bytes, got {:?}", other)),
+        other => Err(format!("expected bytes, got {other:?}")),
     }
 }
 
@@ -234,28 +234,28 @@ fn expect_builder(
 ) -> Result<Rc<RefCell<RequestBuilderRepr>>, String> {
     match value {
         NativeValue::HttpRequestBuilder(rc) => Ok(rc.clone()),
-        other => Err(format!("expected RequestBuilder, got {:?}", other)),
+        other => Err(format!("expected RequestBuilder, got {other:?}")),
     }
 }
 
 fn expect_response(value: &NativeValue) -> Result<Rc<ResponseRepr>, String> {
     match value {
         NativeValue::HttpResponse(rc) => Ok(rc.clone()),
-        other => Err(format!("expected Response, got {:?}", other)),
+        other => Err(format!("expected Response, got {other:?}")),
     }
 }
 
 fn expect_map(value: &NativeValue) -> Result<BTreeMap<MapKey, NativeValue>, String> {
     match value {
         NativeValue::Map(m) => Ok(m.clone()),
-        other => Err(format!("expected map, got {:?}", other)),
+        other => Err(format!("expected map, got {other:?}")),
     }
 }
 
 fn expect_json(value: &NativeValue) -> Result<JsonRepr, String> {
     match value {
         NativeValue::Json(j) => Ok((**j).clone()),
-        other => Err(format!("expected json, got {:?}", other)),
+        other => Err(format!("expected json, got {other:?}")),
     }
 }
 
@@ -544,12 +544,12 @@ impl<'a> JsonParser<'a> {
             slice
                 .parse::<f64>()
                 .map(JsonRepr::Float)
-                .map_err(|e| format!("invalid float: {}", e))
+                .map_err(|e| format!("invalid float: {e}"))
         } else {
             slice
                 .parse::<i64>()
                 .map(JsonRepr::Int)
-                .map_err(|e| format!("invalid int: {}", e))
+                .map_err(|e| format!("invalid int: {e}"))
         }
     }
 }
@@ -577,11 +577,11 @@ where
 
 fn basic_auth_value(user: &str, pass: &str) -> String {
     use std::fmt::Write as _;
-    let raw = format!("{}:{}", user, pass);
+    let raw = format!("{user}:{pass}");
     let mut encoded = String::new();
     base64_encode(raw.as_bytes(), &mut encoded);
     let mut out = String::with_capacity(6 + encoded.len());
-    write!(&mut out, "Basic {}", encoded).unwrap();
+    write!(&mut out, "Basic {encoded}").unwrap();
     out
 }
 
@@ -695,7 +695,7 @@ fn builtin_http_headers(args: &[NativeValue]) -> Result<NativeValue, String> {
             };
             let val = match v {
                 NativeValue::Str(s) => s,
-                other => format!("{:?}", other),
+                other => format!("{other:?}"),
             };
             b.headers.insert(key, val);
         }
@@ -718,7 +718,7 @@ fn builtin_http_body_bytes(args: &[NativeValue]) -> Result<NativeValue, String> 
                     .or_insert_with(|| "application/octet-stream".to_string());
             })
         }
-        other => Err(format!("expected RequestBuilder, got {:?}", other)),
+        other => Err(format!("expected RequestBuilder, got {other:?}")),
     }
 }
 
@@ -780,7 +780,7 @@ fn builtin_http_bearer(args: &[NativeValue]) -> Result<NativeValue, String> {
     let token = expect_str(&args[1])?.clone();
     mutate_builder(&args[0], |b| {
         b.headers
-            .insert("authorization".to_string(), format!("Bearer {}", token));
+            .insert("authorization".to_string(), format!("Bearer {token}"));
     })
 }
 
@@ -809,7 +809,7 @@ fn builtin_http_ok(args: &[NativeValue]) -> Result<NativeValue, String> {
             Ok(NativeValue::Bool((200..300).contains(&r.status)))
         }
         NativeValue::Int(n) => Ok(NativeValue::Bool((200..300).contains(&(*n as u16)))),
-        other => Err(format!("expected Response or Int, got {:?}", other)),
+        other => Err(format!("expected Response or Int, got {other:?}")),
     }
 }
 
@@ -849,7 +849,7 @@ fn builtin_http_body_str_resp(args: &[NativeValue]) -> Result<NativeValue, Strin
     let r = expect_response(&args[0])?;
     match std::str::from_utf8(&r.body) {
         Ok(s) => Ok(NativeValue::Str(s.to_string())),
-        Err(e) => Err(format!("StrError: invalid utf-8 ({})", e)),
+        Err(e) => Err(format!("StrError: invalid utf-8 ({e})")),
     }
 }
 
@@ -857,8 +857,8 @@ fn builtin_http_body_json_resp(args: &[NativeValue]) -> Result<NativeValue, Stri
     check_arg_count(args, 1)?;
     let r = expect_response(&args[0])?;
     let s = std::str::from_utf8(&r.body)
-        .map_err(|e| format!("JsonError: invalid utf-8 ({})", e))?;
-    let j = json_parse(s).map_err(|e| format!("JsonError: {}", e))?;
+        .map_err(|e| format!("JsonError: invalid utf-8 ({e})"))?;
+    let j = json_parse(s).map_err(|e| format!("JsonError: {e}"))?;
     Ok(NativeValue::Json(Box::new(j)))
 }
 
@@ -872,8 +872,8 @@ fn builtin_http_get_json(args: &[NativeValue]) -> Result<NativeValue, String> {
         .insert("accept".to_string(), "application/json".to_string());
     let resp = send_request_inner(req)?;
     let s = std::str::from_utf8(&resp.body)
-        .map_err(|e| format!("JsonError: invalid utf-8 ({})", e))?;
-    let j = json_parse(s).map_err(|e| format!("JsonError: {}", e))?;
+        .map_err(|e| format!("JsonError: invalid utf-8 ({e})"))?;
+    let j = json_parse(s).map_err(|e| format!("JsonError: {e}"))?;
     Ok(NativeValue::Json(Box::new(j)))
 }
 
@@ -892,8 +892,8 @@ fn builtin_http_post_json(args: &[NativeValue]) -> Result<NativeValue, String> {
     req.body = body.into_bytes();
     let resp = send_request_inner(req)?;
     let s = std::str::from_utf8(&resp.body)
-        .map_err(|e| format!("JsonError: invalid utf-8 ({})", e))?;
-    let j = json_parse(s).map_err(|e| format!("JsonError: {}", e))?;
+        .map_err(|e| format!("JsonError: invalid utf-8 ({e})"))?;
+    let j = json_parse(s).map_err(|e| format!("JsonError: {e}"))?;
     Ok(NativeValue::Json(Box::new(j)))
 }
 
@@ -922,8 +922,7 @@ fn send_request_inner(req: RequestBuilderRepr) -> Result<ResponseRepr, String> {
         "OPTIONS" => reqwest::Method::OPTIONS,
         other => {
             return Err(http_err(HttpError::InvalidResponse(format!(
-                "unsupported method {}",
-                other
+                "unsupported method {other}"
             ))));
         }
     };
@@ -1507,8 +1506,7 @@ mod tests {
             let sym = interner.intern(name);
             assert!(
                 registry.get(sym).is_some(),
-                "missing native registration: {}",
-                name
+                "missing native registration: {name}"
             );
         }
     }
@@ -1541,7 +1539,7 @@ mod integration_tests {
     {
         let server = tiny_http::Server::http("127.0.0.1:0").expect("bind");
         let port = server.server_addr().to_ip().unwrap().port();
-        let base = format!("http://127.0.0.1:{}", port);
+        let base = format!("http://127.0.0.1:{port}");
         let (tx, rx) = mpsc::channel::<()>();
         let server = std::sync::Arc::new(server);
         let server_clone = server.clone();
@@ -1573,20 +1571,20 @@ mod integration_tests {
     }
 
     #[test]
-    #[ignore]
+
     fn get_returns_200_and_body() {
         let (base, _h) = spawn_server(|req| {
             let resp = tiny_http::Response::from_string("hello world");
             let _ = req.respond(resp);
         });
-        let v = builtin_http_get(&[NativeValue::Str(format!("{}/", base))]).unwrap();
+        let v = builtin_http_get(&[NativeValue::Str(format!("{base}/"))]).unwrap();
         let r = unwrap_response(&v);
         assert_eq!(r.status, 200);
         assert_eq!(r.body, b"hello world".to_vec());
     }
 
     #[test]
-    #[ignore]
+
     fn post_json_round_trips_body() {
         let (base, _h) = spawn_server(|mut req| {
             let mut body = Vec::new();
@@ -1601,7 +1599,7 @@ mod integration_tests {
             vec![("hello".to_string(), JsonRepr::Str("world".into()))];
         let val = NativeValue::Json(Box::new(JsonRepr::Object(obj.clone())));
         let v = builtin_http_post_json(&[
-            NativeValue::Str(format!("{}/", base)),
+            NativeValue::Str(format!("{base}/")),
             val,
         ])
         .unwrap();
@@ -1621,7 +1619,7 @@ mod integration_tests {
     }
 
     #[test]
-    #[ignore]
+
     fn redirect_follow_on_chases_location() {
         // Server responds with a 302 to /target on first hit, 200 with
         // body "final" on the second.
@@ -1641,14 +1639,14 @@ mod integration_tests {
             }
         });
         // follow_redirects on (default)
-        let v = builtin_http_get(&[NativeValue::Str(format!("{}/start", base))]).unwrap();
+        let v = builtin_http_get(&[NativeValue::Str(format!("{base}/start"))]).unwrap();
         let r = unwrap_response(&v);
         assert_eq!(r.status, 200);
         assert_eq!(r.body, b"final".to_vec());
     }
 
     #[test]
-    #[ignore]
+
     fn redirect_follow_off_returns_3xx() {
         let (base, _h) = spawn_server(|req| {
             let resp = tiny_http::Response::empty(302).with_header(
@@ -1656,7 +1654,7 @@ mod integration_tests {
             );
             let _ = req.respond(resp);
         });
-        let b = new_builder("GET", &format!("{}/here", base));
+        let b = new_builder("GET", &format!("{base}/here"));
         let b = builtin_http_follow_redirects(&[b, NativeValue::Bool(false)]).unwrap();
         let v = builtin_http_send(&[b]).unwrap();
         let r = unwrap_response(&v);
@@ -1664,21 +1662,20 @@ mod integration_tests {
     }
 
     #[test]
-    #[ignore]
+
     fn timeout_fires_on_slow_server() {
         let (base, _h) = spawn_server(|req| {
             thread::sleep(Duration::from_millis(150));
             let _ = req.respond(tiny_http::Response::from_string("late"));
         });
-        let b = new_builder("GET", &format!("{}/", base));
+        let b = new_builder("GET", &format!("{base}/"));
         let b = builtin_http_timeout(&[b, NativeValue::Int(20)]).unwrap();
         let res = builtin_http_send(&[b]);
         assert!(res.is_err(), "expected timeout error");
         let msg = res.err().unwrap();
         assert!(
             msg.contains("Timeout"),
-            "expected Timeout error, got: {}",
-            msg
+            "expected Timeout error, got: {msg}"
         );
     }
 }

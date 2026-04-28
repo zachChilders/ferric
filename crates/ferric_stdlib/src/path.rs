@@ -31,14 +31,14 @@ fn check_arg_count(args: &[NativeValue], expected: usize) -> Result<(), String> 
 fn expect_str(value: &NativeValue) -> Result<&String, String> {
     match value {
         NativeValue::Str(s) => Ok(s),
-        other => Err(format!("expected string, got {:?}", other)),
+        other => Err(format!("expected string, got {other:?}")),
     }
 }
 
 fn expect_array(value: &NativeValue) -> Result<&Vec<NativeValue>, String> {
     match value {
         NativeValue::Array(a) => Ok(a),
-        other => Err(format!("expected list, got {:?}", other)),
+        other => Err(format!("expected list, got {other:?}")),
     }
 }
 
@@ -212,8 +212,7 @@ fn builtin_path_relative_to(args: &[NativeValue]) -> Result<NativeValue, String>
     match path.strip_prefix(base_path) {
         Ok(rel) => Ok(make_ok(rel.to_string_lossy().into_owned())),
         Err(_) => Ok(make_err(format!(
-            "PathError::NotRelativeTo {{ path: {:?}, base: {:?} }}",
-            p, base
+            "PathError::NotRelativeTo {{ path: {p:?}, base: {base:?} }}"
         ))),
     }
 }
@@ -281,14 +280,14 @@ mod tests {
     fn unwrap_str(v: &NativeValue) -> &str {
         match v {
             NativeValue::Str(s) => s.as_str(),
-            other => panic!("expected Str, got {:?}", other),
+            other => panic!("expected Str, got {other:?}"),
         }
     }
 
     fn unwrap_some(v: &NativeValue) -> &str {
         match v {
             NativeValue::Array(items) if items.len() == 1 => unwrap_str(&items[0]),
-            _ => panic!("expected Some(Str), got {:?}", v),
+            _ => panic!("expected Some(Str), got {v:?}"),
         }
     }
 
@@ -346,7 +345,7 @@ mod tests {
     #[test]
     fn parent_of_single_component_is_none() {
         let r = builtin_path_parent(&[s("a")]).unwrap();
-        assert!(is_none(&r), "got: {:?}", r);
+        assert!(is_none(&r), "got: {r:?}");
     }
 
     // ---- filename --------------------------------------------------------
@@ -361,7 +360,7 @@ mod tests {
     #[test]
     fn filename_of_dot_is_none() {
         let r = builtin_path_filename(&[s(".")]).unwrap();
-        assert!(is_none(&r), "got: {:?}", r);
+        assert!(is_none(&r), "got: {r:?}");
     }
 
     // ---- stem ------------------------------------------------------------
@@ -391,7 +390,7 @@ mod tests {
     #[test]
     fn extension_of_makefile_is_none() {
         let r = builtin_path_extension(&[s("Makefile")]).unwrap();
-        assert!(is_none(&r), "got: {:?}", r);
+        assert!(is_none(&r), "got: {r:?}");
     }
 
     // ---- with_extension --------------------------------------------------
@@ -476,7 +475,7 @@ mod tests {
         let base = format!("{sep}a", sep = sep());
         let path = format!("{sep}x", sep = sep());
         let r = builtin_path_relative_to(&[s(&path), s(&base)]).unwrap();
-        assert!(is_err(&r), "got: {:?}", r);
+        assert!(is_err(&r), "got: {r:?}");
     }
 
     // ---- components ------------------------------------------------------
@@ -554,7 +553,7 @@ mod tests {
             "path_components",
         ] {
             let sym = int.intern(name);
-            assert!(reg.get(sym).is_some(), "missing native: {}", name);
+            assert!(reg.get(sym).is_some(), "missing native: {name}");
         }
     }
 }

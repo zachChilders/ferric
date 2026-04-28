@@ -61,7 +61,7 @@ impl<'a> Renderer<'a> {
         match error {
             LexError::UnexpectedChar { ch, span } => self.render(Diag {
                 kind: "error",
-                message: &format!("unexpected character '{}'", ch),
+                message: &format!("unexpected character '{ch}'"),
                 primary: Some(Label { span: *span, message: None }),
                 secondary: vec![],
                 notes: vec![],
@@ -390,8 +390,7 @@ impl<'a> Renderer<'a> {
                 secondary: vec![],
                 notes: vec![],
                 help: Some(format!(
-                    "add `export` to the definition in \"{}\"",
-                    path
+                    "add `export` to the definition in \"{path}\""
                 )),
             }),
         }
@@ -402,7 +401,7 @@ impl<'a> Renderer<'a> {
         match error {
             ManifestError::ParseError { message, span } => self.render(Diag {
                 kind: "error",
-                message: &format!("failed to parse Ferric.toml: {}", message),
+                message: &format!("failed to parse Ferric.toml: {message}"),
                 primary: Some(Label { span: *span, message: None }),
                 secondary: vec![],
                 notes: vec![],
@@ -410,7 +409,7 @@ impl<'a> Renderer<'a> {
             }),
             ManifestError::ConflictingManifest { path, span } => self.render(Diag {
                 kind: "error",
-                message: &format!("submodule `{}` has its own Ferric.toml", path),
+                message: &format!("submodule `{path}` has its own Ferric.toml"),
                 primary: Some(Label { span: *span, message: None }),
                 secondary: vec![],
                 notes: vec![],
@@ -432,7 +431,7 @@ impl<'a> Renderer<'a> {
                     message: "circular import",
                     primary: Some(Label {
                         span: *span,
-                        message: Some(format!("cycle: {}", chain)),
+                        message: Some(format!("cycle: {chain}")),
                     }),
                     secondary: vec![],
                     notes: vec![],
@@ -448,7 +447,7 @@ impl<'a> Renderer<'a> {
                 ),
                 primary: Some(Label {
                     span: *span,
-                    message: Some(format!("not exported in {}", path)),
+                    message: Some(format!("not exported in {path}")),
                 }),
                 secondary: vec![],
                 notes: vec![],
@@ -460,7 +459,7 @@ impl<'a> Renderer<'a> {
             }),
             ModuleError::NoManifest { path, span } => self.render(Diag {
                 kind: "error",
-                message: &format!("import `{}` requires a Ferric.toml manifest", path),
+                message: &format!("import `{path}` requires a Ferric.toml manifest"),
                 primary: Some(Label {
                     span: *span,
                     message: Some("no Ferric.toml found in workspace root".to_string()),
@@ -472,8 +471,7 @@ impl<'a> Renderer<'a> {
             ModuleError::CacheMiss { name, span } => self.render(Diag {
                 kind: "error",
                 message: &format!(
-                    "cache package `{}` not found in .ferric/cache/",
-                    name
+                    "cache package `{name}` not found in .ferric/cache/"
                 ),
                 primary: Some(Label {
                     span: *span,
@@ -596,8 +594,7 @@ impl<'a> Renderer<'a> {
             TypeError::WrongArgumentCount { expected, found, span } => self.render(Diag {
                 kind: "error",
                 message: &format!(
-                    "expected {} argument(s), found {}",
-                    expected, found
+                    "expected {expected} argument(s), found {found}"
                 ),
                 primary: Some(Label { span: *span, message: None }),
                 secondary: vec![],
@@ -939,7 +936,7 @@ impl<'a> Renderer<'a> {
             }),
             RuntimeError::TypeMismatch { expected, found, span } => self.render(Diag {
                 kind: "error",
-                message: &format!("runtime type mismatch: expected {}, found {}", expected, found),
+                message: &format!("runtime type mismatch: expected {expected}, found {found}"),
                 primary: nonzero_label(*span),
                 secondary: vec![],
                 notes: vec![],
@@ -971,7 +968,7 @@ impl<'a> Renderer<'a> {
             }),
             RuntimeError::NativeFunctionError { message, span } => self.render(Diag {
                 kind: "error",
-                message: &format!("native function error: {}", message),
+                message: &format!("native function error: {message}"),
                 primary: nonzero_label(*span),
                 secondary: vec![],
                 notes: vec![],
@@ -979,7 +976,7 @@ impl<'a> Renderer<'a> {
             }),
             RuntimeError::InvalidOperation { op, span } => self.render(Diag {
                 kind: "error",
-                message: &format!("invalid operation: {}", op),
+                message: &format!("invalid operation: {op}"),
                 primary: nonzero_label(*span),
                 secondary: vec![],
                 notes: vec![],
@@ -995,7 +992,7 @@ impl<'a> Renderer<'a> {
             }),
             RuntimeError::WrongArgumentCount { expected, found, span } => self.render(Diag {
                 kind: "error",
-                message: &format!("expected {} argument(s), found {}", expected, found),
+                message: &format!("expected {expected} argument(s), found {found}"),
                 primary: nonzero_label(*span),
                 secondary: vec![],
                 notes: vec![],
@@ -1007,7 +1004,7 @@ impl<'a> Renderer<'a> {
                 });
                 self.render(Diag {
                     kind: "error",
-                    message: &format!("require failed: {}", msg),
+                    message: &format!("require failed: {msg}"),
                     primary: nonzero_label(*span),
                     secondary: vec![],
                     notes: vec![],
@@ -1017,8 +1014,7 @@ impl<'a> Renderer<'a> {
             RuntimeError::IndexOutOfBounds { index, len, span } => self.render(Diag {
                 kind: "error",
                 message: &format!(
-                    "array index {} out of bounds (length {})",
-                    index, len
+                    "array index {index} out of bounds (length {len})"
                 ),
                 primary: nonzero_label(*span),
                 secondary: vec![],
@@ -1027,7 +1023,7 @@ impl<'a> Renderer<'a> {
             }),
             RuntimeError::NotAnArray { found, span } => self.render(Diag {
                 kind: "error",
-                message: &format!("indexing requires an array, found {}", found),
+                message: &format!("indexing requires an array, found {found}"),
                 primary: nonzero_label(*span),
                 secondary: vec![],
                 notes: vec![],
@@ -1035,7 +1031,7 @@ impl<'a> Renderer<'a> {
             }),
             RuntimeError::IntegerOverflow { op, span } => self.render(Diag {
                 kind: "error",
-                message: &format!("integer overflow in `{}`", op),
+                message: &format!("integer overflow in `{op}`"),
                 primary: nonzero_label(*span),
                 secondary: vec![],
                 notes: vec![],
@@ -1069,12 +1065,12 @@ impl<'a> Renderer<'a> {
         };
 
         let (line, col) = self.span_to_line_col(primary.span);
-        out.push_str(&format!("\n  --> input:{}:{}\n", line, col));
+        out.push_str(&format!("\n  --> input:{line}:{col}\n"));
 
         let gutter_width = max_gutter_width(&primary, &diag.secondary);
         let blank_gutter = " ".repeat(gutter_width);
 
-        out.push_str(&format!("{} |\n", blank_gutter));
+        out.push_str(&format!("{blank_gutter} |\n"));
         self.render_label(&mut out, &primary, gutter_width, /*primary*/ true);
 
         for label in &diag.secondary {
@@ -1082,10 +1078,10 @@ impl<'a> Renderer<'a> {
         }
 
         for note in &diag.notes {
-            out.push_str(&format!("{} = note: {}\n", blank_gutter, note));
+            out.push_str(&format!("{blank_gutter} = note: {note}\n"));
         }
         if let Some(help) = diag.help {
-            out.push_str(&format!("{} = help: {}\n", blank_gutter, help));
+            out.push_str(&format!("{blank_gutter} = help: {help}\n"));
         }
 
         // Trim trailing newline for ergonomic eprintln.
@@ -1097,9 +1093,9 @@ impl<'a> Renderer<'a> {
 
     fn render_label(&self, out: &mut String, label: &Label, gutter_width: usize, is_primary: bool) {
         let (line, col) = self.span_to_line_col(label.span);
-        let gutter = format!("{:>width$}", line, width = gutter_width);
+        let gutter = format!("{line:>gutter_width$}");
         let line_text = self.line_text(line);
-        out.push_str(&format!("{} | {}\n", gutter, line_text));
+        out.push_str(&format!("{gutter} | {line_text}\n"));
 
         let blank_gutter = " ".repeat(gutter_width);
         let mut underline = " ".repeat(col.saturating_sub(1));
@@ -1109,14 +1105,14 @@ impl<'a> Renderer<'a> {
         let visible = line_text.chars().count();
         let underline_len = span_len.min(visible.saturating_sub(col.saturating_sub(1))).max(1);
         let glyph = if is_primary { '^' } else { '-' };
-        underline.extend(std::iter::repeat(glyph).take(underline_len));
+        underline.extend(std::iter::repeat_n(glyph, underline_len));
 
         let suffix = label
             .message
             .as_deref()
-            .map(|m| format!(" {}", m))
+            .map(|m| format!(" {m}"))
             .unwrap_or_default();
-        out.push_str(&format!("{} | {}{}\n", blank_gutter, underline, suffix));
+        out.push_str(&format!("{blank_gutter} | {underline}{suffix}\n"));
     }
 
     fn span_to_line_col(&self, span: Span) -> (usize, usize) {
@@ -1142,7 +1138,7 @@ impl<'a> Renderer<'a> {
             .unwrap_or(self.source.len());
         let raw = &self.source[start..end];
         // Trim a trailing newline so we don't print an extra blank line.
-        raw.trim_end_matches(|c: char| c == '\n' || c == '\r')
+        raw.trim_end_matches(['\n', '\r'])
     }
 }
 

@@ -33,10 +33,7 @@ use ferric_common::Interner;
 // Closure invocation hook (provided by integration step)
 // ---------------------------------------------------------------------------
 
-#[allow(dead_code)]
-fn invoke_closure(_c: &NativeValue, _args: &[NativeValue]) -> Result<NativeValue, String> {
-    Err("invoke_closure: closure invocation is not yet wired (integration task)".to_string())
-}
+use crate::invoke_closure;
 
 // ---------------------------------------------------------------------------
 // Ordering encoding helpers
@@ -55,7 +52,7 @@ fn ord_from_native(v: &NativeValue) -> Result<Ordering, String> {
         NativeValue::Int(n) if *n < 0 => Ok(Ordering::Less),
         NativeValue::Int(0) => Ok(Ordering::Equal),
         NativeValue::Int(n) if *n > 0 => Ok(Ordering::Greater),
-        other => Err(format!("sort: expected Ordering, got {:?}", other)),
+        other => Err(format!("sort: expected Ordering, got {other:?}")),
     }
 }
 
@@ -78,28 +75,28 @@ fn check_arg_count(args: &[NativeValue], expected: usize) -> Result<(), String> 
 fn expect_int(v: &NativeValue) -> Result<i64, String> {
     match v {
         NativeValue::Int(n) => Ok(*n),
-        other => Err(format!("sort: expected Int, got {:?}", other)),
+        other => Err(format!("sort: expected Int, got {other:?}")),
     }
 }
 
 fn expect_float(v: &NativeValue) -> Result<f64, String> {
     match v {
         NativeValue::Float(f) => Ok(*f),
-        other => Err(format!("sort: expected Float, got {:?}", other)),
+        other => Err(format!("sort: expected Float, got {other:?}")),
     }
 }
 
-fn expect_str<'a>(v: &'a NativeValue) -> Result<&'a String, String> {
+fn expect_str(v: &NativeValue) -> Result<&String, String> {
     match v {
         NativeValue::Str(s) => Ok(s),
-        other => Err(format!("sort: expected Str, got {:?}", other)),
+        other => Err(format!("sort: expected Str, got {other:?}")),
     }
 }
 
 fn expect_list(v: &NativeValue) -> Result<&Vec<NativeValue>, String> {
     match v {
         NativeValue::Array(items) => Ok(items),
-        other => Err(format!("sort: expected List, got {:?}", other)),
+        other => Err(format!("sort: expected List, got {other:?}")),
     }
 }
 
@@ -112,8 +109,7 @@ fn total_cmp(a: &NativeValue, b: &NativeValue) -> Result<Ordering, String> {
         (NativeValue::Str(x), NativeValue::Str(y)) => Ok(x.cmp(y)),
         (NativeValue::Bool(x), NativeValue::Bool(y)) => Ok(x.cmp(y)),
         _ => Err(format!(
-            "sort: asc/desc/is_sorted require uniform Int / Float / Str / Bool (got {:?} vs {:?})",
-            a, b
+            "sort: asc/desc/is_sorted require uniform Int / Float / Str / Bool (got {a:?} vs {b:?})"
         )),
     }
 }
@@ -527,6 +523,7 @@ pub fn register(registry: &mut NativeRegistry, interner: &mut Interner) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::NativeClosure;
 
     fn ints(xs: &[i64]) -> NativeValue {
         NativeValue::Array(xs.iter().map(|n| NativeValue::Int(*n)).collect())
@@ -538,6 +535,31 @@ mod tests {
                 .map(|s| NativeValue::Str(s.to_string()))
                 .collect(),
         )
+    }
+
+    fn closure<F>(f: F) -> NativeValue
+    where
+        F: Fn(&[NativeValue]) -> Result<NativeValue, String> + 'static,
+    {
+        NativeValue::Closure(NativeClosure::new(f))
+    }
+
+    fn cmp_int_closure() -> NativeValue {
+        closure(builtin_sort_cmp_int)
+    }
+
+    fn unwrap_int(v: &NativeValue) -> i64 {
+        match v {
+            NativeValue::Int(n) => *n,
+            other => panic!("expected Int, got {other:?}"),
+        }
+    }
+
+    fn unwrap_str(v: &NativeValue) -> String {
+        match v {
+            NativeValue::Str(s) => s.clone(),
+            other => panic!("expected Str, got {other:?}"),
+        }
     }
 
     // --- Basic sorts -------------------------------------------------------
@@ -694,12 +716,27 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires invoke_closure: reverse(cmp_int)(1, 2) == Greater"]
-    fn reverse_of_cmp_int() {}
+    fn reverse_of_cmp_int() {
+        let r = builtin_sort_reverse(&[
+            cmp_int_closure(),
+            NativeValue::Int(1),
+            NativeValue::Int(2),
+        ])
+        .unwrap();
+        assert_eq!(r, ord_to_native(Ordering::Greater));
+    }
 
     #[test]
-    #[ignore = "requires invoke_closure: then(cmp_int, cmp_int)(1, 1) == Equal"]
-    fn then_falls_through_on_equal() {}
+    fn then_falls_through_on_equal() {
+        let r = builtin_sort_then(&[
+            cmp_int_closure(),
+            cmp_int_closure(),
+            NativeValue::Int(1),
+            NativeValue::Int(1),
+        ])
+        .unwrap();
+        assert_eq!(r, ord_to_native(Ordering::Equal));
+    }
 
     // --- Constants ---------------------------------------------------------
 
@@ -754,32 +791,111 @@ mod tests {
     // --- Higher-order paths (require invoke_closure) -----------------------
 
     #[test]
-    #[ignore = "requires invoke_closure: by([{name:'b'}, {name:'a'}], |x| x.name) ascending"]
-    fn by_sorts_by_extracted_key() {}
+    fn by_sorts_by_extracted_key() {
+        // Items are (name, payload) pairs encoded as 2-element arrays. Key
+        // extractor returns the first element (the name).
+        let pair = |name: &str, n: i64| {
+            NativeValue::Array(vec![NativeValue::Str(name.into()), NativeValue::Int(n)])
+        };
+        let items = NativeValue::Array(vec![pair("b", 1), pair("a", 2), pair("c", 3)]);
+        let extract_name = closure(|args| match &args[0] {
+            NativeValue::Array(xs) => Ok(xs[0].clone()),
+            other => Err(format!("expected pair, got {other:?}")),
+        });
+        let r = builtin_sort_by(&[items, extract_name]).unwrap();
+        let l = match &r {
+            NativeValue::Array(xs) => xs,
+            _ => panic!("expected list"),
+        };
+        let names: Vec<String> = l
+            .iter()
+            .map(|p| match p {
+                NativeValue::Array(xs) => unwrap_str(&xs[0]),
+                _ => panic!(),
+            })
+            .collect();
+        assert_eq!(names, vec!["a", "b", "c"]);
+    }
 
     #[test]
-    #[ignore = "requires invoke_closure: by_desc descending by extracted key"]
-    fn by_desc_sorts_descending() {}
+    fn by_desc_sorts_descending() {
+        let identity = closure(|args| Ok(args[0].clone()));
+        let r = builtin_sort_by_desc(&[ints(&[3, 1, 2]), identity]).unwrap();
+        assert_eq!(r, ints(&[3, 2, 1]));
+    }
 
     #[test]
-    #[ignore = "requires invoke_closure: with([3,1,2], cmp_int) matches asc"]
-    fn with_uses_provided_comparator() {}
+    fn with_uses_provided_comparator() {
+        let r = builtin_sort_with(&[ints(&[3, 1, 2]), cmp_int_closure()]).unwrap();
+        assert_eq!(r, ints(&[1, 2, 3]));
+    }
 
     #[test]
-    #[ignore = "requires invoke_closure: top([5,3,9,1,7], 2, identity) == [9,7]"]
-    fn top_returns_n_largest_descending() {}
+    fn top_returns_n_largest_descending() {
+        let identity = closure(|args| Ok(args[0].clone()));
+        let r =
+            builtin_sort_top(&[ints(&[5, 3, 9, 1, 7]), NativeValue::Int(2), identity]).unwrap();
+        assert_eq!(r, ints(&[9, 7]));
+    }
 
     #[test]
-    #[ignore = "requires invoke_closure: bottom([5,3,9,1,7], 2, identity) == [1,3]"]
-    fn bottom_returns_n_smallest_ascending() {}
+    fn bottom_returns_n_smallest_ascending() {
+        let identity = closure(|args| Ok(args[0].clone()));
+        let r = builtin_sort_bottom(&[
+            ints(&[5, 3, 9, 1, 7]),
+            NativeValue::Int(2),
+            identity,
+        ])
+        .unwrap();
+        assert_eq!(r, ints(&[1, 3]));
+    }
 
     #[test]
-    #[ignore = "requires invoke_closure: stability — equal-key items preserve input order"]
-    fn sort_by_is_stable_on_equal_keys() {}
+    fn sort_by_is_stable_on_equal_keys() {
+        // Pairs (key, original_index). Sorting by `key` must preserve the
+        // relative order of items with equal keys.
+        let pair = |k: i64, idx: i64| {
+            NativeValue::Array(vec![NativeValue::Int(k), NativeValue::Int(idx)])
+        };
+        let items = NativeValue::Array(vec![
+            pair(1, 0),
+            pair(2, 1),
+            pair(1, 2),
+            pair(2, 3),
+            pair(1, 4),
+        ]);
+        let extract_key = closure(|args| match &args[0] {
+            NativeValue::Array(xs) => Ok(xs[0].clone()),
+            other => Err(format!("expected pair, got {other:?}")),
+        });
+        let r = builtin_sort_by(&[items, extract_key]).unwrap();
+        let xs = match &r {
+            NativeValue::Array(xs) => xs,
+            _ => panic!(),
+        };
+        let indices: Vec<i64> = xs
+            .iter()
+            .map(|p| match p {
+                NativeValue::Array(inner) => unwrap_int(&inner[1]),
+                _ => panic!(),
+            })
+            .collect();
+        // 1-keyed elements first (orig indices 0,2,4), then 2-keyed (1,3).
+        assert_eq!(indices, vec![0, 2, 4, 1, 3]);
+    }
 
     #[test]
-    #[ignore = "requires invoke_closure: is_sorted_by checks key ordering"]
-    fn is_sorted_by_uses_key_function() {}
+    fn is_sorted_by_uses_key_function() {
+        // Items keyed by their negation — descending input is "sorted" under
+        // this key function.
+        let neg = closure(|args| Ok(NativeValue::Int(-unwrap_int(&args[0]))));
+        let r = builtin_sort_is_sorted_by(&[ints(&[3, 2, 1]), neg]).unwrap();
+        assert_eq!(r, NativeValue::Bool(true));
+
+        let neg2 = closure(|args| Ok(NativeValue::Int(-unwrap_int(&args[0]))));
+        let r = builtin_sort_is_sorted_by(&[ints(&[1, 2, 3]), neg2]).unwrap();
+        assert_eq!(r, NativeValue::Bool(false));
+    }
 
     // --- Stability of asc/desc (no closures needed) ------------------------
     //
@@ -828,8 +944,7 @@ mod tests {
             let sym = interner.intern(name);
             assert!(
                 registry.get(sym).is_some(),
-                "expected sort register to include `{}`",
-                name
+                "expected sort register to include `{name}`"
             );
         }
     }

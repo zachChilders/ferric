@@ -1040,7 +1040,9 @@ impl<'a> TypeInfer<'a> {
     // ------------------------------------------------------------------
 
     fn infer_expr(&mut self, expr: &Expr) -> Ty {
-        let ty = match expr {
+        
+
+        match expr {
             Expr::Literal { value, id, .. } => {
                 let lit_ty = match value {
                     Literal::Int(_) => Ty::Int,
@@ -1588,9 +1590,7 @@ impl<'a> TypeInfer<'a> {
                 self.node_types.insert(b.id, result.clone());
                 result
             }
-        };
-
-        ty
+        }
     }
 
     /// Bridges constructor calls for the built-in `Option` / `Result` enums
@@ -1803,7 +1803,7 @@ impl<'a> TypeInfer<'a> {
                     }
                     other => {
                         self.errors.push(TypeError::IncompatibleTypes {
-                            operation: format!("{:?}", op),
+                            operation: format!("{op:?}"),
                             left: other.clone(),
                             right: other,
                             span,
