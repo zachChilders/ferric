@@ -856,73 +856,76 @@ fn builtin_list_build(args: &[NativeValue]) -> Result<NativeValue, String> {
 // ---------------------------------------------------------------------------
 
 pub fn register(registry: &mut NativeRegistry, interner: &mut Interner) {
-    // Construction
-    registry.register(interner.intern("list_new"),             builtin_list_new);
-    registry.register(interner.intern("list_of"),              builtin_list_of);
-    registry.register(interner.intern("list_repeat"),          builtin_list_repeat);
-    registry.register(interner.intern("list_range"),           builtin_list_range);
-    registry.register(interner.intern("list_range_inclusive"), builtin_list_range_inclusive);
-
-    // Access
-    registry.register(interner.intern("list_len"),       builtin_list_len);
-    registry.register(interner.intern("list_is_empty"),  builtin_list_is_empty);
-    registry.register(interner.intern("list_get"),       builtin_list_get);
-    registry.register(interner.intern("list_first"),     builtin_list_first);
-    registry.register(interner.intern("list_last"),      builtin_list_last);
-    registry.register(interner.intern("list_slice"),     builtin_list_slice);
-
-    // Search
-    registry.register(interner.intern("list_contains"),   builtin_list_contains);
-    registry.register(interner.intern("list_find"),       builtin_list_find);
-    registry.register(interner.intern("list_find_index"), builtin_list_find_index);
-    registry.register(interner.intern("list_index_of"),   builtin_list_index_of);
-
-    // Transform
-    registry.register(interner.intern("list_map"),         builtin_list_map);
-    registry.register(interner.intern("list_flat_map"),    builtin_list_flat_map);
-    registry.register(interner.intern("list_filter"),      builtin_list_filter);
-    registry.register(interner.intern("list_filter_map"),  builtin_list_filter_map);
-    registry.register(interner.intern("list_reduce"),      builtin_list_reduce);
-    registry.register(interner.intern("list_fold"),        builtin_list_fold);
-    registry.register(interner.intern("list_scan"),        builtin_list_scan);
-    registry.register(interner.intern("list_zip"),         builtin_list_zip);
-    registry.register(interner.intern("list_zip_with"),    builtin_list_zip_with);
-    registry.register(interner.intern("list_enumerate"),   builtin_list_enumerate);
-    registry.register(interner.intern("list_flatten"),     builtin_list_flatten);
-    registry.register(interner.intern("list_chunk"),       builtin_list_chunk);
-    registry.register(interner.intern("list_window"),      builtin_list_window);
-    registry.register(interner.intern("list_take"),        builtin_list_take);
-    registry.register(interner.intern("list_drop"),        builtin_list_drop);
-    registry.register(interner.intern("list_take_while"),  builtin_list_take_while);
-    registry.register(interner.intern("list_drop_while"),  builtin_list_drop_while);
-    registry.register(interner.intern("list_partition"),   builtin_list_partition);
-    registry.register(interner.intern("list_unzip"),       builtin_list_unzip);
-
-    // Aggregation
-    registry.register(interner.intern("list_any"),       builtin_list_any);
-    registry.register(interner.intern("list_all"),       builtin_list_all);
-    registry.register(interner.intern("list_count"),     builtin_list_count);
-    registry.register(interner.intern("list_sum"),       builtin_list_sum);
-    registry.register(interner.intern("list_sum_float"), builtin_list_sum_float);
-    registry.register(interner.intern("list_min"),       builtin_list_min);
-    registry.register(interner.intern("list_max"),       builtin_list_max);
-
-    // Structural
-    registry.register(interner.intern("list_concat"),      builtin_list_concat);
-    registry.register(interner.intern("list_prepend"),     builtin_list_prepend);
-    registry.register(interner.intern("list_append"),      builtin_list_append);
-    registry.register(interner.intern("list_insert"),      builtin_list_insert);
-    registry.register(interner.intern("list_remove"),      builtin_list_remove);
-    registry.register(interner.intern("list_reverse"),     builtin_list_reverse);
-    registry.register(interner.intern("list_unique"),      builtin_list_unique);
-    registry.register(interner.intern("list_intersperse"), builtin_list_intersperse);
-    registry.register(interner.intern("list_join_str"),    builtin_list_join_str);
-
-    // Builder
-    registry.register(interner.intern("list_builder"), builtin_list_builder);
-    registry.register(interner.intern("list_push"),    builtin_list_push);
-    registry.register(interner.intern("list_pop"),     builtin_list_pop);
-    registry.register(interner.intern("list_build"),   builtin_list_build);
+    type Entry = (&'static str, &'static [&'static str], crate::NativeFn);
+    let entries: &[Entry] = &[
+        // Construction
+        ("list_new",             &[],                     builtin_list_new),
+        ("list_of",              &["items"],              builtin_list_of),
+        ("list_repeat",          &["item", "n"],          builtin_list_repeat),
+        ("list_range",           &["from", "to"],         builtin_list_range),
+        ("list_range_inclusive", &["from", "to"],         builtin_list_range_inclusive),
+        // Access
+        ("list_len",       &["l"],                  builtin_list_len),
+        ("list_is_empty",  &["l"],                  builtin_list_is_empty),
+        ("list_get",       &["l", "index"],         builtin_list_get),
+        ("list_first",     &["l"],                  builtin_list_first),
+        ("list_last",      &["l"],                  builtin_list_last),
+        ("list_slice",     &["l", "from", "to"],    builtin_list_slice),
+        // Search
+        ("list_contains",   &["l", "item"],         builtin_list_contains),
+        ("list_find",       &["l", "f"],            builtin_list_find),
+        ("list_find_index", &["l", "f"],            builtin_list_find_index),
+        ("list_index_of",   &["l", "item"],         builtin_list_index_of),
+        // Transform
+        ("list_map",         &["l", "f"],           builtin_list_map),
+        ("list_flat_map",    &["l", "f"],           builtin_list_flat_map),
+        ("list_filter",      &["l", "f"],           builtin_list_filter),
+        ("list_filter_map",  &["l", "f"],           builtin_list_filter_map),
+        ("list_reduce",      &["l", "f"],           builtin_list_reduce),
+        ("list_fold",        &["l", "init", "f"],   builtin_list_fold),
+        ("list_scan",        &["l", "init", "f"],   builtin_list_scan),
+        ("list_zip",         &["a", "b"],           builtin_list_zip),
+        ("list_zip_with",    &["a", "b", "f"],      builtin_list_zip_with),
+        ("list_enumerate",   &["l"],                builtin_list_enumerate),
+        ("list_flatten",     &["l"],                builtin_list_flatten),
+        ("list_chunk",       &["l", "size"],        builtin_list_chunk),
+        ("list_window",      &["l", "size"],        builtin_list_window),
+        ("list_take",        &["l", "n"],           builtin_list_take),
+        ("list_drop",        &["l", "n"],           builtin_list_drop),
+        ("list_take_while",  &["l", "f"],           builtin_list_take_while),
+        ("list_drop_while",  &["l", "f"],           builtin_list_drop_while),
+        ("list_partition",   &["l", "f"],           builtin_list_partition),
+        ("list_unzip",       &["l"],                builtin_list_unzip),
+        // Aggregation
+        ("list_any",       &["l", "f"],             builtin_list_any),
+        ("list_all",       &["l", "f"],             builtin_list_all),
+        ("list_count",     &["l", "f"],             builtin_list_count),
+        ("list_sum",       &["l"],                  builtin_list_sum),
+        ("list_sum_float", &["l"],                  builtin_list_sum_float),
+        ("list_min",       &["l"],                  builtin_list_min),
+        ("list_max",       &["l"],                  builtin_list_max),
+        // Structural
+        ("list_concat",      &["a", "b"],           builtin_list_concat),
+        ("list_prepend",     &["item", "l"],        builtin_list_prepend),
+        ("list_append",      &["l", "item"],        builtin_list_append),
+        ("list_insert",      &["l", "at", "item"],  builtin_list_insert),
+        ("list_remove",      &["l", "at"],          builtin_list_remove),
+        ("list_reverse",     &["l"],                builtin_list_reverse),
+        ("list_unique",      &["l"],                builtin_list_unique),
+        ("list_intersperse", &["l", "sep"],         builtin_list_intersperse),
+        ("list_join_str",    &["l", "sep"],         builtin_list_join_str),
+        // Builder
+        ("list_builder", &[],                       builtin_list_builder),
+        ("list_push",    &["buf", "item"],          builtin_list_push),
+        ("list_pop",     &["buf"],                  builtin_list_pop),
+        ("list_build",   &["buf"],                  builtin_list_build),
+        // Unprefixed alias — the M6-era `array_len` name. Same behaviour as
+        // `list_len`, just registered under the historical short form.
+        ("array_len",    &["arr"],                  builtin_list_len),
+    ];
+    for (name, params, f) in entries {
+        registry.register_named(interner, name, params, *f);
+    }
 }
 
 // ---------------------------------------------------------------------------

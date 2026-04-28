@@ -427,35 +427,36 @@ fn builtin_log_get_level(args: &[NativeValue]) -> Result<NativeValue, String> {
 
 /// Register every `log::*` function under its `log_*` native name.
 pub fn register(registry: &mut NativeRegistry, interner: &mut Interner) {
-    // Direct-level functions
-    registry.register(interner.intern("log_debug"), builtin_log_debug);
-    registry.register(interner.intern("log_info"), builtin_log_info);
-    registry.register(interner.intern("log_warn"), builtin_log_warn);
-    registry.register(interner.intern("log_error"), builtin_log_error);
-
-    // With-fields variants
-    registry.register(interner.intern("log_debug_fields"), builtin_log_debug_fields);
-    registry.register(interner.intern("log_info_fields"), builtin_log_info_fields);
-    registry.register(interner.intern("log_warn_fields"), builtin_log_warn_fields);
-    registry.register(interner.intern("log_error_fields"), builtin_log_error_fields);
-
-    // Logger constructors and methods.
-    //
-    // NOTE on naming: the spec defines `log::new`, `log::with`, and
-    // `log::log_debug`/etc. After the `log_` prefix is added per the
-    // stdlib-00 naming rule (`<module>_<function>`), the four scoped
-    // logger emitters become `log_log_debug`/etc., which is intentional —
-    // they distinguish from the bare `log_debug` (no logger) emitters.
-    registry.register(interner.intern("log_new"), builtin_log_new);
-    registry.register(interner.intern("log_with"), builtin_log_with);
-    registry.register(interner.intern("log_log_debug"), builtin_log_log_debug);
-    registry.register(interner.intern("log_log_info"), builtin_log_log_info);
-    registry.register(interner.intern("log_log_warn"), builtin_log_log_warn);
-    registry.register(interner.intern("log_log_error"), builtin_log_log_error);
-
-    // Level control
-    registry.register(interner.intern("log_set_level"), builtin_log_set_level);
-    registry.register(interner.intern("log_get_level"), builtin_log_get_level);
+    // NOTE on naming: the spec defines `log::log_debug`/etc. as the scoped
+    // logger emitters. With the `<module>_<function>` rule those land as
+    // `log_log_debug`, distinguishing them from the bare `log_debug` (no
+    // logger) emitters above.
+    type Entry = (&'static str, &'static [&'static str], crate::NativeFn);
+    let entries: &[Entry] = &[
+        // Direct-level emitters
+        ("log_debug",          &["msg"],                  builtin_log_debug),
+        ("log_info",           &["msg"],                  builtin_log_info),
+        ("log_warn",           &["msg"],                  builtin_log_warn),
+        ("log_error",          &["msg"],                  builtin_log_error),
+        // With-fields variants
+        ("log_debug_fields",   &["msg", "fields"],        builtin_log_debug_fields),
+        ("log_info_fields",    &["msg", "fields"],        builtin_log_info_fields),
+        ("log_warn_fields",    &["msg", "fields"],        builtin_log_warn_fields),
+        ("log_error_fields",   &["msg", "fields"],        builtin_log_error_fields),
+        // Logger constructors and scoped emitters
+        ("log_new",            &["fields"],               builtin_log_new),
+        ("log_with",           &["l", "key", "val"],      builtin_log_with),
+        ("log_log_debug",      &["l", "msg"],             builtin_log_log_debug),
+        ("log_log_info",       &["l", "msg"],             builtin_log_log_info),
+        ("log_log_warn",       &["l", "msg"],             builtin_log_log_warn),
+        ("log_log_error",      &["l", "msg"],             builtin_log_log_error),
+        // Level control
+        ("log_set_level",      &["level"],                builtin_log_set_level),
+        ("log_get_level",      &[],                       builtin_log_get_level),
+    ];
+    for (name, params, f) in entries {
+        registry.register_named(interner, name, params, *f);
+    }
 }
 
 // ---------------------------------------------------------------------------

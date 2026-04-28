@@ -793,28 +793,34 @@ fn builtin_json_object(args: &[NativeValue]) -> Result<NativeValue, String> {
 
 /// Register every `json::*` native into the registry.
 pub fn register(registry: &mut NativeRegistry, interner: &mut Interner) {
-    registry.register(interner.intern("json_to_str"), builtin_json_to_str);
-    registry.register(
-        interner.intern("json_to_str_pretty"),
-        builtin_json_to_str_pretty,
-    );
-    registry.register(interner.intern("json_parse"), builtin_json_parse);
-    registry.register(interner.intern("json_as_bool"), builtin_json_as_bool);
-    registry.register(interner.intern("json_as_int"), builtin_json_as_int);
-    registry.register(interner.intern("json_as_float"), builtin_json_as_float);
-    registry.register(interner.intern("json_as_str"), builtin_json_as_str);
-    registry.register(interner.intern("json_as_array"), builtin_json_as_array);
-    registry.register(interner.intern("json_as_object"), builtin_json_as_object);
-    registry.register(interner.intern("json_is_null"), builtin_json_is_null);
-    registry.register(interner.intern("json_get"), builtin_json_get);
-    registry.register(interner.intern("json_get_path"), builtin_json_get_path);
-    registry.register(interner.intern("json_null"), builtin_json_null);
-    registry.register(interner.intern("json_bool"), builtin_json_bool);
-    registry.register(interner.intern("json_int"), builtin_json_int);
-    registry.register(interner.intern("json_float"), builtin_json_float);
-    registry.register(interner.intern("json_str"), builtin_json_str);
-    registry.register(interner.intern("json_array"), builtin_json_array);
-    registry.register(interner.intern("json_object"), builtin_json_object);
+    type Entry = (&'static str, &'static [&'static str], crate::NativeFn);
+    let entries: &[Entry] = &[
+        // Serialise / parse
+        ("json_to_str",        &["v"],            builtin_json_to_str),
+        ("json_to_str_pretty", &["v"],            builtin_json_to_str_pretty),
+        ("json_parse",         &["s"],            builtin_json_parse),
+        // Accessors
+        ("json_as_bool",       &["v"],            builtin_json_as_bool),
+        ("json_as_int",        &["v"],            builtin_json_as_int),
+        ("json_as_float",      &["v"],            builtin_json_as_float),
+        ("json_as_str",        &["v"],            builtin_json_as_str),
+        ("json_as_array",      &["v"],            builtin_json_as_array),
+        ("json_as_object",     &["v"],            builtin_json_as_object),
+        ("json_is_null",       &["v"],            builtin_json_is_null),
+        ("json_get",           &["v", "key"],     builtin_json_get),
+        ("json_get_path",      &["v", "path"],    builtin_json_get_path),
+        // Construction
+        ("json_null",          &[],               builtin_json_null),
+        ("json_bool",          &["b"],            builtin_json_bool),
+        ("json_int",           &["n"],            builtin_json_int),
+        ("json_float",         &["n"],            builtin_json_float),
+        ("json_str",           &["s"],            builtin_json_str),
+        ("json_array",         &["items"],        builtin_json_array),
+        ("json_object",        &["fields"],       builtin_json_object),
+    ];
+    for (name, params, f) in entries {
+        registry.register_named(interner, name, params, *f);
+    }
 }
 
 // ---------------------------------------------------------------------------

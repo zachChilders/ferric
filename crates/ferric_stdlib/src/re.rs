@@ -361,30 +361,32 @@ fn builtin_re_split_n(args: &[NativeValue]) -> Result<NativeValue, String> {
 
 /// Registers every `re_*` native function with the given registry.
 pub fn register(registry: &mut NativeRegistry, interner: &mut Interner) {
-    // Compilation
-    registry.register(interner.intern("re_compile"), builtin_re_compile);
-    registry.register(interner.intern("re_compile_flags"), builtin_re_compile_flags);
-
-    // Matching
-    registry.register(interner.intern("re_is_match"), builtin_re_is_match);
-    registry.register(interner.intern("re_find"), builtin_re_find);
-    registry.register(interner.intern("re_find_all"), builtin_re_find_all);
-
-    // Match inspection
-    registry.register(interner.intern("re_match_str"), builtin_re_match_str);
-    registry.register(interner.intern("re_match_start"), builtin_re_match_start);
-    registry.register(interner.intern("re_match_end"), builtin_re_match_end);
-    registry.register(interner.intern("re_capture"), builtin_re_capture);
-    registry.register(interner.intern("re_capture_name"), builtin_re_capture_name);
-
-    // Replace
-    registry.register(interner.intern("re_replace"), builtin_re_replace);
-    registry.register(interner.intern("re_replace_all"), builtin_re_replace_all);
-    registry.register(interner.intern("re_replace_fn"), builtin_re_replace_fn);
-
-    // Split
-    registry.register(interner.intern("re_split"), builtin_re_split);
-    registry.register(interner.intern("re_split_n"), builtin_re_split_n);
+    type Entry = (&'static str, &'static [&'static str], crate::NativeFn);
+    let entries: &[Entry] = &[
+        // Compilation
+        ("re_compile",        &["pattern"],            builtin_re_compile),
+        ("re_compile_flags",  &["pattern", "flags"],   builtin_re_compile_flags),
+        // Matching
+        ("re_is_match",       &["r", "s"],             builtin_re_is_match),
+        ("re_find",           &["r", "s"],             builtin_re_find),
+        ("re_find_all",       &["r", "s"],             builtin_re_find_all),
+        // Match inspection
+        ("re_match_str",      &["m"],                  builtin_re_match_str),
+        ("re_match_start",    &["m"],                  builtin_re_match_start),
+        ("re_match_end",      &["m"],                  builtin_re_match_end),
+        ("re_capture",        &["m", "index"],         builtin_re_capture),
+        ("re_capture_name",   &["m", "name"],          builtin_re_capture_name),
+        // Replace
+        ("re_replace",        &["r", "s", "with"],     builtin_re_replace),
+        ("re_replace_all",    &["r", "s", "with"],     builtin_re_replace_all),
+        ("re_replace_fn",     &["r", "s", "f"],        builtin_re_replace_fn),
+        // Split
+        ("re_split",          &["r", "s"],             builtin_re_split),
+        ("re_split_n",        &["r", "s", "n"],        builtin_re_split_n),
+    ];
+    for (name, params, f) in entries {
+        registry.register_named(interner, name, params, *f);
+    }
 }
 
 // ---------------------------------------------------------------------------

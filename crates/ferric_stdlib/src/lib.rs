@@ -11,6 +11,7 @@ use ferric_common::{Interner, ShellOutput, Symbol, TypeAnnotation};
 // Public modules — each contributes a `register()` entry point.
 pub mod bytes;
 pub mod crypto;
+pub mod dotenv;
 pub mod encode;
 pub mod env;
 pub mod fmt;
@@ -18,6 +19,7 @@ pub mod http;
 pub mod io;
 pub mod json;
 pub mod list;
+pub mod llm;
 pub mod log;
 pub mod map;
 pub mod math;
@@ -368,6 +370,11 @@ impl PartialEq for NativeValue {
 #[derive(Clone)]
 pub struct NativeRegistry {
     functions: HashMap<Symbol, NativeFn>,
+    /// Parameter names per function, populated by [`Self::register_named`] /
+    /// [`Self::register_with_params`]. Functions registered via the bare
+    /// [`Self::register`] don't appear here (they have no named-arg
+    /// validation in the resolver).
+    params: HashMap<Symbol, Vec<Symbol>>,
 }
 
 impl NativeRegistry {
@@ -375,17 +382,62 @@ impl NativeRegistry {
     pub fn new() -> Self {
         Self {
             functions: HashMap::new(),
+            params: HashMap::new(),
         }
     }
 
-    /// Registers a native function with the given name.
+    /// Registers a native function with the given name. The function is
+    /// callable from Ferric, but its parameter names are not exposed to the
+    /// resolver (named-arg call sites that target it cannot be validated).
+    /// Prefer [`Self::register_named`] when the function is reachable from
+    /// Ferric source.
     pub fn register(&mut self, name: Symbol, f: NativeFn) {
         self.functions.insert(name, f);
+    }
+
+    /// Registers a native function with explicit parameter symbols.
+    pub fn register_with_params(&mut self, name: Symbol, params: Vec<Symbol>, f: NativeFn) {
+        self.functions.insert(name, f);
+        self.params.insert(name, params);
+    }
+
+    /// Ergonomic registration: interns the function name and parameter
+    /// names through the supplied interner, then records both the function
+    /// and its parameter list.
+    pub fn register_named(
+        &mut self,
+        interner: &mut Interner,
+        name: &str,
+        params: &[&str],
+        f: NativeFn,
+    ) {
+        let name_sym = interner.intern(name);
+        let param_syms = params.iter().map(|p| interner.intern(p)).collect();
+        self.register_with_params(name_sym, param_syms, f);
     }
 
     /// Looks up a native function by name.
     pub fn get(&self, name: Symbol) -> Option<&NativeFn> {
         self.functions.get(&name)
+    }
+
+    /// Returns the parameter symbols for a registered function, if known.
+    pub fn params(&self, name: Symbol) -> Option<&[Symbol]> {
+        self.params.get(&name).map(|v| v.as_slice())
+    }
+
+    /// Returns `(name, params)` pairs for every function registered with
+    /// parameter names. Suitable for feeding the resolver's
+    /// `resolve_with_imports_and_builtins` or `resolve_with_natives_and_builtins`.
+    pub fn fn_table(&self) -> Vec<(Symbol, Vec<Symbol>)> {
+        let mut out: Vec<_> = self
+            .params
+            .iter()
+            .map(|(k, v)| (*k, v.clone()))
+            .collect();
+        // Sort by raw symbol id for deterministic iteration order across runs.
+        out.sort_by_key(|(k, _)| k.0);
+        out
     }
 }
 
@@ -445,7 +497,7 @@ fn expect_bool(value: &NativeValue) -> Result<bool, String> {
 // ============================================================================
 
 /// Prints a string followed by a newline to stdout.
-fn builtin_println(args: &[NativeValue]) -> Result<NativeValue, String> {
+pub(crate) fn builtin_println(args: &[NativeValue]) -> Result<NativeValue, String> {
     check_arg_count(args, 1)?;
     let s = expect_str(&args[0])?;
     println!("{s}");
@@ -453,7 +505,7 @@ fn builtin_println(args: &[NativeValue]) -> Result<NativeValue, String> {
 }
 
 /// Prints a string without a newline to stdout.
-fn builtin_print(args: &[NativeValue]) -> Result<NativeValue, String> {
+pub(crate) fn builtin_print(args: &[NativeValue]) -> Result<NativeValue, String> {
     check_arg_count(args, 1)?;
     let s = expect_str(&args[0])?;
     print!("{s}");
@@ -461,35 +513,28 @@ fn builtin_print(args: &[NativeValue]) -> Result<NativeValue, String> {
 }
 
 /// Converts an integer to its string representation.
-fn builtin_int_to_str(args: &[NativeValue]) -> Result<NativeValue, String> {
+pub(crate) fn builtin_int_to_str(args: &[NativeValue]) -> Result<NativeValue, String> {
     check_arg_count(args, 1)?;
     let n = expect_int(&args[0])?;
     Ok(NativeValue::Str(n.to_string()))
 }
 
 /// Converts a float to its string representation.
-fn builtin_float_to_str(args: &[NativeValue]) -> Result<NativeValue, String> {
+pub(crate) fn builtin_float_to_str(args: &[NativeValue]) -> Result<NativeValue, String> {
     check_arg_count(args, 1)?;
     let f = expect_float(&args[0])?;
     Ok(NativeValue::Str(f.to_string()))
 }
 
 /// Converts a boolean to its string representation.
-fn builtin_bool_to_str(args: &[NativeValue]) -> Result<NativeValue, String> {
+pub(crate) fn builtin_bool_to_str(args: &[NativeValue]) -> Result<NativeValue, String> {
     check_arg_count(args, 1)?;
     let b = expect_bool(&args[0])?;
     Ok(NativeValue::Str(b.to_string()))
 }
 
-/// Converts an integer to a float.
-fn builtin_int_to_float(args: &[NativeValue]) -> Result<NativeValue, String> {
-    check_arg_count(args, 1)?;
-    let n = expect_int(&args[0])?;
-    Ok(NativeValue::Float(n as f64))
-}
-
 /// Returns the captured stdout of a `ShellOutput`.
-fn builtin_shell_stdout(args: &[NativeValue]) -> Result<NativeValue, String> {
+pub(crate) fn builtin_shell_stdout(args: &[NativeValue]) -> Result<NativeValue, String> {
     check_arg_count(args, 1)?;
     match &args[0] {
         NativeValue::ShellOutput(out) => Ok(NativeValue::Str(out.stdout.clone())),
@@ -498,7 +543,7 @@ fn builtin_shell_stdout(args: &[NativeValue]) -> Result<NativeValue, String> {
 }
 
 /// Returns the exit code of a `ShellOutput` as an Int.
-fn builtin_shell_exit_code(args: &[NativeValue]) -> Result<NativeValue, String> {
+pub(crate) fn builtin_shell_exit_code(args: &[NativeValue]) -> Result<NativeValue, String> {
     check_arg_count(args, 1)?;
     match &args[0] {
         NativeValue::ShellOutput(out) => Ok(NativeValue::Int(out.exit_code as i64)),
@@ -536,54 +581,27 @@ fn run_shell_command(cmd: &str) -> ShellOutput {
 }
 
 /// Runs a shell command and returns a `ShellOutput`.
-fn builtin_shell_exec(args: &[NativeValue]) -> Result<NativeValue, String> {
+pub(crate) fn builtin_shell_exec(args: &[NativeValue]) -> Result<NativeValue, String> {
     check_arg_count(args, 1)?;
     let cmd = expect_str(&args[0])?;
     Ok(NativeValue::ShellOutput(run_shell_command(cmd)))
 }
 
-// ---------------- M6: arrays / strings / math / io ----------------------
+// ---------------------------------------------------------------------------
+// Crate-internal native impls referenced by module register tables. The
+// `pub(crate)` impls here are the ones that don't have a direct equivalent
+// in their natural module — `str_::register` aliases them under the
+// established short names so they're callable from Ferric source.
+// ---------------------------------------------------------------------------
 
-fn expect_array(value: &NativeValue) -> Result<&Vec<NativeValue>, String> {
-    match value {
-        NativeValue::List(elems) | NativeValue::Array(elems) => Ok(elems),
-        other => Err(format!("expected array, got {other:?}")),
-    }
-}
-
-fn builtin_array_len(args: &[NativeValue]) -> Result<NativeValue, String> {
-    check_arg_count(args, 1)?;
-    let arr = expect_array(&args[0])?;
-    Ok(NativeValue::Int(arr.len() as i64))
-}
-
-fn builtin_str_len(args: &[NativeValue]) -> Result<NativeValue, String> {
-    check_arg_count(args, 1)?;
-    let s = expect_str(&args[0])?;
-    Ok(NativeValue::Int(s.chars().count() as i64))
-}
-
-fn builtin_str_trim(args: &[NativeValue]) -> Result<NativeValue, String> {
-    check_arg_count(args, 1)?;
-    let s = expect_str(&args[0])?;
-    Ok(NativeValue::Str(s.trim().to_string()))
-}
-
-fn builtin_str_contains(args: &[NativeValue]) -> Result<NativeValue, String> {
+pub(crate) fn builtin_str_contains(args: &[NativeValue]) -> Result<NativeValue, String> {
     check_arg_count(args, 2)?;
     let s = expect_str(&args[0])?;
     let sub = expect_str(&args[1])?;
     Ok(NativeValue::Bool(s.contains(sub.as_str())))
 }
 
-fn builtin_str_starts_with(args: &[NativeValue]) -> Result<NativeValue, String> {
-    check_arg_count(args, 2)?;
-    let s = expect_str(&args[0])?;
-    let prefix = expect_str(&args[1])?;
-    Ok(NativeValue::Bool(s.starts_with(prefix.as_str())))
-}
-
-fn builtin_str_parse_int(args: &[NativeValue]) -> Result<NativeValue, String> {
+pub(crate) fn builtin_str_parse_int(args: &[NativeValue]) -> Result<NativeValue, String> {
     check_arg_count(args, 1)?;
     let s = expect_str(&args[0])?;
     s.trim()
@@ -592,7 +610,7 @@ fn builtin_str_parse_int(args: &[NativeValue]) -> Result<NativeValue, String> {
         .map_err(|e| format!("parse_int: {e}"))
 }
 
-fn builtin_str_split(args: &[NativeValue]) -> Result<NativeValue, String> {
+pub(crate) fn builtin_str_split(args: &[NativeValue]) -> Result<NativeValue, String> {
     check_arg_count(args, 2)?;
     let s = expect_str(&args[0])?;
     let sep = expect_str(&args[1])?;
@@ -608,52 +626,32 @@ fn builtin_str_split(args: &[NativeValue]) -> Result<NativeValue, String> {
     Ok(NativeValue::List(parts))
 }
 
-fn builtin_abs(args: &[NativeValue]) -> Result<NativeValue, String> {
-    check_arg_count(args, 1)?;
-    let n = expect_int(&args[0])?;
-    Ok(NativeValue::Int(n.abs()))
-}
-
-fn builtin_min(args: &[NativeValue]) -> Result<NativeValue, String> {
-    check_arg_count(args, 2)?;
-    let a = expect_int(&args[0])?;
-    let b = expect_int(&args[1])?;
-    Ok(NativeValue::Int(a.min(b)))
-}
-
-fn builtin_max(args: &[NativeValue]) -> Result<NativeValue, String> {
-    check_arg_count(args, 2)?;
-    let a = expect_int(&args[0])?;
-    let b = expect_int(&args[1])?;
-    Ok(NativeValue::Int(a.max(b)))
-}
-
-fn builtin_sqrt(args: &[NativeValue]) -> Result<NativeValue, String> {
+pub(crate) fn builtin_sqrt(args: &[NativeValue]) -> Result<NativeValue, String> {
     check_arg_count(args, 1)?;
     let n = expect_float(&args[0])?;
     Ok(NativeValue::Float(n.sqrt()))
 }
 
-fn builtin_pow(args: &[NativeValue]) -> Result<NativeValue, String> {
+pub(crate) fn builtin_pow(args: &[NativeValue]) -> Result<NativeValue, String> {
     check_arg_count(args, 2)?;
     let base = expect_float(&args[0])?;
     let exp = expect_float(&args[1])?;
     Ok(NativeValue::Float(base.powf(exp)))
 }
 
-fn builtin_floor(args: &[NativeValue]) -> Result<NativeValue, String> {
+pub(crate) fn builtin_floor(args: &[NativeValue]) -> Result<NativeValue, String> {
     check_arg_count(args, 1)?;
     let n = expect_float(&args[0])?;
     Ok(NativeValue::Int(n.floor() as i64))
 }
 
-fn builtin_ceil(args: &[NativeValue]) -> Result<NativeValue, String> {
+pub(crate) fn builtin_ceil(args: &[NativeValue]) -> Result<NativeValue, String> {
     check_arg_count(args, 1)?;
     let n = expect_float(&args[0])?;
     Ok(NativeValue::Int(n.ceil() as i64))
 }
 
-fn builtin_read_line(args: &[NativeValue]) -> Result<NativeValue, String> {
+pub(crate) fn builtin_read_line(args: &[NativeValue]) -> Result<NativeValue, String> {
     check_arg_count(args, 0)?;
     let mut line = String::new();
     std::io::stdin()
@@ -704,22 +702,20 @@ pub fn builtin_enum_table(
 // Standard Library Registration
 // ============================================================================
 
-/// Registers all standard library functions with the given registry.
+/// Registers every stdlib native with the given registry.
 ///
-/// Order matters in two ways:
-///   1. The very first symbol interned is `println` so that the parser's
-///      sentinel `Symbol::new(0)` (used for positional/anonymous args)
-///      resolves stably across builds — many error-message fixtures depend
-///      on this.
-///   2. Legacy M1–M6 ABIs win on name collision with the new spec modules.
-///      We register legacy first to claim Symbol(0), then re-register them
-///      after the new modules to ensure they remain the active handlers.
+/// Each spec module owns its own registrations; legacy/short-name aliases
+/// (`println`, `abs`, `int_to_str`, …) live alongside the spec entries in
+/// the same module's table. The only thing this function does is call each
+/// module's `register()` plus a few compiler-internal natives that don't
+/// have a natural module home.
 pub fn register_stdlib(registry: &mut NativeRegistry, interner: &mut ferric_common::Interner) {
-    // Pass 1: legacy registrations claim early symbols (and are the active
-    // handlers until / unless overwritten below).
-    register_legacy_builtins(registry, interner);
+    // Claim `Symbol(0)` for `println` first — the parser uses `Symbol::new(0)`
+    // as the sentinel for positional/anonymous args, and many error-message
+    // fixtures depend on it resolving to the same name across runs.
+    let _ = interner.intern("println");
 
-    // Pass 2: per-module registrations from the stdlib build-out.
+    // Per-module registrations.
     str_::register(registry, interner);
     bytes::register(registry, interner);
     list::register(registry, interner);
@@ -743,58 +739,51 @@ pub fn register_stdlib(registry: &mut NativeRegistry, interner: &mut ferric_comm
     proc_::register(registry, interner);
     log::register(registry, interner);
     sync::register(registry, interner);
+    dotenv::register(registry, interner);
+    llm::register(registry, interner);
 
-    // Pass 3: re-register legacy ABIs to win on collision.
-    register_legacy_builtins(registry, interner);
-}
-
-fn register_legacy_builtins(registry: &mut NativeRegistry, interner: &mut ferric_common::Interner) {
-    let println_sym = interner.intern("println");
-    registry.register(println_sym, builtin_println);
-
-    let print_sym = interner.intern("print");
-    registry.register(print_sym, builtin_print);
-
-    let int_to_str_sym = interner.intern("int_to_str");
-    registry.register(int_to_str_sym, builtin_int_to_str);
-
-    // M2 conversion functions
-    let float_to_str_sym = interner.intern("float_to_str");
-    registry.register(float_to_str_sym, builtin_float_to_str);
-
-    let bool_to_str_sym = interner.intern("bool_to_str");
-    registry.register(bool_to_str_sym, builtin_bool_to_str);
-
-    let int_to_float_sym = interner.intern("int_to_float");
-    registry.register(int_to_float_sym, builtin_int_to_float);
-
-    // M2.5: shell output accessors
-    let shell_stdout_sym = interner.intern("shell_stdout");
-    registry.register(shell_stdout_sym, builtin_shell_stdout);
-
-    let shell_exit_code_sym = interner.intern("shell_exit_code");
-    registry.register(shell_exit_code_sym, builtin_shell_exit_code);
-
-    // M3: compiler-internal shell runner.
+    // Compiler-internal / shell-expression natives.
+    //
+    // `shell_stdout` / `shell_exit_code` are surface natives the user calls
+    // on a `ShellOutput` value. `__shell_exec` is emitted by the compiler
+    // when lowering `$ cmd @{interp}` expressions — it isn't callable from
+    // Ferric source, so it goes through the param-less `register`.
+    registry.register_named(interner, "shell_stdout",    &["output"], builtin_shell_stdout);
+    registry.register_named(interner, "shell_exit_code", &["output"], builtin_shell_exit_code);
     let shell_exec_sym = interner.intern(SHELL_EXEC_NATIVE);
     registry.register(shell_exec_sym, builtin_shell_exec);
+}
 
-    // M6: arrays / strings / math / io
-    registry.register(interner.intern("array_len"),       builtin_array_len);
-    registry.register(interner.intern("str_len"),         builtin_str_len);
-    registry.register(interner.intern("str_trim"),        builtin_str_trim);
-    registry.register(interner.intern("str_contains"),    builtin_str_contains);
-    registry.register(interner.intern("str_starts_with"), builtin_str_starts_with);
-    registry.register(interner.intern("str_parse_int"),   builtin_str_parse_int);
-    registry.register(interner.intern("str_split"),       builtin_str_split);
-    registry.register(interner.intern("abs"),             builtin_abs);
-    registry.register(interner.intern("min"),             builtin_min);
-    registry.register(interner.intern("max"),             builtin_max);
-    registry.register(interner.intern("sqrt"),            builtin_sqrt);
-    registry.register(interner.intern("pow"),             builtin_pow);
-    registry.register(interner.intern("floor"),           builtin_floor);
-    registry.register(interner.intern("ceil"),            builtin_ceil);
-    registry.register(interner.intern("read_line"),       builtin_read_line);
+// ----------------------------------------------------------------------------
+// Async VM intrinsics
+//
+// `spawn`, `join`, `sleep`, `block_on`, and `shell_run_async` are dispatched
+// by the VM (with access to scheduler state), not by `NativeRegistry`. The
+// resolver still needs their parameter names to validate named-arg call
+// sites, so we publish them here alongside the native fn table.
+// ----------------------------------------------------------------------------
+
+/// Returns `(name, params)` for every async-runtime intrinsic. The resolver
+/// concatenates this with [`NativeRegistry::fn_table`] so that named-arg
+/// validation works for both stdlib natives and async intrinsics.
+pub fn async_intrinsic_param_table(
+    interner: &mut Interner,
+) -> Vec<(Symbol, Vec<Symbol>)> {
+    let entries: &[(&str, &[&str])] = &[
+        ("spawn",           &["task"]),
+        ("join",            &["a", "b"]),
+        ("sleep",           &["ms"]),
+        ("shell_run_async", &["cmd"]),
+        ("block_on",        &["task"]),
+    ];
+    entries
+        .iter()
+        .map(|(name, params)| {
+            let n = interner.intern(name);
+            let ps = params.iter().map(|p| interner.intern(p)).collect();
+            (n, ps)
+        })
+        .collect()
 }
 
 // ============================================================================

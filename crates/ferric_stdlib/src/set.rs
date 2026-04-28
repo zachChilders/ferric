@@ -21,7 +21,7 @@
 
 use std::collections::BTreeSet;
 
-use ferric_common::{Interner, Symbol};
+use ferric_common::Interner;
 
 use crate::{invoke_closure, MapKey, NativeRegistry, NativeValue};
 
@@ -239,28 +239,29 @@ fn builtin_set_map(args: &[NativeValue]) -> Result<NativeValue, String> {
 
 /// Registers every `set_*` native with the runtime registry.
 pub fn register(registry: &mut NativeRegistry, interner: &mut Interner) {
-    let mut go = |name: &str, f: fn(&[NativeValue]) -> Result<NativeValue, String>| {
-        let sym: Symbol = interner.intern(name);
-        registry.register(sym, f);
-    };
-
-    go("set_new", builtin_set_new);
-    go("set_from_list", builtin_set_from_list);
-    go("set_contains", builtin_set_contains);
-    go("set_len", builtin_set_len);
-    go("set_is_empty", builtin_set_is_empty);
-    go("set_insert", builtin_set_insert);
-    go("set_remove", builtin_set_remove);
-    go("set_union", builtin_set_union);
-    go("set_intersection", builtin_set_intersection);
-    go("set_difference", builtin_set_difference);
-    go("set_symmetric_difference", builtin_set_symmetric_difference);
-    go("set_is_subset", builtin_set_is_subset);
-    go("set_is_superset", builtin_set_is_superset);
-    go("set_is_disjoint", builtin_set_is_disjoint);
-    go("set_to_list", builtin_set_to_list);
-    go("set_filter", builtin_set_filter);
-    go("set_map", builtin_set_map);
+    type Entry = (&'static str, &'static [&'static str], crate::NativeFn);
+    let entries: &[Entry] = &[
+        ("set_new",                  &[],            builtin_set_new),
+        ("set_from_list",            &["l"],         builtin_set_from_list),
+        ("set_contains",             &["s", "item"], builtin_set_contains),
+        ("set_len",                  &["s"],         builtin_set_len),
+        ("set_is_empty",             &["s"],         builtin_set_is_empty),
+        ("set_insert",               &["s", "item"], builtin_set_insert),
+        ("set_remove",               &["s", "item"], builtin_set_remove),
+        ("set_union",                &["a", "b"],    builtin_set_union),
+        ("set_intersection",         &["a", "b"],    builtin_set_intersection),
+        ("set_difference",           &["a", "b"],    builtin_set_difference),
+        ("set_symmetric_difference", &["a", "b"],    builtin_set_symmetric_difference),
+        ("set_is_subset",            &["a", "b"],    builtin_set_is_subset),
+        ("set_is_superset",          &["a", "b"],    builtin_set_is_superset),
+        ("set_is_disjoint",          &["a", "b"],    builtin_set_is_disjoint),
+        ("set_to_list",              &["s"],         builtin_set_to_list),
+        ("set_filter",               &["s", "f"],    builtin_set_filter),
+        ("set_map",                  &["s", "f"],    builtin_set_map),
+    ];
+    for (name, params, f) in entries {
+        registry.register_named(interner, name, params, *f);
+    }
 }
 
 // ============================================================================

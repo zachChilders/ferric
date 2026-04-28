@@ -10,7 +10,9 @@ use ferric_infer::typecheck;
 use ferric_traits::build_registry;
 use ferric_exhaust::check_exhaustiveness;
 use ferric_vm::{BytecodeVM, Executor, Value};
-use ferric_stdlib::{NativeRegistry, builtin_enum_table, register_stdlib};
+use ferric_stdlib::{
+    NativeRegistry, async_intrinsic_param_table, builtin_enum_table, register_stdlib,
+};
 use ferric_manifest::load_manifest;
 use ferric_module::resolve_modules;
 use ferric_diagnostics::Renderer;
@@ -19,49 +21,18 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process;
 
-/// Table of `(fn_name, param_names)` for every native registered via
-/// `register_stdlib`. The resolver uses parameter names to canonicalize
-/// named-arg call sites.
-fn native_fn_table(interner: &mut Interner) -> Vec<(Symbol, Vec<Symbol>)> {
-    let mut intern = |name: &str| interner.intern(name);
-    let entries: &[(&str, &[&str])] = &[
-        ("println",         &["s"]),
-        ("print",           &["s"]),
-        ("int_to_str",      &["n"]),
-        ("float_to_str",    &["n"]),
-        ("bool_to_str",     &["b"]),
-        ("int_to_float",    &["n"]),
-        ("shell_stdout",    &["output"]),
-        ("shell_exit_code", &["output"]),
-        ("array_len",       &["arr"]),
-        ("str_len",         &["s"]),
-        ("str_trim",        &["s"]),
-        ("str_contains",    &["s", "sub"]),
-        ("str_starts_with", &["s", "prefix"]),
-        ("str_parse_int",   &["s"]),
-        ("str_split",       &["s", "sep"]),
-        ("abs",             &["n"]),
-        ("min",             &["a", "b"]),
-        ("max",             &["a", "b"]),
-        ("sqrt",            &["n"]),
-        ("pow",             &["base", "exp"]),
-        ("floor",           &["n"]),
-        ("ceil",            &["n"]),
-        ("read_line",       &[]),
-        ("spawn",           &["task"]),
-        ("join",            &["a", "b"]),
-        ("sleep",           &["ms"]),
-        ("shell_run_async", &["cmd"]),
-        ("block_on",        &["task"]),
-    ];
-    entries
-        .iter()
-        .map(|(name, params)| {
-            let n = intern(name);
-            let ps = params.iter().map(|p| intern(p)).collect();
-            (n, ps)
-        })
-        .collect()
+/// Builds the resolver's `(fn_name, param_names)` table. Stdlib natives
+/// publish their own parameter lists at registration time
+/// ([`NativeRegistry::fn_table`]); async-runtime intrinsics aren't real
+/// natives but still need named-arg validation, so they ride along via
+/// [`async_intrinsic_param_table`].
+fn native_fn_table(
+    natives: &NativeRegistry,
+    interner: &mut Interner,
+) -> Vec<(Symbol, Vec<Symbol>)> {
+    let mut out = natives.fn_table();
+    out.extend(async_intrinsic_param_table(interner));
+    out
 }
 
 fn main() {
@@ -130,7 +101,7 @@ fn run_file(filename: &str) {
     let mut natives = NativeRegistry::new();
     register_stdlib(&mut natives, &mut interner);
 
-    let native_fns = native_fn_table(&mut interner);
+    let native_fns = native_fn_table(&natives, &mut interner);
     let builtin_enums = builtin_enum_table(&mut interner);
 
     // Lex
@@ -188,10 +159,6 @@ fn run_file(filename: &str) {
         process::exit(1);
     }
 
-    // M8: lower async/await into ordinary state-machine items before
-    // compilation. M1–M7 programs (no async syntax) round-trip through
-    // this pass unchanged. Lowering errors halt compilation; warnings are
-    // rendered alongside ordinary diagnostics.
     let async_result = lower_async(&parse_result, &type_result);
     if !async_result.errors.is_empty() {
         let renderer = Renderer::with_interner(source.clone(), &interner);
@@ -232,7 +199,6 @@ fn run_repl() {
 
     println!("Ferric REPL v1.0");
     println!("Type expressions to evaluate, or 'exit' to quit.");
-    println!("Each new line is appended to the session — definitions persist.");
     println!();
 
     // Source accumulated across all inputs. Each iteration re-runs the full
@@ -254,7 +220,6 @@ fn run_repl() {
             continue;
         }
         if trimmed == "exit" || trimmed == "quit" {
-            println!("Goodbye!");
             break;
         }
         if trimmed == ":reset" {
@@ -296,7 +261,7 @@ fn run_session(source: &str) -> Result<(), String> {
     let mut interner = Interner::new();
     let mut natives = NativeRegistry::new();
     register_stdlib(&mut natives, &mut interner);
-    let native_fns = native_fn_table(&mut interner);
+    let native_fns = native_fn_table(&natives, &mut interner);
     let builtin_enums = builtin_enum_table(&mut interner);
 
     let lex_result = lex(source, &mut interner);

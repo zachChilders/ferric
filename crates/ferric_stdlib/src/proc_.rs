@@ -521,40 +521,37 @@ fn builtin_proc_kill(args: &[NativeValue]) -> Result<NativeValue, String> {
 // ============================================================================
 
 pub fn register(registry: &mut NativeRegistry, interner: &mut Interner) {
-    // Simple capture
-    registry.register(interner.intern("proc_run"), builtin_proc_run);
-    registry.register(interner.intern("proc_run_shell"), builtin_proc_run_shell);
-
-    // Output inspection
-    registry.register(interner.intern("proc_stdout"), builtin_proc_stdout);
-    registry.register(interner.intern("proc_stderr"), builtin_proc_stderr);
-    registry.register(interner.intern("proc_exit_code"), builtin_proc_exit_code);
-    registry.register(interner.intern("proc_ok"), builtin_proc_ok);
-
-    // Command builder
-    registry.register(interner.intern("proc_command"), builtin_proc_command);
-    registry.register(interner.intern("proc_arg"), builtin_proc_arg);
-    registry.register(interner.intern("proc_args"), builtin_proc_args);
-    registry.register(interner.intern("proc_env_set"), builtin_proc_env_set);
-    registry.register(interner.intern("proc_env_clear"), builtin_proc_env_clear);
-    registry.register(interner.intern("proc_cwd"), builtin_proc_cwd);
-    registry.register(interner.intern("proc_stdin_bytes"), builtin_proc_stdin_bytes);
-    registry.register(interner.intern("proc_stdin_str"), builtin_proc_stdin_str);
-    registry.register(interner.intern("proc_timeout"), builtin_proc_timeout);
-    registry.register(interner.intern("proc_spawn"), builtin_proc_spawn);
-
-    // Streaming
-    registry.register(
-        interner.intern("proc_spawn_streaming"),
-        builtin_proc_spawn_streaming,
-    );
-    registry.register(interner.intern("proc_write_stdin"), builtin_proc_write_stdin);
-    registry.register(
-        interner.intern("proc_read_stdout_line"),
-        builtin_proc_read_stdout_line,
-    );
-    registry.register(interner.intern("proc_wait"), builtin_proc_wait);
-    registry.register(interner.intern("proc_kill"), builtin_proc_kill);
+    type Entry = (&'static str, &'static [&'static str], crate::NativeFn);
+    let entries: &[Entry] = &[
+        // Simple capture
+        ("proc_run",                &["cmd"],          builtin_proc_run),
+        ("proc_run_shell",          &["cmd"],          builtin_proc_run_shell),
+        // Output inspection
+        ("proc_stdout",             &["o"],            builtin_proc_stdout),
+        ("proc_stderr",             &["o"],            builtin_proc_stderr),
+        ("proc_exit_code",          &["o"],            builtin_proc_exit_code),
+        ("proc_ok",                 &["o"],            builtin_proc_ok),
+        // Command builder
+        ("proc_command",            &["program"],      builtin_proc_command),
+        ("proc_arg",                &["c", "a"],       builtin_proc_arg),
+        ("proc_args",               &["c", "a"],       builtin_proc_args),
+        ("proc_env_set",            &["c", "key", "val"], builtin_proc_env_set),
+        ("proc_env_clear",          &["c"],            builtin_proc_env_clear),
+        ("proc_cwd",                &["c", "path"],    builtin_proc_cwd),
+        ("proc_stdin_bytes",        &["c", "data"],    builtin_proc_stdin_bytes),
+        ("proc_stdin_str",          &["c", "data"],    builtin_proc_stdin_str),
+        ("proc_timeout",            &["c", "ms"],      builtin_proc_timeout),
+        ("proc_spawn",              &["c"],            builtin_proc_spawn),
+        // Streaming
+        ("proc_spawn_streaming",    &["c"],            builtin_proc_spawn_streaming),
+        ("proc_write_stdin",        &["p", "data"],    builtin_proc_write_stdin),
+        ("proc_read_stdout_line",   &["p"],            builtin_proc_read_stdout_line),
+        ("proc_wait",               &["p"],            builtin_proc_wait),
+        ("proc_kill",               &["p"],            builtin_proc_kill),
+    ];
+    for (name, params, f) in entries {
+        registry.register_named(interner, name, params, *f);
+    }
 }
 
 // ============================================================================

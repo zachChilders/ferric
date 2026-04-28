@@ -495,8 +495,20 @@ mod tests {
 
     // -------- home_dir ----------------------------------------------------
 
+    /// Serialises the two `home_dir_*` tests below — they both mutate the
+    /// HOME / USERPROFILE env var, and `cargo test` runs tests in parallel
+    /// by default. Without this lock the two races and one observes the
+    /// other's intermediate state.
+    fn home_dir_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+        LOCK.get_or_init(|| std::sync::Mutex::new(()))
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+    }
+
     #[test]
     fn home_dir_returns_some_when_home_is_set() {
+        let _guard = home_dir_lock();
         // Choose the right var per platform.
         let key = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
 
@@ -522,6 +534,7 @@ mod tests {
 
     #[test]
     fn home_dir_returns_none_when_home_is_unset() {
+        let _guard = home_dir_lock();
         let key = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
         let original = std::env::var_os(key);
 

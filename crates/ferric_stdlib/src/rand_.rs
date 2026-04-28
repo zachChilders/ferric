@@ -289,20 +289,25 @@ fn builtin_rand_rng_shuffle(args: &[NativeValue]) -> Result<NativeValue, String>
 /// Registers all `rand` module natives. Names follow the
 /// `<module>_<function>` convention from the overview doc.
 pub fn register(registry: &mut NativeRegistry, interner: &mut Interner) {
-    // Unseeded
-    registry.register(interner.intern("rand_int"),     builtin_rand_int);
-    registry.register(interner.intern("rand_float"),   builtin_rand_float);
-    registry.register(interner.intern("rand_bool"),    builtin_rand_bool);
-    registry.register(interner.intern("rand_pick"),    builtin_rand_pick);
-    registry.register(interner.intern("rand_shuffle"), builtin_rand_shuffle);
-    registry.register(interner.intern("rand_sample"),  builtin_rand_sample);
-
-    // Seeded
-    registry.register(interner.intern("rand_seeded"),      builtin_rand_seeded);
-    registry.register(interner.intern("rand_rng_int"),     builtin_rand_rng_int);
-    registry.register(interner.intern("rand_rng_float"),   builtin_rand_rng_float);
-    registry.register(interner.intern("rand_rng_pick"),    builtin_rand_rng_pick);
-    registry.register(interner.intern("rand_rng_shuffle"), builtin_rand_rng_shuffle);
+    type Entry = (&'static str, &'static [&'static str], crate::NativeFn);
+    let entries: &[Entry] = &[
+        // Unseeded
+        ("rand_int",          &["low", "high"],   builtin_rand_int),
+        ("rand_float",        &[],                builtin_rand_float),
+        ("rand_bool",         &[],                builtin_rand_bool),
+        ("rand_pick",         &["l"],             builtin_rand_pick),
+        ("rand_shuffle",      &["l"],             builtin_rand_shuffle),
+        ("rand_sample",       &["l", "n"],        builtin_rand_sample),
+        // Seeded
+        ("rand_seeded",       &["seed"],          builtin_rand_seeded),
+        ("rand_rng_int",      &["r", "low", "high"], builtin_rand_rng_int),
+        ("rand_rng_float",    &["r"],             builtin_rand_rng_float),
+        ("rand_rng_pick",     &["r", "l"],        builtin_rand_rng_pick),
+        ("rand_rng_shuffle",  &["r", "l"],        builtin_rand_rng_shuffle),
+    ];
+    for (name, params, f) in entries {
+        registry.register_named(interner, name, params, *f);
+    }
 }
 
 // ============================================================================

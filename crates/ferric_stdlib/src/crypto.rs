@@ -483,101 +483,43 @@ fn builtin_crypto_random_int(args: &[NativeValue]) -> Result<NativeValue, String
 /// Native names are `crypto_<function>` (e.g. `crypto::sha256` ->
 /// `crypto_sha256`).
 pub fn register(registry: &mut NativeRegistry, interner: &mut Interner) {
-    // Hashing
-    registry.register(interner.intern("crypto_sha256"), builtin_crypto_sha256);
-    registry.register(interner.intern("crypto_sha384"), builtin_crypto_sha384);
-    registry.register(interner.intern("crypto_sha512"), builtin_crypto_sha512);
-    registry.register(interner.intern("crypto_blake3"), builtin_crypto_blake3);
-    registry.register(
-        interner.intern("crypto_sha256_str"),
-        builtin_crypto_sha256_str,
-    );
-    registry.register(
-        interner.intern("crypto_sha512_str"),
-        builtin_crypto_sha512_str,
-    );
-    registry.register(
-        interner.intern("crypto_blake3_str"),
-        builtin_crypto_blake3_str,
-    );
-
-    // HMAC
-    registry.register(
-        interner.intern("crypto_hmac_sha256"),
-        builtin_crypto_hmac_sha256,
-    );
-    registry.register(
-        interner.intern("crypto_hmac_sha512"),
-        builtin_crypto_hmac_sha512,
-    );
-
-    // Constant-time eq
-    registry.register(
-        interner.intern("crypto_eq_constant"),
-        builtin_crypto_eq_constant,
-    );
-
-    // ChaCha20-Poly1305
-    registry.register(
-        interner.intern("crypto_chacha_encrypt"),
-        builtin_crypto_chacha_encrypt,
-    );
-    registry.register(
-        interner.intern("crypto_chacha_decrypt"),
-        builtin_crypto_chacha_decrypt,
-    );
-    registry.register(
-        interner.intern("crypto_chacha_key"),
-        builtin_crypto_chacha_key,
-    );
-    registry.register(
-        interner.intern("crypto_chacha_nonce"),
-        builtin_crypto_chacha_nonce,
-    );
-
-    // AES-GCM
-    registry.register(
-        interner.intern("crypto_aes_gcm_encrypt"),
-        builtin_crypto_aes_gcm_encrypt,
-    );
-    registry.register(
-        interner.intern("crypto_aes_gcm_decrypt"),
-        builtin_crypto_aes_gcm_decrypt,
-    );
-
-    // Password hashing
-    registry.register(
-        interner.intern("crypto_hash_password"),
-        builtin_crypto_hash_password,
-    );
-    registry.register(
-        interner.intern("crypto_verify_password"),
-        builtin_crypto_verify_password,
-    );
-
-    // Ed25519
-    registry.register(
-        interner.intern("crypto_ed25519_keypair"),
-        builtin_crypto_ed25519_keypair,
-    );
-    registry.register(
-        interner.intern("crypto_ed25519_sign"),
-        builtin_crypto_ed25519_sign,
-    );
-    registry.register(
-        interner.intern("crypto_ed25519_verify"),
-        builtin_crypto_ed25519_verify,
-    );
-
-    // Random
-    registry.register(
-        interner.intern("crypto_random_bytes"),
-        builtin_crypto_random_bytes,
-    );
-    registry.register(
-        interner.intern("crypto_random_int"),
-        builtin_crypto_random_int,
-    );
+    type Entry = (&'static str, &'static [&'static str], crate::NativeFn);
+    let entries: &[Entry] = &[
+        // Hashing
+        ("crypto_sha256",          &["data"],                       builtin_crypto_sha256),
+        ("crypto_sha384",          &["data"],                       builtin_crypto_sha384),
+        ("crypto_sha512",          &["data"],                       builtin_crypto_sha512),
+        ("crypto_blake3",          &["data"],                       builtin_crypto_blake3),
+        ("crypto_sha256_str",      &["s"],                          builtin_crypto_sha256_str),
+        ("crypto_sha512_str",      &["s"],                          builtin_crypto_sha512_str),
+        ("crypto_blake3_str",      &["s"],                          builtin_crypto_blake3_str),
+        // HMAC
+        ("crypto_hmac_sha256",     &["key", "data"],                builtin_crypto_hmac_sha256),
+        ("crypto_hmac_sha512",     &["key", "data"],                builtin_crypto_hmac_sha512),
+        // Constant-time eq
+        ("crypto_eq_constant",     &["a", "b"],                     builtin_crypto_eq_constant),
+        // ChaCha20-Poly1305
+        ("crypto_chacha_encrypt",  &["key", "nonce", "plaintext"],  builtin_crypto_chacha_encrypt),
+        ("crypto_chacha_decrypt",  &["key", "nonce", "ciphertext"], builtin_crypto_chacha_decrypt),
+        ("crypto_chacha_key",      &[],                             builtin_crypto_chacha_key),
+        ("crypto_chacha_nonce",    &[],                             builtin_crypto_chacha_nonce),
+        // AES-GCM
+        ("crypto_aes_gcm_encrypt", &["key", "nonce", "plaintext"],  builtin_crypto_aes_gcm_encrypt),
+        ("crypto_aes_gcm_decrypt", &["key", "nonce", "ciphertext"], builtin_crypto_aes_gcm_decrypt),
+        // Password hashing
+        ("crypto_hash_password",   &["password"],                   builtin_crypto_hash_password),
+        ("crypto_verify_password", &["password", "hash"],           builtin_crypto_verify_password),
+        // Ed25519
+        ("crypto_ed25519_keypair", &[],                             builtin_crypto_ed25519_keypair),
+        ("crypto_ed25519_sign",    &["private_key", "message"],     builtin_crypto_ed25519_sign),
+        ("crypto_ed25519_verify",  &["public_key", "message", "sig"], builtin_crypto_ed25519_verify),
+        // Random
+        ("crypto_random_bytes",    &["n"],                          builtin_crypto_random_bytes),
+        ("crypto_random_int",      &["low", "high"],                builtin_crypto_random_int),
+    ];
+    for (name, params, f) in entries {
+        registry.register_named(interner, name, params, *f);
+    }
 }
 
 // ============================================================================

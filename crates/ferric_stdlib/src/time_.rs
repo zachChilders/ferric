@@ -446,46 +446,48 @@ fn builtin_time_sleep(args: &[NativeValue]) -> Result<NativeValue, String> {
 /// Registers every `time::*` function with the native registry under the
 /// `time_*` flat-name convention.
 pub fn register(registry: &mut NativeRegistry, interner: &mut Interner) {
-    // Construction / current time
-    registry.register(interner.intern("time_now"), builtin_time_now);
-    registry.register(interner.intern("time_now_local"), builtin_time_now_local);
-    registry.register(interner.intern("time_monotonic"), builtin_time_monotonic);
-    registry.register(interner.intern("time_from_unix"), builtin_time_from_unix);
-    registry.register(interner.intern("time_from_unix_ms"), builtin_time_from_unix_ms);
-    registry.register(interner.intern("time_from_unix_ns"), builtin_time_from_unix_ns);
-
-    // Decomposition
-    registry.register(interner.intern("time_unix"), builtin_time_unix);
-    registry.register(interner.intern("time_unix_ms"), builtin_time_unix_ms);
-    registry.register(interner.intern("time_year"), builtin_time_year);
-    registry.register(interner.intern("time_month"), builtin_time_month);
-    registry.register(interner.intern("time_day"), builtin_time_day);
-    registry.register(interner.intern("time_hour"), builtin_time_hour);
-    registry.register(interner.intern("time_minute"), builtin_time_minute);
-    registry.register(interner.intern("time_second"), builtin_time_second);
-    registry.register(interner.intern("time_weekday"), builtin_time_weekday);
-
-    // Arithmetic
-    registry.register(interner.intern("time_add_secs"), builtin_time_add_secs);
-    registry.register(interner.intern("time_add_ms"), builtin_time_add_ms);
-    registry.register(interner.intern("time_add_days"), builtin_time_add_days);
-    registry.register(interner.intern("time_diff_secs"), builtin_time_diff_secs);
-    registry.register(interner.intern("time_diff_ms"), builtin_time_diff_ms);
-
-    // Formatting / parsing
-    registry.register(interner.intern("time_format"), builtin_time_format);
-    registry.register(interner.intern("time_format_iso"), builtin_time_format_iso);
-    registry.register(interner.intern("time_format_rfc2822"), builtin_time_format_rfc2822);
-    registry.register(interner.intern("time_parse"), builtin_time_parse);
-    registry.register(interner.intern("time_parse_iso"), builtin_time_parse_iso);
-
-    // Duration
-    registry.register(interner.intern("time_secs"), builtin_time_secs);
-    registry.register(interner.intern("time_ms"), builtin_time_ms);
-    registry.register(interner.intern("time_minutes"), builtin_time_minutes);
-    registry.register(interner.intern("time_hours"), builtin_time_hours);
-    registry.register(interner.intern("time_days"), builtin_time_days);
-    registry.register(interner.intern("time_sleep"), builtin_time_sleep);
+    type Entry = (&'static str, &'static [&'static str], crate::NativeFn);
+    let entries: &[Entry] = &[
+        // Construction / current time
+        ("time_now",            &[],                  builtin_time_now),
+        ("time_now_local",      &[],                  builtin_time_now_local),
+        ("time_monotonic",      &[],                  builtin_time_monotonic),
+        ("time_from_unix",      &["secs"],            builtin_time_from_unix),
+        ("time_from_unix_ms",   &["ms"],              builtin_time_from_unix_ms),
+        ("time_from_unix_ns",   &["ns"],              builtin_time_from_unix_ns),
+        // Decomposition
+        ("time_unix",           &["t"],               builtin_time_unix),
+        ("time_unix_ms",        &["t"],               builtin_time_unix_ms),
+        ("time_year",           &["t"],               builtin_time_year),
+        ("time_month",          &["t"],               builtin_time_month),
+        ("time_day",            &["t"],               builtin_time_day),
+        ("time_hour",           &["t"],               builtin_time_hour),
+        ("time_minute",         &["t"],               builtin_time_minute),
+        ("time_second",         &["t"],               builtin_time_second),
+        ("time_weekday",        &["t"],               builtin_time_weekday),
+        // Arithmetic
+        ("time_add_secs",       &["t", "secs"],       builtin_time_add_secs),
+        ("time_add_ms",         &["t", "ms"],         builtin_time_add_ms),
+        ("time_add_days",       &["t", "days"],       builtin_time_add_days),
+        ("time_diff_secs",      &["a", "b"],          builtin_time_diff_secs),
+        ("time_diff_ms",        &["a", "b"],          builtin_time_diff_ms),
+        // Formatting / parsing
+        ("time_format",         &["t", "layout"],     builtin_time_format),
+        ("time_format_iso",     &["t"],               builtin_time_format_iso),
+        ("time_format_rfc2822", &["t"],               builtin_time_format_rfc2822),
+        ("time_parse",          &["s", "layout"],     builtin_time_parse),
+        ("time_parse_iso",      &["s"],               builtin_time_parse_iso),
+        // Duration
+        ("time_secs",           &["n"],               builtin_time_secs),
+        ("time_ms",             &["n"],               builtin_time_ms),
+        ("time_minutes",        &["n"],               builtin_time_minutes),
+        ("time_hours",          &["n"],               builtin_time_hours),
+        ("time_days",           &["n"],               builtin_time_days),
+        ("time_sleep",          &["d"],               builtin_time_sleep),
+    ];
+    for (name, params, f) in entries {
+        registry.register_named(interner, name, params, *f);
+    }
 }
 
 // ============================================================================

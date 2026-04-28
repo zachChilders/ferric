@@ -945,52 +945,51 @@ fn status_reason(code: u16) -> &'static str {
 // ===========================================================================
 
 pub fn register(registry: &mut NativeRegistry, interner: &mut Interner) {
-    macro_rules! reg {
-        ($name:expr, $func:ident) => {{
-            let sym = interner.intern($name);
-            registry.register(sym, $func);
-        }};
+    type Entry = (&'static str, &'static [&'static str], crate::NativeFn);
+    let entries: &[Entry] = &[
+        ("serve_new",            &[],                          builtin_serve_new),
+        // Routes
+        ("serve_get",            &["s", "path", "handler"],    builtin_serve_get),
+        ("serve_post",           &["s", "path", "handler"],    builtin_serve_post),
+        ("serve_put",            &["s", "path", "handler"],    builtin_serve_put),
+        ("serve_patch",          &["s", "path", "handler"],    builtin_serve_patch),
+        ("serve_delete",         &["s", "path", "handler"],    builtin_serve_delete),
+        ("serve_any",            &["s", "path", "handler"],    builtin_serve_any),
+        // Middleware
+        ("serve_use",            &["s", "m"],                  builtin_serve_use),
+        ("serve_use_prefix",     &["s", "prefix", "m"],        builtin_serve_use_prefix),
+        // Mount
+        ("serve_mount",          &["s", "prefix", "sub"],      builtin_serve_mount),
+        // Lifecycle
+        ("serve_listen",         &["s", "port"],               builtin_serve_listen),
+        ("serve_listen_addr",    &["s", "addr", "port"],       builtin_serve_listen_addr),
+        // Request introspection
+        ("serve_method",         &["r"],                       builtin_serve_method),
+        ("serve_path",           &["r"],                       builtin_serve_path),
+        ("serve_query",          &["r"],                       builtin_serve_query),
+        ("serve_param",          &["r", "name"],               builtin_serve_param),
+        ("serve_header_get",     &["r", "name"],               builtin_serve_header_get),
+        ("serve_body_bytes",     &["r"],                       builtin_serve_body_bytes),
+        ("serve_body_str",       &["r"],                       builtin_serve_body_str),
+        ("serve_body_json",      &["r"],                       builtin_serve_body_json),
+        // Response builders
+        ("serve_response",       &["status", "body"],          builtin_serve_response),
+        ("serve_ok",             &["body"],                    builtin_serve_ok),
+        ("serve_ok_str",         &["body"],                    builtin_serve_ok_str),
+        ("serve_ok_json",        &["body"],                    builtin_serve_ok_json),
+        ("serve_created",        &["body"],                    builtin_serve_created),
+        ("serve_no_content",     &[],                          builtin_serve_no_content),
+        ("serve_bad_request",    &["message"],                 builtin_serve_bad_request),
+        ("serve_unauthorized",   &["message"],                 builtin_serve_unauthorized),
+        ("serve_forbidden",      &["message"],                 builtin_serve_forbidden),
+        ("serve_not_found",      &["message"],                 builtin_serve_not_found),
+        ("serve_internal_error", &["message"],                 builtin_serve_internal_error),
+        ("serve_with_header",    &["r", "name", "val"],        builtin_serve_with_header),
+        ("serve_with_headers",   &["r", "h"],                  builtin_serve_with_headers),
+    ];
+    for (name, params, f) in entries {
+        registry.register_named(interner, name, params, *f);
     }
-
-    reg!("serve_new", builtin_serve_new);
-
-    reg!("serve_get", builtin_serve_get);
-    reg!("serve_post", builtin_serve_post);
-    reg!("serve_put", builtin_serve_put);
-    reg!("serve_patch", builtin_serve_patch);
-    reg!("serve_delete", builtin_serve_delete);
-    reg!("serve_any", builtin_serve_any);
-
-    reg!("serve_use", builtin_serve_use);
-    reg!("serve_use_prefix", builtin_serve_use_prefix);
-
-    reg!("serve_mount", builtin_serve_mount);
-
-    reg!("serve_listen", builtin_serve_listen);
-    reg!("serve_listen_addr", builtin_serve_listen_addr);
-
-    reg!("serve_method", builtin_serve_method);
-    reg!("serve_path", builtin_serve_path);
-    reg!("serve_query", builtin_serve_query);
-    reg!("serve_param", builtin_serve_param);
-    reg!("serve_header_get", builtin_serve_header_get);
-    reg!("serve_body_bytes", builtin_serve_body_bytes);
-    reg!("serve_body_str", builtin_serve_body_str);
-    reg!("serve_body_json", builtin_serve_body_json);
-
-    reg!("serve_response", builtin_serve_response);
-    reg!("serve_ok", builtin_serve_ok);
-    reg!("serve_ok_str", builtin_serve_ok_str);
-    reg!("serve_ok_json", builtin_serve_ok_json);
-    reg!("serve_created", builtin_serve_created);
-    reg!("serve_no_content", builtin_serve_no_content);
-    reg!("serve_bad_request", builtin_serve_bad_request);
-    reg!("serve_unauthorized", builtin_serve_unauthorized);
-    reg!("serve_forbidden", builtin_serve_forbidden);
-    reg!("serve_not_found", builtin_serve_not_found);
-    reg!("serve_internal_error", builtin_serve_internal_error);
-    reg!("serve_with_header", builtin_serve_with_header);
-    reg!("serve_with_headers", builtin_serve_with_headers);
 }
 
 // ===========================================================================
