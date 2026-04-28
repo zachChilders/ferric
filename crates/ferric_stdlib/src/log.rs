@@ -32,14 +32,13 @@
 // #[derive(Copy, Clone, PartialEq, PartialOrd)]
 // pub enum LogLevelRepr { Debug = 0, Info = 1, Warn = 2, Error = 3 }
 
-use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU8, Ordering};
 
 use ferric_common::Interner;
 
-use crate::{NativeRegistry, NativeValue};
+use crate::{MapKey, NativeRegistry, NativeValue};
 
 // ---------------------------------------------------------------------------
 // Local representations (pending NativeValue extension during integration)
@@ -151,10 +150,9 @@ fn expect_str_str_map(value: &NativeValue) -> Result<Vec<(String, String)>, Stri
             let mut out: Vec<(String, String)> = Vec::with_capacity(m.len());
             for (k, v) in m.iter() {
                 let k_str = match k {
-                    NativeValue::Str(s) => s.clone(),
-                    other => {
-                        return Err(format!("expected Str map key, got {:?}", other));
-                    }
+                    MapKey::Str(s) => s.clone(),
+                    MapKey::Int(n) => n.to_string(),
+                    MapKey::Bool(b) => b.to_string(),
                 };
                 let v_str = match v {
                     NativeValue::Str(s) => s.clone(),
@@ -467,6 +465,7 @@ pub fn register(registry: &mut NativeRegistry, interner: &mut Interner) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeMap;
 
     /// RAII guard that restores the global level on drop. Tests that
     /// mutate `set_level` should hold one of these so test order doesn't
@@ -619,9 +618,9 @@ mod tests {
 
     #[test]
     fn logger_new_holds_fields_in_order() {
-        let mut m = BTreeMap::new();
-        m.insert(NativeValue::Str("a".into()), NativeValue::Str("1".into()));
-        m.insert(NativeValue::Str("b".into()), NativeValue::Str("2".into()));
+        let mut m: BTreeMap<MapKey, NativeValue> = BTreeMap::new();
+        m.insert(MapKey::Str("a".into()), NativeValue::Str("1".into()));
+        m.insert(MapKey::Str("b".into()), NativeValue::Str("2".into()));
         let v = builtin_log_new(&[NativeValue::Map(m)]).unwrap();
         match v {
             NativeValue::Logger(l) => {

@@ -91,11 +91,11 @@ fn expect_rng(value: &NativeValue) -> Result<Rc<RefCell<RngRepr>>, String> {
 
 /// Wrap a value in `Some(_)`; uses the declarative `Option` NativeValue variant.
 fn some(v: NativeValue) -> NativeValue {
-    NativeValue::Option(Box::new(Some(v)))
+    NativeValue::Option(Some(Box::new(v)))
 }
 
 fn none() -> NativeValue {
-    NativeValue::Option(Box::new(None))
+    NativeValue::Option(None)
 }
 
 fn tuple2(a: NativeValue, b: NativeValue) -> NativeValue {
@@ -173,7 +173,7 @@ fn builtin_rand_int(args: &[NativeValue]) -> Result<NativeValue, String> {
 fn builtin_rand_float(args: &[NativeValue]) -> Result<NativeValue, String> {
     check_arg_count(args, 0)?;
     let mut rng = rand::thread_rng();
-    let f: f64 = rng.gen(); // standard distribution: [0, 1)
+    let f: f64 = rng.r#gen(); // standard distribution: [0, 1)
     Ok(NativeValue::Float(f))
 }
 
@@ -181,7 +181,7 @@ fn builtin_rand_float(args: &[NativeValue]) -> Result<NativeValue, String> {
 fn builtin_rand_bool(args: &[NativeValue]) -> Result<NativeValue, String> {
     check_arg_count(args, 0)?;
     let mut rng = rand::thread_rng();
-    Ok(NativeValue::Bool(rng.gen::<bool>()))
+    Ok(NativeValue::Bool(rng.r#gen::<bool>()))
 }
 
 /// `rand::pick(l) -> Option<T>` — `None` for empty list, else `Some(item)`.
@@ -251,7 +251,7 @@ fn builtin_rand_rng_float(args: &[NativeValue]) -> Result<NativeValue, String> {
     let handle = expect_rng(&args[0])?;
     let f: f64 = {
         let mut state = handle.borrow_mut();
-        state.inner.gen()
+        state.inner.r#gen()
     };
     Ok(tuple2(NativeValue::Float(f), NativeValue::Rng(handle)))
 }
@@ -533,7 +533,7 @@ mod tests {
         //
         // EXPECTED_SEQUENCE_LOCKIN: integration may need to re-record these
         //                           literals once after `cargo test` is run.
-        const EXPECTED_SEED_42_0_TO_100: [i64; 3] = [38, 97, 27];
+        const EXPECTED_SEED_42_0_TO_100: [i64; 3] = [41, 16, 83];
 
         let mut r = builtin_rand_seeded(&[NativeValue::Int(42)]).unwrap();
         let mut got: Vec<i64> = Vec::with_capacity(3);
@@ -564,7 +564,7 @@ mod tests {
         // computed via the in-tree algorithm (see `fisher_yates`). If a
         // reordering of that algorithm changes which `gen_range` calls happen
         // in which order, this literal must be updated.
-        const EXPECTED_SEED_0_SHUFFLE: [i64; 5] = [4, 1, 3, 5, 2];
+        const EXPECTED_SEED_0_SHUFFLE: [i64; 5] = [2, 3, 5, 4, 1];
 
         let r = builtin_rand_seeded(&[NativeValue::Int(0)]).unwrap();
         let out = builtin_rand_rng_shuffle(&[r, ints(&[1, 2, 3, 4, 5])]).unwrap();

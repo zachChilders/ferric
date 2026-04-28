@@ -29,7 +29,7 @@ use std::sync::Arc;
 
 use ferric_common::Interner;
 
-use crate::{NativeRegistry, NativeValue};
+use crate::{MapKey, NativeRegistry, NativeValue};
 
 // ===========================================================================
 // Internal representations
@@ -494,12 +494,9 @@ fn builtin_serve_path(args: &[NativeValue]) -> Result<NativeValue, String> {
 fn builtin_serve_query(args: &[NativeValue]) -> Result<NativeValue, String> {
     check_arg_count(args, 1)?;
     let r = expect_request(&args[0])?;
-    let mut m = BTreeMap::new();
+    let mut m: BTreeMap<MapKey, NativeValue> = BTreeMap::new();
     for (k, v) in &r.query {
-        m.insert(
-            NativeValue::Str(k.clone()),
-            NativeValue::Str(v.clone()),
-        );
+        m.insert(MapKey::Str(k.clone()), NativeValue::Str(v.clone()));
     }
     Ok(NativeValue::Map(m))
 }
@@ -672,8 +669,9 @@ fn builtin_serve_with_headers(args: &[NativeValue]) -> Result<NativeValue, Strin
         NativeValue::Map(m) => {
             for (k, v) in m {
                 let key = match k {
-                    NativeValue::Str(s) => s.clone(),
-                    other => return Err(format!("with_headers: header name must be Str, got {:?}", other)),
+                    MapKey::Str(s) => s.clone(),
+                    MapKey::Int(n) => n.to_string(),
+                    MapKey::Bool(b) => b.to_string(),
                 };
                 let val = match v {
                     NativeValue::Str(s) => s.clone(),
@@ -1365,9 +1363,9 @@ mod tests {
     #[test]
     fn with_headers_merges_map() {
         let r = builtin_serve_ok_str(&[NativeValue::Str("hi".into())]).unwrap();
-        let mut m = BTreeMap::new();
-        m.insert(NativeValue::Str("A".into()), NativeValue::Str("1".into()));
-        m.insert(NativeValue::Str("B".into()), NativeValue::Str("2".into()));
+        let mut m: BTreeMap<MapKey, NativeValue> = BTreeMap::new();
+        m.insert(MapKey::Str("A".into()), NativeValue::Str("1".into()));
+        m.insert(MapKey::Str("B".into()), NativeValue::Str("2".into()));
         let r2 = builtin_serve_with_headers(&[r.clone(), NativeValue::Map(m)]).unwrap();
         let resp = expect_response(&r2).unwrap();
         let h = &resp.borrow().headers;

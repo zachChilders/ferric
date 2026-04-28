@@ -23,8 +23,7 @@ use std::collections::BTreeSet;
 
 use ferric_common::{Interner, Symbol};
 
-use crate::map::MapKey;
-use crate::{invoke_closure, NativeRegistry, NativeValue};
+use crate::{invoke_closure, MapKey, NativeRegistry, NativeValue};
 
 // ============================================================================
 // Helpers (private to this module)
@@ -52,8 +51,6 @@ fn expect_set(v: &NativeValue) -> Result<&BTreeSet<MapKey>, String> {
 fn expect_list(v: &NativeValue) -> Result<&Vec<NativeValue>, String> {
     match v {
         NativeValue::List(xs) => Ok(xs),
-        // Tolerate the existing `Array` variant pre-integration.
-        NativeValue::Array(xs) => Ok(xs),
         other => Err(format!("expected list, got {:?}", other)),
     }
 }

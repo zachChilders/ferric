@@ -160,7 +160,7 @@ pub type NativeFn = fn(&[NativeValue]) -> Result<NativeValue, String>;
 /// Simplified value type for native function interface.
 ///
 /// This is the boundary between the VM's full `Value` type and the stdlib.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone)]
 pub enum NativeValue {
     // -------- Basic scalars --------
     Int(i64),
@@ -172,9 +172,9 @@ pub enum NativeValue {
     // -------- Existing extensions --------
     ShellOutput(ShellOutput),
 
-    /// Dynamic list of values. Was historically named `Array`; renamed to
-    /// `List` to match the stdlib spec terminology. Callers may still use
-    /// the `Array` variant name via the deprecated alias below.
+    /// Historical name retained for compatibility.
+    Array(Vec<NativeValue>),
+    /// Dynamic list of values.
     List(Vec<NativeValue>),
 
     // -------- New variants for the stdlib build-out --------
@@ -243,13 +243,108 @@ pub enum NativeValue {
     SyncOnce(Rc<OnceRepr>),
 }
 
-#[allow(non_upper_case_globals)]
-impl NativeValue {
-    /// Backwards-compat constructor for callers that still spell the old
-    /// `Array` variant. Prefer `NativeValue::List(...)` directly.
-    #[allow(non_snake_case)]
-    pub fn Array(elems: Vec<NativeValue>) -> NativeValue {
-        NativeValue::List(elems)
+impl std::fmt::Debug for NativeValue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            NativeValue::Int(v) => f.debug_tuple("Int").field(v).finish(),
+            NativeValue::Float(v) => f.debug_tuple("Float").field(v).finish(),
+            NativeValue::Bool(v) => f.debug_tuple("Bool").field(v).finish(),
+            NativeValue::Str(v) => f.debug_tuple("Str").field(v).finish(),
+            NativeValue::Unit => f.write_str("Unit"),
+            NativeValue::ShellOutput(v) => f.debug_tuple("ShellOutput").field(v).finish(),
+            NativeValue::Array(v) => f.debug_tuple("Array").field(v).finish(),
+            NativeValue::List(v) => f.debug_tuple("List").field(v).finish(),
+            NativeValue::Bytes(v) => f.debug_tuple("Bytes").field(v).finish(),
+            NativeValue::BytesMut(_) => f.write_str("BytesMut(<opaque>)"),
+            NativeValue::ListMut(_) => f.write_str("ListMut(<opaque>)"),
+            NativeValue::Map(v) => f.debug_tuple("Map").field(v).finish(),
+            NativeValue::MapMut(_) => f.write_str("MapMut(<opaque>)"),
+            NativeValue::Set(v) => f.debug_tuple("Set").field(v).finish(),
+            NativeValue::Option(v) => f.debug_tuple("Option").field(v).finish(),
+            NativeValue::Result(v) => f.debug_tuple("Result").field(v).finish(),
+            NativeValue::Tuple2(a, b) => f.debug_tuple("Tuple2").field(a).field(b).finish(),
+            NativeValue::Tuple(v) => f.debug_tuple("Tuple").field(v).finish(),
+            NativeValue::Json(v) => f.debug_tuple("Json").field(v).finish(),
+            NativeValue::Time(v) => f.debug_tuple("Time").field(v).finish(),
+            NativeValue::Duration(v) => f.debug_tuple("Duration").field(v).finish(),
+            NativeValue::Regex(_) => f.write_str("Regex(<opaque>)"),
+            NativeValue::Match(v) => f.debug_tuple("Match").field(v).finish(),
+            NativeValue::Ordering(v) => f.debug_tuple("Ordering").field(v).finish(),
+            NativeValue::Rng(_) => f.write_str("Rng(<opaque>)"),
+            NativeValue::Closure(_) => f.write_str("Closure(<opaque>)"),
+            NativeValue::HttpResponse(v) => f.debug_tuple("HttpResponse").field(v).finish(),
+            NativeValue::HttpRequestBuilder(_) => f.write_str("HttpRequestBuilder(<opaque>)"),
+            NativeValue::ServeServer(_) => f.write_str("ServeServer(<opaque>)"),
+            NativeValue::ServeRequest(_) => f.write_str("ServeRequest(<opaque>)"),
+            NativeValue::ServeResponse(_) => f.write_str("ServeResponse(<opaque>)"),
+            NativeValue::TcpStream(_) => f.write_str("TcpStream(<opaque>)"),
+            NativeValue::TcpListener(_) => f.write_str("TcpListener(<opaque>)"),
+            NativeValue::UdpSocket(_) => f.write_str("UdpSocket(<opaque>)"),
+            NativeValue::FileWriter(_) => f.write_str("FileWriter(<opaque>)"),
+            NativeValue::ProcOutput(_) => f.write_str("ProcOutput(<opaque>)"),
+            NativeValue::ProcCommand(_) => f.write_str("ProcCommand(<opaque>)"),
+            NativeValue::ProcProcess(_) => f.write_str("ProcProcess(<opaque>)"),
+            NativeValue::Logger(v) => f.debug_tuple("Logger").field(v).finish(),
+            NativeValue::LogLevel(v) => f.debug_tuple("LogLevel").field(v).finish(),
+            NativeValue::SyncSender(_) => f.write_str("SyncSender(<opaque>)"),
+            NativeValue::SyncReceiver(_) => f.write_str("SyncReceiver(<opaque>)"),
+            NativeValue::SyncMutex(_) => f.write_str("SyncMutex(<opaque>)"),
+            NativeValue::SyncOnce(_) => f.write_str("SyncOnce(<opaque>)"),
+        }
+    }
+}
+
+impl PartialEq for NativeValue {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (NativeValue::Int(a), NativeValue::Int(b)) => a == b,
+            (NativeValue::Float(a), NativeValue::Float(b)) => a == b,
+            (NativeValue::Bool(a), NativeValue::Bool(b)) => a == b,
+            (NativeValue::Str(a), NativeValue::Str(b)) => a == b,
+            (NativeValue::Unit, NativeValue::Unit) => true,
+            (NativeValue::ShellOutput(a), NativeValue::ShellOutput(b)) => a == b,
+            (NativeValue::Array(a), NativeValue::Array(b)) => a == b,
+            (NativeValue::List(a), NativeValue::List(b)) => a == b,
+            (NativeValue::Bytes(a), NativeValue::Bytes(b)) => a == b,
+            (NativeValue::BytesMut(a), NativeValue::BytesMut(b)) => Rc::ptr_eq(a, b),
+            (NativeValue::ListMut(a), NativeValue::ListMut(b)) => Rc::ptr_eq(a, b),
+            (NativeValue::Map(a), NativeValue::Map(b)) => a == b,
+            (NativeValue::MapMut(a), NativeValue::MapMut(b)) => Rc::ptr_eq(a, b),
+            (NativeValue::Set(a), NativeValue::Set(b)) => a == b,
+            (NativeValue::Option(a), NativeValue::Option(b)) => a == b,
+            (NativeValue::Result(a), NativeValue::Result(b)) => a == b,
+            (NativeValue::Tuple2(a1, b1), NativeValue::Tuple2(a2, b2)) => a1 == a2 && b1 == b2,
+            (NativeValue::Tuple(a), NativeValue::Tuple(b)) => a == b,
+            (NativeValue::Json(a), NativeValue::Json(b)) => a == b,
+            (NativeValue::Time(a), NativeValue::Time(b)) => a == b,
+            (NativeValue::Duration(a), NativeValue::Duration(b)) => a == b,
+            (NativeValue::Regex(a), NativeValue::Regex(b)) => Rc::ptr_eq(a, b),
+            (NativeValue::Match(a), NativeValue::Match(b)) => a == b,
+            (NativeValue::Ordering(a), NativeValue::Ordering(b)) => a == b,
+            (NativeValue::Rng(a), NativeValue::Rng(b)) => Rc::ptr_eq(a, b),
+            (NativeValue::Closure(a), NativeValue::Closure(b)) => a == b,
+            (NativeValue::HttpResponse(a), NativeValue::HttpResponse(b)) => Rc::ptr_eq(a, b),
+            (NativeValue::HttpRequestBuilder(a), NativeValue::HttpRequestBuilder(b)) => {
+                Rc::ptr_eq(a, b)
+            }
+            (NativeValue::ServeServer(a), NativeValue::ServeServer(b)) => Rc::ptr_eq(a, b),
+            (NativeValue::ServeRequest(a), NativeValue::ServeRequest(b)) => Rc::ptr_eq(a, b),
+            (NativeValue::ServeResponse(a), NativeValue::ServeResponse(b)) => Rc::ptr_eq(a, b),
+            (NativeValue::TcpStream(a), NativeValue::TcpStream(b)) => Rc::ptr_eq(a, b),
+            (NativeValue::TcpListener(a), NativeValue::TcpListener(b)) => Rc::ptr_eq(a, b),
+            (NativeValue::UdpSocket(a), NativeValue::UdpSocket(b)) => Rc::ptr_eq(a, b),
+            (NativeValue::FileWriter(a), NativeValue::FileWriter(b)) => Rc::ptr_eq(a, b),
+            (NativeValue::ProcOutput(a), NativeValue::ProcOutput(b)) => Rc::ptr_eq(a, b),
+            (NativeValue::ProcCommand(a), NativeValue::ProcCommand(b)) => Rc::ptr_eq(a, b),
+            (NativeValue::ProcProcess(a), NativeValue::ProcProcess(b)) => Rc::ptr_eq(a, b),
+            (NativeValue::Logger(a), NativeValue::Logger(b)) => Rc::ptr_eq(a, b),
+            (NativeValue::LogLevel(a), NativeValue::LogLevel(b)) => a == b,
+            (NativeValue::SyncSender(a), NativeValue::SyncSender(b)) => Rc::ptr_eq(a, b),
+            (NativeValue::SyncReceiver(a), NativeValue::SyncReceiver(b)) => Rc::ptr_eq(a, b),
+            (NativeValue::SyncMutex(a), NativeValue::SyncMutex(b)) => Rc::ptr_eq(a, b),
+            (NativeValue::SyncOnce(a), NativeValue::SyncOnce(b)) => Rc::ptr_eq(a, b),
+            _ => false,
+        }
     }
 }
 
@@ -451,7 +546,7 @@ fn builtin_shell_exec(args: &[NativeValue]) -> Result<NativeValue, String> {
 
 fn expect_array(value: &NativeValue) -> Result<&Vec<NativeValue>, String> {
     match value {
-        NativeValue::List(elems) => Ok(elems),
+        NativeValue::List(elems) | NativeValue::Array(elems) => Ok(elems),
         other => Err(format!("expected array, got {:?}", other)),
     }
 }
@@ -609,8 +704,50 @@ pub fn builtin_enum_table(
 // ============================================================================
 
 /// Registers all standard library functions with the given registry.
+///
+/// Order matters in two ways:
+///   1. The very first symbol interned is `println` so that the parser's
+///      sentinel `Symbol::new(0)` (used for positional/anonymous args)
+///      resolves stably across builds — many error-message fixtures depend
+///      on this.
+///   2. Legacy M1–M6 ABIs win on name collision with the new spec modules.
+///      We register legacy first to claim Symbol(0), then re-register them
+///      after the new modules to ensure they remain the active handlers.
 pub fn register_stdlib(registry: &mut NativeRegistry, interner: &mut ferric_common::Interner) {
-    // M1 functions
+    // Pass 1: legacy registrations claim early symbols (and are the active
+    // handlers until / unless overwritten below).
+    register_legacy_builtins(registry, interner);
+
+    // Pass 2: per-module registrations from the stdlib build-out.
+    str_::register(registry, interner);
+    bytes::register(registry, interner);
+    list::register(registry, interner);
+    sort::register(registry, interner);
+    map::register(registry, interner);
+    set::register(registry, interner);
+    math::register(registry, interner);
+    io::register(registry, interner);
+    path::register(registry, interner);
+    env::register(registry, interner);
+    time_::register(registry, interner);
+    rand_::register(registry, interner);
+    re::register(registry, interner);
+    json::register(registry, interner);
+    fmt::register(registry, interner);
+    encode::register(registry, interner);
+    crypto::register(registry, interner);
+    http::register(registry, interner);
+    serve::register(registry, interner);
+    sock::register(registry, interner);
+    proc_::register(registry, interner);
+    log::register(registry, interner);
+    sync::register(registry, interner);
+
+    // Pass 3: re-register legacy ABIs to win on collision.
+    register_legacy_builtins(registry, interner);
+}
+
+fn register_legacy_builtins(registry: &mut NativeRegistry, interner: &mut ferric_common::Interner) {
     let println_sym = interner.intern("println");
     registry.register(println_sym, builtin_println);
 
@@ -657,31 +794,6 @@ pub fn register_stdlib(registry: &mut NativeRegistry, interner: &mut ferric_comm
     registry.register(interner.intern("floor"),           builtin_floor);
     registry.register(interner.intern("ceil"),            builtin_ceil);
     registry.register(interner.intern("read_line"),       builtin_read_line);
-
-    // Per-module registrations from the stdlib build-out.
-    str_::register(registry, interner);
-    bytes::register(registry, interner);
-    list::register(registry, interner);
-    sort::register(registry, interner);
-    map::register(registry, interner);
-    set::register(registry, interner);
-    math::register(registry, interner);
-    io::register(registry, interner);
-    path::register(registry, interner);
-    env::register(registry, interner);
-    time_::register(registry, interner);
-    rand_::register(registry, interner);
-    re::register(registry, interner);
-    json::register(registry, interner);
-    fmt::register(registry, interner);
-    encode::register(registry, interner);
-    crypto::register(registry, interner);
-    http::register(registry, interner);
-    serve::register(registry, interner);
-    sock::register(registry, interner);
-    proc_::register(registry, interner);
-    log::register(registry, interner);
-    sync::register(registry, interner);
 }
 
 // ============================================================================

@@ -29,52 +29,7 @@ use std::rc::Rc;
 
 use ferric_common::{Interner, Symbol};
 
-use crate::{NativeRegistry, NativeValue};
-
-// ============================================================================
-// MapKey: the subset of NativeValue that is allowed as a map / set key.
-// ============================================================================
-
-/// Hashable + orderable subset of `NativeValue`. `Float` is forbidden because
-/// of `NaN`. Defined here so that `map` and `set` agree on the same key type.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum MapKey {
-    Int(i64),
-    Str(String),
-    Bool(bool),
-}
-
-impl MapKey {
-    /// Lifts a `NativeValue` into a `MapKey`, rejecting unsupported variants.
-    pub fn from_value(v: &NativeValue) -> Result<Self, String> {
-        match v {
-            NativeValue::Int(n) => Ok(MapKey::Int(*n)),
-            NativeValue::Str(s) => Ok(MapKey::Str(s.clone())),
-            NativeValue::Bool(b) => Ok(MapKey::Bool(*b)),
-            NativeValue::Float(_) => {
-                Err("map/set keys may not be Float (NaN forbids ordering)".to_string())
-            }
-            other => Err(format!(
-                "map/set keys must be Int, Str, or Bool — got {:?}",
-                other
-            )),
-        }
-    }
-
-    /// Lowers a `MapKey` back to a `NativeValue`.
-    pub fn into_value(self) -> NativeValue {
-        match self {
-            MapKey::Int(n) => NativeValue::Int(n),
-            MapKey::Str(s) => NativeValue::Str(s),
-            MapKey::Bool(b) => NativeValue::Bool(b),
-        }
-    }
-
-    /// Cheap clone-to-value, used when iterating keys without consuming.
-    pub fn to_value(&self) -> NativeValue {
-        self.clone().into_value()
-    }
-}
+use crate::{MapKey, NativeRegistry, NativeValue};
 
 // ============================================================================
 // Helpers (private to this module)
@@ -102,9 +57,6 @@ fn expect_int(v: &NativeValue) -> Result<i64, String> {
 fn expect_list(v: &NativeValue) -> Result<&Vec<NativeValue>, String> {
     match v {
         NativeValue::List(xs) => Ok(xs),
-        // `Array` is the canonical name in lib.rs today; integration may
-        // rename it to `List`. Accept either so tests work pre/post merge.
-        NativeValue::Array(xs) => Ok(xs),
         other => Err(format!("expected list, got {:?}", other)),
     }
 }

@@ -36,7 +36,7 @@ use std::collections::BTreeMap;
 
 use ferric_common::{Interner, Symbol};
 
-use crate::{NativeRegistry, NativeValue};
+use crate::{MapKey, NativeRegistry, NativeValue};
 
 // ---------------------------------------------------------------------------
 // Local helpers (private per file, per overview rule 5)
@@ -80,12 +80,12 @@ fn some(v: NativeValue) -> NativeValue {
 
 /// Construct a Ferric `Result::Ok(v)`.
 fn ok(v: NativeValue) -> NativeValue {
-    NativeValue::Result(Ok(Box::new(v)))
+    NativeValue::Result(Box::new(Ok(v)))
 }
 
 /// Construct a Ferric `Result::Err(e)`.
 fn err(e: NativeValue) -> NativeValue {
-    NativeValue::Result(Err(Box::new(e)))
+    NativeValue::Result(Box::new(Err(e)))
 }
 
 /// Build an `EnvError::NotSet { name }` payload as a string. Once integration
@@ -175,9 +175,9 @@ fn builtin_env_remove(args: &[NativeValue]) -> Result<NativeValue, String> {
 
 fn builtin_env_all(args: &[NativeValue]) -> Result<NativeValue, String> {
     check_arg_count(args, 0)?;
-    let mut m: BTreeMap<NativeValue, NativeValue> = BTreeMap::new();
+    let mut m: BTreeMap<MapKey, NativeValue> = BTreeMap::new();
     for (k, v) in std::env::vars() {
-        m.insert(NativeValue::Str(k), NativeValue::Str(v));
+        m.insert(MapKey::Str(k), NativeValue::Str(v));
     }
     Ok(NativeValue::Map(m))
 }
@@ -422,8 +422,11 @@ mod tests {
 
         let got = call(builtin_env_require, vec![NativeValue::Str(name.clone())]).unwrap();
         match got {
-            NativeValue::Result(Err(_)) => {}
-            other => panic!("expected Result::Err, got {:?}", other),
+            NativeValue::Result(boxed) => match *boxed {
+                Err(_) => {}
+                other => panic!("expected Result::Err, got {:?}", other),
+            },
+            other => panic!("expected Result, got {:?}", other),
         }
     }
 
@@ -442,7 +445,7 @@ mod tests {
         let all = call(builtin_env_all, vec![]).unwrap();
         match all {
             NativeValue::Map(m) => {
-                let v = m.get(&NativeValue::Str(name.clone()));
+                let v = m.get(&MapKey::Str(name.clone()));
                 assert_eq!(v, Some(&NativeValue::Str("present".to_string())));
             }
             other => panic!("expected Map, got {:?}", other),
@@ -470,11 +473,11 @@ mod tests {
     fn cwd_returns_non_empty_string() {
         let v = call(builtin_env_cwd, vec![]).unwrap();
         match v {
-            NativeValue::Result(Ok(boxed)) => match *boxed {
-                NativeValue::Str(s) => assert!(!s.is_empty(), "cwd should not be empty"),
-                other => panic!("expected Str inside Ok, got {:?}", other),
+            NativeValue::Result(boxed) => match *boxed {
+                Ok(NativeValue::Str(s)) => assert!(!s.is_empty(), "cwd should not be empty"),
+                other => panic!("expected Result::Ok(Str), got {:?}", other),
             },
-            other => panic!("expected Result::Ok, got {:?}", other),
+            other => panic!("expected Result, got {:?}", other),
         }
     }
 

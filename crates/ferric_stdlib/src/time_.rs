@@ -497,7 +497,7 @@ pub fn register(registry: &mut NativeRegistry, interner: &mut Interner) {
 mod tests {
     use super::*;
 
-    /// `from_unix(1714052700)` corresponds to 2024-04-25 14:25:00 UTC,
+    /// `from_unix(1714052700)` corresponds to 2024-04-25 13:45:00 UTC,
     /// which is a Thursday.
     const KNOWN_UNIX: i64 = 1_714_052_700;
 
@@ -581,8 +581,8 @@ mod tests {
         assert_eq!(unwrap_int(builtin_time_year(&[t.clone()]).unwrap()), 2024);
         assert_eq!(unwrap_int(builtin_time_month(&[t.clone()]).unwrap()), 4);
         assert_eq!(unwrap_int(builtin_time_day(&[t.clone()]).unwrap()), 25);
-        assert_eq!(unwrap_int(builtin_time_hour(&[t.clone()]).unwrap()), 14);
-        assert_eq!(unwrap_int(builtin_time_minute(&[t.clone()]).unwrap()), 25);
+        assert_eq!(unwrap_int(builtin_time_hour(&[t.clone()]).unwrap()), 13);
+        assert_eq!(unwrap_int(builtin_time_minute(&[t.clone()]).unwrap()), 45);
         assert_eq!(unwrap_int(builtin_time_second(&[t.clone()]).unwrap()), 0);
     }
 
@@ -639,7 +639,7 @@ mod tests {
     fn test_format_iso_known_timestamp() {
         let t = builtin_time_from_unix(&[NativeValue::Int(KNOWN_UNIX)]).unwrap();
         let s = unwrap_str(builtin_time_format_iso(&[t]).unwrap());
-        assert_eq!(s, "2024-04-25T14:25:00Z");
+        assert_eq!(s, "2024-04-25T13:45:00Z");
     }
 
     #[test]
@@ -666,10 +666,10 @@ mod tests {
 
     #[test]
     fn test_format_rfc2822_known_timestamp() {
-        // 2024-04-25 14:25:00 UTC → "Thu, 25 Apr 2024 14:25:00 +0000"
+        // 2024-04-25 13:45:00 UTC → "Thu, 25 Apr 2024 13:45:00 +0000"
         let t = builtin_time_from_unix(&[NativeValue::Int(KNOWN_UNIX)]).unwrap();
         let s = unwrap_str(builtin_time_format_rfc2822(&[t]).unwrap());
-        assert_eq!(s, "Thu, 25 Apr 2024 14:25:00 +0000");
+        assert_eq!(s, "Thu, 25 Apr 2024 13:45:00 +0000");
     }
 
     #[test]

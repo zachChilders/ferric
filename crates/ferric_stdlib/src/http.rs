@@ -42,7 +42,7 @@ use std::time::Duration;
 
 use ferric_common::Interner;
 
-use crate::{NativeRegistry, NativeValue};
+use crate::{JsonRepr, MapKey, NativeRegistry, NativeValue};
 
 // ============================================================================
 // Repr structs (declared here; integration may move them to lib.rs)
@@ -80,29 +80,6 @@ impl RequestBuilderRepr {
             follow_redirects: true,
         }
     }
-}
-
-/// Map key newtype shared with json/map tasks. Defined here as a private
-/// shim; integration will replace the local definition with the canonical
-/// one from `lib.rs`.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub enum MapKey {
-    Str(String),
-    Int(i64),
-    Bool(bool),
-}
-
-/// Lightweight JSON repr, mirrors `serde_json::Value`. Provided as a shim
-/// until the `json` task lands its canonical type.
-#[derive(Debug, Clone, PartialEq)]
-pub enum JsonRepr {
-    Null,
-    Bool(bool),
-    Int(i64),
-    Float(f64),
-    Str(String),
-    Array(Vec<JsonRepr>),
-    Object(BTreeMap<String, JsonRepr>),
 }
 
 // ============================================================================
@@ -416,7 +393,7 @@ impl<'a> JsonParser<'a> {
 
     fn parse_object(&mut self) -> Result<JsonRepr, String> {
         self.bump()?; // '{'
-        let mut out = BTreeMap::new();
+        let mut out: Vec<(String, JsonRepr)> = Vec::new();
         self.skip_ws();
         if self.peek()? == b'}' {
             self.bump()?;
@@ -430,7 +407,7 @@ impl<'a> JsonParser<'a> {
                 return Err("expected ':'".to_string());
             }
             let v = self.parse_value()?;
-            out.insert(key, v);
+            out.push((key, v));
             self.skip_ws();
             match self.bump()? {
                 b',' => continue,
@@ -1092,7 +1069,7 @@ mod tests {
         }
     }
 
-    fn unwrap_response(v: &NativeValue) -> Rc<ResponseRepr> {
+    pub(super) fn unwrap_response(v: &NativeValue) -> Rc<ResponseRepr> {
         match v {
             NativeValue::HttpResponse(rc) => rc.clone(),
             _ => panic!("not a Response"),
@@ -1182,8 +1159,7 @@ mod tests {
     #[test]
     fn body_json_sets_application_json() {
         let b = builder("POST", "http://e.com");
-        let mut obj = BTreeMap::new();
-        obj.insert("k".to_string(), JsonRepr::Int(42));
+        let obj: Vec<(String, JsonRepr)> = vec![("k".to_string(), JsonRepr::Int(42))];
         let val = NativeValue::Json(Box::new(JsonRepr::Object(obj)));
         let r = builtin_http_body_json(&[b, val]).unwrap();
         let inner = unwrap_builder(&r);
@@ -1365,8 +1341,9 @@ mod tests {
         match v {
             NativeValue::Json(j) => match *j {
                 JsonRepr::Object(m) => {
-                    assert_eq!(m.get("a").unwrap(), &JsonRepr::Int(1));
-                    assert_eq!(m.get("b").unwrap(), &JsonRepr::Str("x".into()));
+                    let lookup = |k: &str| m.iter().find(|(kk, _)| kk == k).map(|(_, v)| v);
+                    assert_eq!(lookup("a").unwrap(), &JsonRepr::Int(1));
+                    assert_eq!(lookup("b").unwrap(), &JsonRepr::Str("x".into()));
                 }
                 _ => panic!("expected object"),
             },
@@ -1403,15 +1380,26 @@ mod tests {
 
     #[test]
     fn json_round_trip_for_small_object() {
-        let mut obj = BTreeMap::new();
-        obj.insert("k".to_string(), JsonRepr::Int(42));
-        obj.insert("s".to_string(), JsonRepr::Str("hi".into()));
-        obj.insert("b".to_string(), JsonRepr::Bool(true));
-        obj.insert("n".to_string(), JsonRepr::Null);
+        let obj: Vec<(String, JsonRepr)> = vec![
+            ("k".to_string(), JsonRepr::Int(42)),
+            ("s".to_string(), JsonRepr::Str("hi".into())),
+            ("b".to_string(), JsonRepr::Bool(true)),
+            ("n".to_string(), JsonRepr::Null),
+        ];
         let j = JsonRepr::Object(obj.clone());
         let s = json_to_str(&j);
         let parsed = json_parse(&s).unwrap();
-        assert_eq!(parsed, JsonRepr::Object(obj));
+        // json_parse may not preserve insertion order; compare as sets.
+        match parsed {
+            JsonRepr::Object(parsed_obj) => {
+                let mut a = obj.clone();
+                let mut b = parsed_obj;
+                a.sort_by(|x, y| x.0.cmp(&y.0));
+                b.sort_by(|x, y| x.0.cmp(&y.0));
+                assert_eq!(a, b);
+            }
+            _ => panic!("expected object"),
+        }
     }
 
     #[test]
@@ -1540,6 +1528,7 @@ mod tests {
 #[cfg(test)]
 mod integration_tests {
     use super::*;
+    use super::tests::unwrap_response;
     use std::sync::mpsc;
     use std::thread;
     use std::time::Duration;
@@ -1608,8 +1597,8 @@ mod integration_tests {
             );
             let _ = req.respond(resp);
         });
-        let mut obj = BTreeMap::new();
-        obj.insert("hello".to_string(), JsonRepr::Str("world".into()));
+        let obj: Vec<(String, JsonRepr)> =
+            vec![("hello".to_string(), JsonRepr::Str("world".into()))];
         let val = NativeValue::Json(Box::new(JsonRepr::Object(obj.clone())));
         let v = builtin_http_post_json(&[
             NativeValue::Str(format!("{}/", base)),
@@ -1619,8 +1608,9 @@ mod integration_tests {
         match v {
             NativeValue::Json(j) => match *j {
                 JsonRepr::Object(m) => {
+                    let lookup = |k: &str| m.iter().find(|(kk, _)| kk == k).map(|(_, v)| v);
                     assert_eq!(
-                        m.get("hello").unwrap(),
+                        lookup("hello").unwrap(),
                         &JsonRepr::Str("world".into())
                     );
                 }

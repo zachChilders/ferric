@@ -711,14 +711,14 @@ mod tests {
             return;
         }
         // Set a marker in the parent; env_clear must drop it for the child.
-        std::env::set_var("FERRIC_PROC_TEST_MARKER", "parent");
+        unsafe { std::env::set_var("FERRIC_PROC_TEST_MARKER", "parent"); }
         let c = cmd("/bin/sh");
         let c = arg(&c, "-c");
         let c = arg(&c, "echo \"${FERRIC_PROC_TEST_MARKER:-unset}\"");
         let c = builtin_proc_env_clear(&[c]).unwrap();
         let v = builtin_proc_spawn(&[c]).unwrap();
         let out = output_of(&v);
-        std::env::remove_var("FERRIC_PROC_TEST_MARKER");
+        unsafe { std::env::remove_var("FERRIC_PROC_TEST_MARKER"); }
         assert_eq!(out.stdout, "unset\n");
     }
 

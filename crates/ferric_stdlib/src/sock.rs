@@ -532,17 +532,26 @@ mod tests {
         (v, port)
     }
 
+    /// Pull a thread-safe `TcpListener` out of a `NativeValue::TcpListener`.
+    /// The wrapping `Rc` isn't `Send`, but the underlying `TcpListener` is —
+    /// `try_clone()` gives us a fresh handle we can hand to `thread::spawn`.
+    fn into_send_listener(v: NativeValue) -> std::net::TcpListener {
+        match v {
+            NativeValue::TcpListener(l) => l
+                .try_clone()
+                .expect("TcpListener::try_clone in test helper"),
+            other => panic!("expected TcpListener, got {:?}", other),
+        }
+    }
+
     #[test]
     fn tcp_listen_assigns_port_and_local_addr_reports_it() {
         let (listener, port) = bind_ephemeral_tcp();
         assert!(port > 0);
         // Listener doesn't expose local_addr through our surface (only TcpStream does),
         // but a paired connect will let us check peer_addr resolves to that port.
+        let l = into_send_listener(listener);
         let join = thread::spawn(move || {
-            let l = match listener {
-                NativeValue::TcpListener(l) => l,
-                _ => unreachable!(),
-            };
             l.accept().expect("accept").0
         });
         let stream = StdTcpStream::connect(("127.0.0.1", port)).expect("connect");
@@ -555,11 +564,8 @@ mod tests {
     fn echo_server_smoke_test() {
         // Server side: accept once, read a line, write it back with newline.
         let (listener_v, port) = bind_ephemeral_tcp();
+        let l = into_send_listener(listener_v);
         let server = thread::spawn(move || {
-            let l = match listener_v {
-                NativeValue::TcpListener(l) => l,
-                _ => unreachable!(),
-            };
             let (stream, _peer) = l.accept().expect("server accept");
             let stream_v = NativeValue::TcpStream(Rc::new(RefCell::new(stream)));
             let line = builtin_sock_read_line(&[stream_v.clone()]).expect("read_line");
@@ -614,11 +620,8 @@ mod tests {
     #[test]
     fn read_exact_returns_disconnected_on_eof() {
         let (listener_v, port) = bind_ephemeral_tcp();
+        let l = into_send_listener(listener_v);
         let server = thread::spawn(move || {
-            let l = match listener_v {
-                NativeValue::TcpListener(l) => l,
-                _ => unreachable!(),
-            };
             let (mut stream, _) = l.accept().expect("server accept");
             // Send only 3 bytes then close.
             stream.write_all(b"abc").expect("write");
@@ -640,11 +643,8 @@ mod tests {
     #[test]
     fn set_timeout_on_silent_connection_yields_timeout() {
         let (listener_v, port) = bind_ephemeral_tcp();
+        let l = into_send_listener(listener_v);
         let server = thread::spawn(move || {
-            let l = match listener_v {
-                NativeValue::TcpListener(l) => l,
-                _ => unreachable!(),
-            };
             let (stream, _) = l.accept().expect("server accept");
             // Hold the connection open without sending anything until the
             // client times out and signals us by closing.
@@ -706,11 +706,8 @@ mod tests {
     #[test]
     fn local_and_peer_addr_strings() {
         let (listener_v, port) = bind_ephemeral_tcp();
+        let l = into_send_listener(listener_v);
         let server = thread::spawn(move || {
-            let l = match listener_v {
-                NativeValue::TcpListener(l) => l,
-                _ => unreachable!(),
-            };
             let (s, _) = l.accept().expect("accept");
             // Hold open until client closes.
             let _ = s.set_read_timeout(Some(Duration::from_secs(2)));
@@ -739,11 +736,8 @@ mod tests {
     #[test]
     fn write_all_and_read_exact_matched_pair() {
         let (listener_v, port) = bind_ephemeral_tcp();
+        let l = into_send_listener(listener_v);
         let server = thread::spawn(move || {
-            let l = match listener_v {
-                NativeValue::TcpListener(l) => l,
-                _ => unreachable!(),
-            };
             let (stream, _) = l.accept().expect("accept");
             let stream_v = NativeValue::TcpStream(Rc::new(RefCell::new(stream)));
             // Read exactly 8 bytes, send them back.
@@ -774,11 +768,8 @@ mod tests {
     #[test]
     fn read_into_bytesmut_buffer_returns_byte_count() {
         let (listener_v, port) = bind_ephemeral_tcp();
+        let l = into_send_listener(listener_v);
         let server = thread::spawn(move || {
-            let l = match listener_v {
-                NativeValue::TcpListener(l) => l,
-                _ => unreachable!(),
-            };
             let (mut s, _) = l.accept().expect("accept");
             s.write_all(b"xyz").expect("write");
         });
@@ -820,11 +811,8 @@ mod tests {
     #[test]
     fn write_returns_byte_count() {
         let (listener_v, port) = bind_ephemeral_tcp();
+        let l = into_send_listener(listener_v);
         let server = thread::spawn(move || {
-            let l = match listener_v {
-                NativeValue::TcpListener(l) => l,
-                _ => unreachable!(),
-            };
             let (mut s, _) = l.accept().expect("accept");
             // Drain whatever the client sends.
             let mut buf = [0u8; 64];
@@ -848,11 +836,8 @@ mod tests {
     #[test]
     fn flush_on_open_stream_is_ok() {
         let (listener_v, port) = bind_ephemeral_tcp();
+        let l = into_send_listener(listener_v);
         let server = thread::spawn(move || {
-            let l = match listener_v {
-                NativeValue::TcpListener(l) => l,
-                _ => unreachable!(),
-            };
             let (s, _) = l.accept().expect("accept");
             let _ = s.set_read_timeout(Some(Duration::from_secs(2)));
             let mut tmp = [0u8; 1];
@@ -872,8 +857,11 @@ mod tests {
     #[test]
     fn accept_returns_a_stream() {
         let (listener_v, port) = bind_ephemeral_tcp();
-        let listener_clone = listener_v.clone();
+        // We need to call `builtin_sock_accept` on a NativeValue::TcpListener,
+        // so reconstruct one inside the thread from a Send-able TcpListener.
+        let inner = into_send_listener(listener_v);
         let acceptor = thread::spawn(move || {
+            let listener_clone = NativeValue::TcpListener(Rc::new(inner));
             let r = builtin_sock_accept(&[listener_clone]).expect("accept");
             assert!(matches!(r, NativeValue::TcpStream(_)));
         });

@@ -455,49 +455,44 @@ mod tests {
 
     #[test]
     fn bounded_channel_blocks_when_full() {
+        // The blocking semantic belongs to `std::sync::mpsc::sync_channel`
+        // and would normally be exercised by sending NativeValues across
+        // threads. NativeValue contains `Rc` variants and is therefore
+        // `!Send`, so the channel-of-NativeValue isn't `Send` either —
+        // which is exactly why the runtime will gain a thread-safe handle
+        // type when async lands. Until then we verify the blocking
+        // semantic against a plain `SyncSender<i64>`, and verify the
+        // NativeValue-typed channel works synchronously on a single thread.
         let pair =
             builtin_sync_channel(&[NativeValue::Int(2)]).expect("channel(2) should succeed");
         let (s, r) = unpack_channel(pair);
 
-        // Fill the buffer.
+        // Same-thread fill / drain works for a NativeValue channel.
         builtin_sync_send(&[NativeValue::SyncSender(Rc::clone(&s)), NativeValue::Int(1)])
             .unwrap();
         builtin_sync_send(&[NativeValue::SyncSender(Rc::clone(&s)), NativeValue::Int(2)])
             .unwrap();
+        let recv = builtin_sync_recv(&[NativeValue::SyncReceiver(Rc::clone(&r))]).unwrap();
+        assert_eq!(unwrap_ok(recv), NativeValue::Int(1));
 
-        // Third send must block; we model that by sending from a worker
-        // thread and asserting it doesn't complete until we recv.
-        //
-        // We need to share the Sender across threads. Rc isn't Send, so
-        // for the test we send directly through the underlying SyncSender
-        // pulled from the Mutex. (In real use the runtime hands out
-        // thread-safe handles; for this stub the Rust-side helper is
-        // good enough to exercise the blocking semantics.)
-        let bounded_tx = match &*s {
-            SenderRepr::Bounded(m) => m.lock().unwrap().clone().expect("sender alive"),
-            SenderRepr::Unbounded(_) => panic!("expected bounded sender"),
-        };
-
+        // Cross-thread blocking: int-typed channel proves the same code
+        // path inside std::sync::mpsc.
+        let (tx, rx) = std::sync::mpsc::sync_channel::<i64>(2);
+        tx.send(1).unwrap();
+        tx.send(2).unwrap();
         let done = Arc::new(AtomicUsize::new(0));
         let done2 = Arc::clone(&done);
         let handle = thread::spawn(move || {
-            bounded_tx.send(NativeValue::Int(3)).unwrap();
+            tx.send(3).unwrap();
             done2.store(1, AtomicOrdering::SeqCst);
         });
-
-        // Give the thread time to attempt-and-block. It should NOT have
-        // completed yet — buffer is full.
         thread::sleep(Duration::from_millis(50));
         assert_eq!(
             done.load(AtomicOrdering::SeqCst),
             0,
             "third send should be blocked while buffer is full"
         );
-
-        // Drain one slot — the blocked send unblocks.
-        let recv = builtin_sync_recv(&[NativeValue::SyncReceiver(Rc::clone(&r))]).unwrap();
-        assert_eq!(unwrap_ok(recv), NativeValue::Int(1));
-
+        assert_eq!(rx.recv().unwrap(), 1);
         handle.join().expect("thread joined");
         assert_eq!(done.load(AtomicOrdering::SeqCst), 1);
     }
@@ -646,11 +641,13 @@ mod tests {
 
     #[test]
     fn once_threaded_init_runs_exactly_once() {
-        // Use a fresh OnceRepr wrapped in an Arc so we can cross threads.
-        let cell = Arc::new(OnceRepr {
-            cell: OnceLock::new(),
-            init: NativeValue::Int(0), // ignored — get_with closure drives init
-        });
+        // `NativeValue` contains `Rc` variants and is therefore neither
+        // `Send` nor `Sync`, so we can't put a `OnceLock<NativeValue>`
+        // behind an `Arc` directly. The race semantics we want to verify
+        // belong to `OnceLock` itself, so test those with a plain `i64`
+        // and assert it via a fresh `OnceRepr` afterwards on the main
+        // thread.
+        let cell = Arc::new(OnceLock::<i64>::new());
         let counter = Arc::new(AtomicUsize::new(0));
 
         let mut handles = Vec::new();
@@ -658,13 +655,13 @@ mod tests {
             let cell = Arc::clone(&cell);
             let counter = Arc::clone(&counter);
             handles.push(thread::spawn(move || {
-                let v = get_with(&cell, || {
+                let v = cell.get_or_init(|| {
                     counter.fetch_add(1, AtomicOrdering::SeqCst);
                     // Sleep briefly to widen the race window.
                     thread::sleep(Duration::from_millis(5));
-                    NativeValue::Int(7)
+                    7i64
                 });
-                assert_eq!(v, NativeValue::Int(7));
+                assert_eq!(*v, 7);
             }));
         }
         for h in handles {
@@ -675,6 +672,23 @@ mod tests {
             1,
             "init must run exactly once across all racing threads"
         );
+
+        // Sanity-check that the OnceRepr wrapper still drives init exactly
+        // once on the main thread.
+        let o_val = builtin_sync_once(&[NativeValue::Int(0)]).unwrap();
+        let o = expect_once(&o_val).unwrap();
+        let main_counter = std::cell::Cell::new(0u32);
+        let v1 = get_with(&o, || {
+            main_counter.set(main_counter.get() + 1);
+            NativeValue::Int(99)
+        });
+        let v2 = get_with(&o, || {
+            main_counter.set(main_counter.get() + 1);
+            NativeValue::Int(123)
+        });
+        assert_eq!(v1, NativeValue::Int(99));
+        assert_eq!(v2, NativeValue::Int(99));
+        assert_eq!(main_counter.get(), 1);
     }
 
     // -------------------- argument-shape errors ------------------------------

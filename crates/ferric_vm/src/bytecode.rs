@@ -985,9 +985,49 @@ fn native_to_value(v: NativeValue) -> Value {
         NativeValue::Str(s) => Value::new_str(s),
         NativeValue::Unit => Value::new_unit(),
         NativeValue::ShellOutput(out) => Value::ShellOutput(out),
-        NativeValue::Array(elems) => {
+        NativeValue::Array(elems)
+        | NativeValue::List(elems)
+        | NativeValue::Tuple(elems) => {
             Value::new_array(elems.into_iter().map(native_to_value).collect())
         }
+        // Extended stdlib variants land in the VM as opaque Unit for now —
+        // a future task lifts them into proper Value variants. Until then the
+        // values are still observable via the stdlib's native registry path.
+        NativeValue::Bytes(_)
+        | NativeValue::BytesMut(_)
+        | NativeValue::ListMut(_)
+        | NativeValue::Map(_)
+        | NativeValue::MapMut(_)
+        | NativeValue::Set(_)
+        | NativeValue::Option(_)
+        | NativeValue::Result(_)
+        | NativeValue::Tuple2(_, _)
+        | NativeValue::Json(_)
+        | NativeValue::Time(_)
+        | NativeValue::Duration(_)
+        | NativeValue::Regex(_)
+        | NativeValue::Match(_)
+        | NativeValue::Ordering(_)
+        | NativeValue::Rng(_)
+        | NativeValue::Closure(_)
+        | NativeValue::HttpResponse(_)
+        | NativeValue::HttpRequestBuilder(_)
+        | NativeValue::ServeServer(_)
+        | NativeValue::ServeRequest(_)
+        | NativeValue::ServeResponse(_)
+        | NativeValue::TcpStream(_)
+        | NativeValue::TcpListener(_)
+        | NativeValue::UdpSocket(_)
+        | NativeValue::FileWriter(_)
+        | NativeValue::ProcOutput(_)
+        | NativeValue::ProcCommand(_)
+        | NativeValue::ProcProcess(_)
+        | NativeValue::Logger(_)
+        | NativeValue::LogLevel(_)
+        | NativeValue::SyncSender(_)
+        | NativeValue::SyncReceiver(_)
+        | NativeValue::SyncMutex(_)
+        | NativeValue::SyncOnce(_) => Value::new_unit(),
     }
 }
 
