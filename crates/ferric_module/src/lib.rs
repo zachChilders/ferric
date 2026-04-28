@@ -53,9 +53,11 @@ pub fn resolve_modules(
     // Walk the entry file's imports recursively. The recursion detects cycles
     // and validates target paths/exports along the way.
     let mut imports_resolved: Vec<ResolvedImport> = Vec::new();
-    ctx.visit_state.insert(entry_canonical.clone(), VisitState::Visiting);
+    ctx.visit_state
+        .insert(entry_canonical.clone(), VisitState::Visiting);
     ctx.collect_imports_for_entry(&entry_canonical, ast, &mut imports_resolved);
-    ctx.visit_state.insert(entry_canonical.clone(), VisitState::Done);
+    ctx.visit_state
+        .insert(entry_canonical.clone(), VisitState::Done);
 
     // Build the entry file's exports: walk Item::Export decls and map each
     // exported item's name to a (synthetic) DefId.
@@ -110,7 +112,11 @@ struct ModuleCtx<'a> {
 }
 
 impl<'a> ModuleCtx<'a> {
-    fn new(workspace_root: &Path, manifest: &'a ManifestResult, interner: &'a mut Interner) -> Self {
+    fn new(
+        workspace_root: &Path,
+        manifest: &'a ManifestResult,
+        interner: &'a mut Interner,
+    ) -> Self {
         Self {
             workspace_root: workspace_root.to_path_buf(),
             manifest,
@@ -151,7 +157,9 @@ impl<'a> ModuleCtx<'a> {
     ) {
         for item in &ast.items {
             if let Item::Import(decl) = item {
-                if let Some(resolved) = self.resolve_import_decl(from_file, decl, /*entry*/ true) {
+                if let Some(resolved) =
+                    self.resolve_import_decl(from_file, decl, /*entry*/ true)
+                {
                     out.push(resolved);
                 }
             }
@@ -291,12 +299,7 @@ impl<'a> ModuleCtx<'a> {
 
     /// Converts an `ImportPath` to a filesystem path. Emits the appropriate
     /// `ModuleError` and returns `None` if the path isn't usable.
-    fn resolve_path(
-        &mut self,
-        from_file: &Path,
-        path: &ImportPath,
-        span: Span,
-    ) -> Option<PathBuf> {
+    fn resolve_path(&mut self, from_file: &Path, path: &ImportPath, span: Span) -> Option<PathBuf> {
         match path {
             ImportPath::Relative(s) => {
                 // `from_file` is a `*.fe` file; resolve relative to its dir.
@@ -437,9 +440,9 @@ fn exported_name(item: &Item) -> Option<Symbol> {
     match item {
         Item::Fn(item) => Some(item.name),
         Item::AsyncFn(decl) => Some(decl.item.name),
-        Item::StructDef { name, .. }
-        | Item::EnumDef { name, .. }
-        | Item::TraitDef { name, .. } => Some(*name),
+        Item::StructDef { name, .. } | Item::EnumDef { name, .. } | Item::TraitDef { name, .. } => {
+            Some(*name)
+        }
         Item::TypeAlias(decl) => Some(decl.name),
         Item::ImplBlock { .. } | Item::Script { .. } | Item::Import(_) | Item::Export(_) => None,
     }
@@ -490,7 +493,12 @@ mod tests {
             .unwrap()
             .as_nanos();
         let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-        p.push(format!("ferric-module-test-{}-{}-{}", std::process::id(), nonce, n));
+        p.push(format!(
+            "ferric-module-test-{}-{}-{}",
+            std::process::id(),
+            nonce,
+            n
+        ));
         std::fs::create_dir_all(&p).unwrap();
         TempDir { path: p }
     }
@@ -539,11 +547,7 @@ mod tests {
 greet()
 "#,
         );
-        write_file(
-            dir.path(),
-            "util.fe",
-            "export fn greet() { }\n",
-        );
+        write_file(dir.path(), "util.fe", "export fn greet() { }\n");
 
         let mut interner = Interner::new();
         let entry_src = fs::read_to_string(&entry_path).unwrap();
@@ -590,7 +594,12 @@ greet()
             &manifest,
             &mut interner,
         );
-        assert!(result.errors.iter().any(|e| matches!(e, ModuleError::UnknownExport { .. })));
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|e| matches!(e, ModuleError::UnknownExport { .. }))
+        );
     }
 
     #[test]
@@ -614,7 +623,12 @@ greet()
             &manifest,
             &mut interner,
         );
-        assert!(result.errors.iter().any(|e| matches!(e, ModuleError::NoManifest { .. })));
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|e| matches!(e, ModuleError::NoManifest { .. }))
+        );
     }
 
     #[test]
@@ -646,7 +660,12 @@ greet()
             &manifest,
             &mut interner,
         );
-        assert!(result.errors.iter().any(|e| matches!(e, ModuleError::NoManifest { .. })));
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|e| matches!(e, ModuleError::NoManifest { .. }))
+        );
     }
 
     #[test]
@@ -680,7 +699,12 @@ greet()
             &manifest,
             &mut interner,
         );
-        assert!(result.errors.iter().any(|e| matches!(e, ModuleError::CacheMiss { .. })));
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|e| matches!(e, ModuleError::CacheMiss { .. }))
+        );
     }
 
     #[test]
@@ -713,7 +737,12 @@ export fn foo() { }
             &manifest,
             &mut interner,
         );
-        assert!(result.errors.iter().any(|e| matches!(e, ModuleError::CircularImport { .. })));
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|e| matches!(e, ModuleError::CircularImport { .. }))
+        );
     }
 
     #[test]

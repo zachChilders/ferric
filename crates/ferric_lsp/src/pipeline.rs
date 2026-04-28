@@ -30,21 +30,21 @@ use tower_lsp::lsp_types::{Position, Range, Url};
 /// Result of one full pipeline run on one version of a document. Immutable
 /// once created. Stored in `PipelineCache` indexed by URI.
 pub struct PipelineSnapshot {
-    pub uri:       String,
-    pub version:   i32,
-    pub source:    String,
+    pub uri: String,
+    pub version: i32,
+    pub source: String,
     /// The interner used during this pipeline run. Each run gets a fresh
     /// interner — symbol IDs are NOT comparable across snapshots.
-    pub interner:  Interner,
+    pub interner: Interner,
 
     /// Each stage result is `Some` when the stage ran to completion, `None`
     /// only when a panic was caught (or when a required preceding result was
     /// absent because of an earlier panic). A stage's own `errors` vector
     /// carries non-fatal stage errors and does **not** prevent later stages
     /// from running.
-    pub lex:       Option<LexResult>,
-    pub parse:     Option<ParseResult>,
-    pub resolve:   Option<ResolveResult>,
+    pub lex: Option<LexResult>,
+    pub parse: Option<ParseResult>,
+    pub resolve: Option<ResolveResult>,
     pub typecheck: Option<TypeResult>,
 
     pub line_index: LineIndex,
@@ -66,16 +66,18 @@ pub struct PipelineCache {
 }
 
 struct DocumentState {
-    current:           Arc<PipelineSnapshot>,
-    last_good_lex:     Option<Arc<PipelineSnapshot>>,
-    last_good_parse:   Option<Arc<PipelineSnapshot>>,
+    current: Arc<PipelineSnapshot>,
+    last_good_lex: Option<Arc<PipelineSnapshot>>,
+    last_good_parse: Option<Arc<PipelineSnapshot>>,
     last_good_resolve: Option<Arc<PipelineSnapshot>>,
-    last_good_type:    Option<Arc<PipelineSnapshot>>,
+    last_good_type: Option<Arc<PipelineSnapshot>>,
 }
 
 impl PipelineCache {
     pub fn new() -> Self {
-        PipelineCache { documents: DashMap::new() }
+        PipelineCache {
+            documents: DashMap::new(),
+        }
     }
 
     pub fn current(&self, uri: &str) -> Option<Arc<PipelineSnapshot>> {
@@ -101,41 +103,42 @@ impl PipelineCache {
     /// Run the pipeline for one (uri, version, source) tuple, store the result
     /// in the cache (replacing the prior current snapshot), and return it.
     /// Last-good snapshots are advanced for any stage that produced a result.
-    pub fn run_and_store(
-        &self,
-        uri: &str,
-        version: i32,
-        source: &str,
-    ) -> Arc<PipelineSnapshot> {
-        let snap = Arc::new(run_pipeline(
-            uri.to_string(),
-            version,
-            source.to_string(),
-        ));
+    pub fn run_and_store(&self, uri: &str, version: i32, source: &str) -> Arc<PipelineSnapshot> {
+        let snap = Arc::new(run_pipeline(uri.to_string(), version, source.to_string()));
 
         let mut entry = self
             .documents
             .entry(uri.to_string())
             .or_insert_with(|| DocumentState {
-                current:           Arc::clone(&snap),
-                last_good_lex:     None,
-                last_good_parse:   None,
+                current: Arc::clone(&snap),
+                last_good_lex: None,
+                last_good_parse: None,
                 last_good_resolve: None,
-                last_good_type:    None,
+                last_good_type: None,
             });
 
         entry.current = Arc::clone(&snap);
-        if snap.lex.is_some()       { entry.last_good_lex     = Some(Arc::clone(&snap)); }
-        if snap.parse.is_some()     { entry.last_good_parse   = Some(Arc::clone(&snap)); }
-        if snap.resolve.is_some()   { entry.last_good_resolve = Some(Arc::clone(&snap)); }
-        if snap.typecheck.is_some() { entry.last_good_type    = Some(Arc::clone(&snap)); }
+        if snap.lex.is_some() {
+            entry.last_good_lex = Some(Arc::clone(&snap));
+        }
+        if snap.parse.is_some() {
+            entry.last_good_parse = Some(Arc::clone(&snap));
+        }
+        if snap.resolve.is_some() {
+            entry.last_good_resolve = Some(Arc::clone(&snap));
+        }
+        if snap.typecheck.is_some() {
+            entry.last_good_type = Some(Arc::clone(&snap));
+        }
 
         snap
     }
 }
 
 impl Default for PipelineCache {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -188,12 +191,10 @@ pub fn run_pipeline(uri: String, version: i32, source: String) -> PipelineSnapsh
     // resolve and infer; the LSP runs it inline so types involving traits
     // resolve correctly.
     let typecheck_result = match (&parse_result, &resolve_result) {
-        (Some(ast), Some(res)) => {
-            catch_stage(std::panic::AssertUnwindSafe(|| {
-                let registry = ferric_traits::build_registry(ast, res, &interner);
-                ferric_infer::typecheck(ast, res, &interner, &registry)
-            }))
-        }
+        (Some(ast), Some(res)) => catch_stage(std::panic::AssertUnwindSafe(|| {
+            let registry = ferric_traits::build_registry(ast, res, &interner);
+            ferric_infer::typecheck(ast, res, &interner, &registry)
+        })),
         _ => None,
     };
 
@@ -202,9 +203,9 @@ pub fn run_pipeline(uri: String, version: i32, source: String) -> PipelineSnapsh
         version,
         source,
         interner,
-        lex:       lex_result,
-        parse:     parse_result,
-        resolve:   resolve_result,
+        lex: lex_result,
+        parse: parse_result,
+        resolve: resolve_result,
         typecheck: typecheck_result,
         line_index,
     }
@@ -243,10 +244,7 @@ fn stdlib_builtin_enum_table(
     vec![
         (
             option_sym,
-            vec![
-                (some_sym, vec![TypeAnnotation::Infer]),
-                (none_sym, vec![]),
-            ],
+            vec![(some_sym, vec![TypeAnnotation::Infer]), (none_sym, vec![])],
         ),
         (
             result_sym,
@@ -264,38 +262,38 @@ fn stdlib_builtin_enum_table(
 /// table into `ferric_stdlib` so there is one definition.)
 fn stdlib_native_fn_table(interner: &mut Interner) -> Vec<(Symbol, Vec<Symbol>)> {
     let entries: &[(&str, &[&str])] = &[
-        ("println",         &["s"]),
-        ("print",           &["s"]),
-        ("int_to_str",      &["n"]),
-        ("float_to_str",    &["n"]),
-        ("bool_to_str",     &["b"]),
-        ("int_to_float",    &["n"]),
-        ("shell_stdout",    &["output"]),
+        ("println", &["s"]),
+        ("print", &["s"]),
+        ("int_to_str", &["n"]),
+        ("float_to_str", &["n"]),
+        ("bool_to_str", &["b"]),
+        ("int_to_float", &["n"]),
+        ("shell_stdout", &["output"]),
         ("shell_exit_code", &["output"]),
-        ("array_len",       &["arr"]),
-        ("str_len",         &["s"]),
-        ("str_trim",        &["s"]),
-        ("str_contains",    &["s", "sub"]),
+        ("array_len", &["arr"]),
+        ("str_len", &["s"]),
+        ("str_trim", &["s"]),
+        ("str_contains", &["s", "sub"]),
         ("str_starts_with", &["s", "prefix"]),
-        ("str_parse_int",   &["s"]),
-        ("str_split",       &["s", "sep"]),
-        ("abs",             &["n"]),
-        ("min",             &["a", "b"]),
-        ("max",             &["a", "b"]),
-        ("sqrt",            &["n"]),
-        ("pow",             &["base", "exp"]),
-        ("floor",           &["n"]),
-        ("ceil",            &["n"]),
-        ("read_line",       &[]),
+        ("str_parse_int", &["s"]),
+        ("str_split", &["s", "sep"]),
+        ("abs", &["n"]),
+        ("min", &["a", "b"]),
+        ("max", &["a", "b"]),
+        ("sqrt", &["n"]),
+        ("pow", &["base", "exp"]),
+        ("floor", &["n"]),
+        ("ceil", &["n"]),
+        ("read_line", &[]),
         // M8: async stdlib intrinsics. Implemented as VM intrinsics in
         // `ferric_vm` (not via `register_stdlib`) but registered here so
         // the resolver recognises the names. Kept in sync manually with
         // `src/main.rs::native_fn_table`.
-        ("spawn",           &["task"]),
-        ("join",            &["a", "b"]),
-        ("sleep",           &["ms"]),
+        ("spawn", &["task"]),
+        ("join", &["a", "b"]),
+        ("sleep", &["ms"]),
         ("shell_run_async", &["cmd"]),
-        ("block_on",        &["task"]),
+        ("block_on", &["task"]),
     ];
     entries
         .iter()
@@ -335,17 +333,20 @@ impl LineIndex {
     /// content. A multi-byte-correct implementation is a future polish.
     pub fn position_of(&self, byte: u32) -> Position {
         let line = match self.line_starts.binary_search(&byte) {
-            Ok(idx)  => idx,
+            Ok(idx) => idx,
             Err(idx) => idx.saturating_sub(1),
         };
         let col = byte.saturating_sub(self.line_starts[line]);
-        Position { line: line as u32, character: col }
+        Position {
+            line: line as u32,
+            character: col,
+        }
     }
 
     pub fn range_of(&self, span: Span) -> Range {
         Range {
             start: self.position_of(span.start),
-            end:   self.position_of(span.end),
+            end: self.position_of(span.end),
         }
     }
 
@@ -372,20 +373,46 @@ mod tests {
     fn line_index_round_trip() {
         let src = "let x = 1\nlet y = 2\nlet z = 3";
         let li = LineIndex::new(src);
-        assert_eq!(li.position_of(0),  Position { line: 0, character: 0 });
-        assert_eq!(li.position_of(10), Position { line: 1, character: 0 });
-        assert_eq!(li.position_of(14), Position { line: 1, character: 4 });
-        assert_eq!(li.position_of(20), Position { line: 2, character: 0 });
-        assert_eq!(li.byte_offset_of(Position { line: 2, character: 4 }), 24);
+        assert_eq!(
+            li.position_of(0),
+            Position {
+                line: 0,
+                character: 0
+            }
+        );
+        assert_eq!(
+            li.position_of(10),
+            Position {
+                line: 1,
+                character: 0
+            }
+        );
+        assert_eq!(
+            li.position_of(14),
+            Position {
+                line: 1,
+                character: 4
+            }
+        );
+        assert_eq!(
+            li.position_of(20),
+            Position {
+                line: 2,
+                character: 0
+            }
+        );
+        assert_eq!(
+            li.byte_offset_of(Position {
+                line: 2,
+                character: 4
+            }),
+            24
+        );
     }
 
     #[test]
     fn pipeline_runs_on_clean_source() {
-        let snap = run_pipeline(
-            "file:///tmp/test.fe".into(),
-            1,
-            "let x = 1".into(),
-        );
+        let snap = run_pipeline("file:///tmp/test.fe".into(), 1, "let x = 1".into());
         assert!(snap.lex.is_some());
         assert!(snap.parse.is_some());
         assert!(snap.resolve.is_some());

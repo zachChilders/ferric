@@ -27,9 +27,8 @@ async fn main() {
     // The single configuration point for the server. Future lint and format
     // milestones add a new crate that implements `Linter`/`Formatter` and
     // swap the noops here — no other LSP code changes (LSP Rule 4).
-    let (service, socket) = LspService::new(|client| {
-        LspServer::new(client, NoopLinter, NoopFormatter)
-    });
+    let (service, socket) =
+        LspService::new(|client| LspServer::new(client, NoopLinter, NoopFormatter));
 
     Server::new(stdin, stdout, socket).serve(service).await;
 }

@@ -12,7 +12,7 @@
 //! REQUIRED NATIVE VALUE VARIANTS:
 //!   Json(Box<JsonRepr>)        // shared with `json` module
 
-use crate::json::{to_str_pretty, JsonRepr};
+use crate::json::{JsonRepr, to_str_pretty};
 use crate::{NativeRegistry, NativeValue};
 use ferric_common::Interner;
 
@@ -279,7 +279,9 @@ fn builtin_fmt_float_exp(args: &[NativeValue]) -> Result<NativeValue, String> {
 fn builtin_fmt_bool(args: &[NativeValue]) -> Result<NativeValue, String> {
     check_arg_count(args, 1)?;
     let b = expect_bool(&args[0])?;
-    Ok(NativeValue::Str(if b { "true" } else { "false" }.to_string()))
+    Ok(NativeValue::Str(
+        if b { "true" } else { "false" }.to_string(),
+    ))
 }
 
 fn builtin_fmt_debug(args: &[NativeValue]) -> Result<NativeValue, String> {
@@ -296,19 +298,23 @@ fn builtin_fmt_debug(args: &[NativeValue]) -> Result<NativeValue, String> {
 pub fn register(registry: &mut NativeRegistry, interner: &mut Interner) {
     type Entry = (&'static str, &'static [&'static str], crate::NativeFn);
     let entries: &[Entry] = &[
-        ("fmt_format",     &["template", "args"],         builtin_fmt_format),
-        ("fmt_int",        &["n", "radix"],               builtin_fmt_int),
-        ("fmt_int_padded", &["n", "width", "pad"],        builtin_fmt_int_padded),
-        ("fmt_float",      &["n", "decimals"],            builtin_fmt_float),
-        ("fmt_float_exp",  &["n", "decimals"],            builtin_fmt_float_exp),
-        ("fmt_bool",       &["b"],                        builtin_fmt_bool),
-        ("fmt_debug",      &["v"],                        builtin_fmt_debug),
+        ("fmt_format", &["template", "args"], builtin_fmt_format),
+        ("fmt_int", &["n", "radix"], builtin_fmt_int),
+        (
+            "fmt_int_padded",
+            &["n", "width", "pad"],
+            builtin_fmt_int_padded,
+        ),
+        ("fmt_float", &["n", "decimals"], builtin_fmt_float),
+        ("fmt_float_exp", &["n", "decimals"], builtin_fmt_float_exp),
+        ("fmt_bool", &["b"], builtin_fmt_bool),
+        ("fmt_debug", &["v"], builtin_fmt_debug),
         // Unprefixed conversion shortcuts — these don't have prefixed `fmt_*`
         // siblings because they correspond to legacy M1/M2 conversion ABIs
         // (no radix / decimals param). Implementations live in `lib.rs`.
-        ("int_to_str",     &["n"],                        crate::builtin_int_to_str),
-        ("float_to_str",   &["n"],                        crate::builtin_float_to_str),
-        ("bool_to_str",    &["b"],                        crate::builtin_bool_to_str),
+        ("int_to_str", &["n"], crate::builtin_int_to_str),
+        ("float_to_str", &["n"], crate::builtin_float_to_str),
+        ("bool_to_str", &["b"], crate::builtin_bool_to_str),
     ];
     for (name, params, f) in entries {
         registry.register_named(interner, name, params, *f);
@@ -376,50 +382,47 @@ mod tests {
             NativeValue::Array(vec![NativeValue::Str("\u{4E16}\u{754C}".to_string())]),
         ])
         .unwrap();
-        assert_eq!(out, NativeValue::Str("\u{1F44B} \u{4E16}\u{754C}".to_string()));
+        assert_eq!(
+            out,
+            NativeValue::Str("\u{1F44B} \u{4E16}\u{754C}".to_string())
+        );
     }
 
     // --- int ---
 
     #[test]
     fn fmt_int_hex() {
-        let out =
-            builtin_fmt_int(&[NativeValue::Int(255), NativeValue::Int(16)]).unwrap();
+        let out = builtin_fmt_int(&[NativeValue::Int(255), NativeValue::Int(16)]).unwrap();
         assert_eq!(out, NativeValue::Str("ff".to_string()));
     }
 
     #[test]
     fn fmt_int_binary() {
-        let out =
-            builtin_fmt_int(&[NativeValue::Int(10), NativeValue::Int(2)]).unwrap();
+        let out = builtin_fmt_int(&[NativeValue::Int(10), NativeValue::Int(2)]).unwrap();
         assert_eq!(out, NativeValue::Str("1010".to_string()));
     }
 
     #[test]
     fn fmt_int_octal() {
-        let out =
-            builtin_fmt_int(&[NativeValue::Int(8), NativeValue::Int(8)]).unwrap();
+        let out = builtin_fmt_int(&[NativeValue::Int(8), NativeValue::Int(8)]).unwrap();
         assert_eq!(out, NativeValue::Str("10".to_string()));
     }
 
     #[test]
     fn fmt_int_decimal() {
-        let out =
-            builtin_fmt_int(&[NativeValue::Int(-42), NativeValue::Int(10)]).unwrap();
+        let out = builtin_fmt_int(&[NativeValue::Int(-42), NativeValue::Int(10)]).unwrap();
         assert_eq!(out, NativeValue::Str("-42".to_string()));
     }
 
     #[test]
     fn fmt_int_negative_hex() {
-        let out =
-            builtin_fmt_int(&[NativeValue::Int(-255), NativeValue::Int(16)]).unwrap();
+        let out = builtin_fmt_int(&[NativeValue::Int(-255), NativeValue::Int(16)]).unwrap();
         assert_eq!(out, NativeValue::Str("-ff".to_string()));
     }
 
     #[test]
     fn fmt_int_invalid_radix_errors() {
-        let err =
-            builtin_fmt_int(&[NativeValue::Int(7), NativeValue::Int(7)]).unwrap_err();
+        let err = builtin_fmt_int(&[NativeValue::Int(7), NativeValue::Int(7)]).unwrap_err();
         assert!(err.contains("radix"));
     }
 
@@ -462,9 +465,11 @@ mod tests {
 
     #[test]
     fn fmt_float_two_decimals() {
-        let out =
-            builtin_fmt_float(&[NativeValue::Float(std::f64::consts::PI), NativeValue::Int(2)])
-                .unwrap();
+        let out = builtin_fmt_float(&[
+            NativeValue::Float(std::f64::consts::PI),
+            NativeValue::Int(2),
+        ])
+        .unwrap();
         assert_eq!(out, NativeValue::Str("3.14".to_string()));
     }
 
@@ -472,8 +477,7 @@ mod tests {
     fn fmt_float_rounding() {
         // 1.05 with one decimal — exact value depends on float representation,
         // but the function should produce a string of the right shape.
-        let out =
-            builtin_fmt_float(&[NativeValue::Float(1.0), NativeValue::Int(3)]).unwrap();
+        let out = builtin_fmt_float(&[NativeValue::Float(1.0), NativeValue::Int(3)]).unwrap();
         assert_eq!(out, NativeValue::Str("1.000".to_string()));
     }
 
@@ -482,8 +486,7 @@ mod tests {
     #[test]
     fn fmt_float_exp_basic() {
         let out =
-            builtin_fmt_float_exp(&[NativeValue::Float(1234.5), NativeValue::Int(2)])
-                .unwrap();
+            builtin_fmt_float_exp(&[NativeValue::Float(1234.5), NativeValue::Int(2)]).unwrap();
         assert_eq!(out, NativeValue::Str("1.23e3".to_string()));
     }
 
@@ -516,8 +519,7 @@ mod tests {
                 JsonRepr::Array(vec![JsonRepr::Int(1), JsonRepr::Int(2)]),
             ),
         ]);
-        let out =
-            builtin_fmt_debug(&[NativeValue::Json(Box::new(v))]).unwrap();
+        let out = builtin_fmt_debug(&[NativeValue::Json(Box::new(v))]).unwrap();
         match out {
             NativeValue::Str(s) => {
                 assert!(s.contains('\n'));

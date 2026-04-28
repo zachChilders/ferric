@@ -68,7 +68,10 @@ pub enum Value {
     Array(Vec<Value>),
     /// User-defined closure: function chunk plus the values it captured at
     /// the moment it was constructed.
-    Closure { fn_idx: u16, captures: Vec<Value> },
+    Closure {
+        fn_idx: u16,
+        captures: Vec<Value>,
+    },
     /// `Async<T>` — a deferred or resolved async computation. Wraps shared
     /// mutable state so the same `Async` can be observed from multiple
     /// places (the original creator, a `spawn`'s thread, awaiters). The
@@ -127,25 +130,39 @@ pub enum AsyncState {
 
 impl Value {
     /// Creates an integer value.
-    pub fn new_int(n: i64) -> Self { Value::Int(n) }
+    pub fn new_int(n: i64) -> Self {
+        Value::Int(n)
+    }
 
     /// Creates a float value.
-    pub fn new_float(f: f64) -> Self { Value::Float(f) }
+    pub fn new_float(f: f64) -> Self {
+        Value::Float(f)
+    }
 
     /// Creates a boolean value.
-    pub fn new_bool(b: bool) -> Self { Value::Bool(b) }
+    pub fn new_bool(b: bool) -> Self {
+        Value::Bool(b)
+    }
 
     /// Creates a string value.
-    pub fn new_str(s: String) -> Self { Value::Str(s) }
+    pub fn new_str(s: String) -> Self {
+        Value::Str(s)
+    }
 
     /// Creates a unit value.
-    pub fn new_unit() -> Self { Value::Unit }
+    pub fn new_unit() -> Self {
+        Value::Unit
+    }
 
     /// Creates a user-function value from a chunk index.
-    pub fn new_fn(chunk_idx: u16) -> Self { Value::Fn(chunk_idx) }
+    pub fn new_fn(chunk_idx: u16) -> Self {
+        Value::Fn(chunk_idx)
+    }
 
     /// Creates a native-function value.
-    pub fn new_native_fn(name: Symbol) -> Self { Value::NativeFn(name) }
+    pub fn new_native_fn(name: Symbol) -> Self {
+        Value::NativeFn(name)
+    }
 
     /// Creates a `ShellOutput` value.
     pub fn new_shell_output(stdout: String, exit_code: i32) -> Self {
@@ -153,7 +170,9 @@ impl Value {
     }
 
     /// Creates a struct value with the given fields (declaration order).
-    pub fn new_struct(fields: Vec<Value>) -> Self { Value::Struct(fields) }
+    pub fn new_struct(fields: Vec<Value>) -> Self {
+        Value::Struct(fields)
+    }
 
     /// Creates an enum variant value.
     pub fn new_variant(idx: u16, fields: Vec<Value>) -> Self {
@@ -161,10 +180,14 @@ impl Value {
     }
 
     /// Creates a tuple value.
-    pub fn new_tuple(elements: Vec<Value>) -> Self { Value::Tuple(elements) }
+    pub fn new_tuple(elements: Vec<Value>) -> Self {
+        Value::Tuple(elements)
+    }
 
     /// Creates an array value.
-    pub fn new_array(elements: Vec<Value>) -> Self { Value::Array(elements) }
+    pub fn new_array(elements: Vec<Value>) -> Self {
+        Value::Array(elements)
+    }
 
     /// Creates a closure value referencing chunk `fn_idx` with `captures`
     /// pre-bound into the leading slots of the call frame.
@@ -204,27 +227,70 @@ impl Value {
 /// bytecode is a post-M3 improvement.
 #[derive(Debug, Clone, PartialEq)]
 pub enum RuntimeError {
-    UndefinedVariable { name: Symbol, span: Span },
-    UndefinedFunction { name: Symbol, span: Span },
-    TypeMismatch { expected: String, found: String, span: Span },
-    DivisionByZero { span: Span },
-    StackOverflow { span: Span },
-    StackUnderflow { span: Span },
-    NativeFunctionError { message: String, span: Span },
-    InvalidOperation { op: String, span: Span },
-    NotCallable { span: Span },
-    WrongArgumentCount { expected: usize, found: usize, span: Span },
+    UndefinedVariable {
+        name: Symbol,
+        span: Span,
+    },
+    UndefinedFunction {
+        name: Symbol,
+        span: Span,
+    },
+    TypeMismatch {
+        expected: String,
+        found: String,
+        span: Span,
+    },
+    DivisionByZero {
+        span: Span,
+    },
+    StackOverflow {
+        span: Span,
+    },
+    StackUnderflow {
+        span: Span,
+    },
+    NativeFunctionError {
+        message: String,
+        span: Span,
+    },
+    InvalidOperation {
+        op: String,
+        span: Span,
+    },
+    NotCallable {
+        span: Span,
+    },
+    WrongArgumentCount {
+        expected: usize,
+        found: usize,
+        span: Span,
+    },
     /// A require statement with `Error` mode failed.
-    RequireError { span: Span, message: Option<String> },
+    RequireError {
+        span: Span,
+        message: Option<String>,
+    },
     /// Array index outside `[0, len)`.
-    IndexOutOfBounds { index: i64, len: usize, span: Span },
+    IndexOutOfBounds {
+        index: i64,
+        len: usize,
+        span: Span,
+    },
     /// Receiver of an indexing op was not an array.
-    NotAnArray { found: String, span: Span },
+    NotAnArray {
+        found: String,
+        span: Span,
+    },
     /// Integer arithmetic produced a value outside `i64`'s representable range.
-    IntegerOverflow { op: &'static str, span: Span },
+    IntegerOverflow {
+        op: &'static str,
+        span: Span,
+    },
     /// `Op::Await` reached a `Handle` whose task never resolved — the
     /// scheduler made a full pass with no forward progress.
-    AsyncDeadlock { span: Span },
+    AsyncDeadlock {
+        span: Span,
+    },
 }
 
 // Compile-time assertion: `Value` must be `Send` so a future async runtime

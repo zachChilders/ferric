@@ -10,8 +10,8 @@
 //! and `ferric_compiler`) consume the registry through the common type.
 
 use ferric_common::{
-    ImplDef, ImplTy, Interner, Item, MethodSignature, ParseResult, ResolveResult,
-    Symbol, TraitDef, TraitRegistry, Ty, TypeAnnotation,
+    ImplDef, ImplTy, Interner, Item, MethodSignature, ParseResult, ResolveResult, Symbol, TraitDef,
+    TraitRegistry, Ty, TypeAnnotation,
 };
 
 /// Builds a trait registry from parser + resolver output.
@@ -136,9 +136,7 @@ fn convert_annotation(
                                         payload
                                             .iter()
                                             .map(|t| {
-                                                convert_annotation(
-                                                    t, self_trait, interner, resolve,
-                                                )
+                                                convert_annotation(t, self_trait, interner, resolve)
                                             })
                                             .collect(),
                                     )
@@ -177,11 +175,7 @@ fn convert_annotation(
 }
 
 /// Maps a Symbol naming an impl's "for type" to a registry-level `ImplTy`.
-fn impl_ty_for_name(
-    name: Symbol,
-    interner: &Interner,
-    resolve: &ResolveResult,
-) -> Option<ImplTy> {
+fn impl_ty_for_name(name: Symbol, interner: &Interner, resolve: &ResolveResult) -> Option<ImplTy> {
     let s = interner.resolve(name);
     Some(match s {
         "Int" => ImplTy::Int,

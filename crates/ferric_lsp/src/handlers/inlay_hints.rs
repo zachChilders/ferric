@@ -23,20 +23,24 @@
 //!     is computed by scanning forward over the source text.
 
 use ferric_common::{Expr, Item, NodeId, Param, Span, Stmt, Ty, TypeAnnotation, TypeResult};
-use tower_lsp::lsp_types::{
-    InlayHint, InlayHintKind, InlayHintLabel, Position, Range,
-};
+use tower_lsp::lsp_types::{InlayHint, InlayHintKind, InlayHintLabel, Position, Range};
 
 use crate::pipeline::{LineIndex, PipelineSnapshot};
 
 pub fn inlay_hints(snapshot: &PipelineSnapshot, range: Range) -> Vec<InlayHint> {
     // Current type result is required. No fallback to last-good — stale hints
     // are confusing on actively-edited code.
-    let (Some(parse), Some(types)) = (&snapshot.parse, &snapshot.typecheck)
-    else { return vec![]; };
+    let (Some(parse), Some(types)) = (&snapshot.parse, &snapshot.typecheck) else {
+        return vec![];
+    };
 
     let mut hints = Vec::new();
-    let cx = Ctx { source: &snapshot.source, types, li: &snapshot.line_index, range };
+    let cx = Ctx {
+        source: &snapshot.source,
+        types,
+        li: &snapshot.line_index,
+        range,
+    };
 
     for item in &parse.items {
         collect_for_item(item, &cx, &mut hints);
@@ -47,9 +51,9 @@ pub fn inlay_hints(snapshot: &PipelineSnapshot, range: Range) -> Vec<InlayHint> 
 
 struct Ctx<'a> {
     source: &'a str,
-    types:  &'a TypeResult,
-    li:     &'a LineIndex,
-    range:  Range,
+    types: &'a TypeResult,
+    li: &'a LineIndex,
+    range: Range,
 }
 
 // ---------------------------------------------------------------------------
@@ -79,7 +83,9 @@ fn collect_for_item(item: &Item, cx: &Ctx, hints: &mut Vec<InlayHint>) {
 
 fn collect_for_stmt(stmt: &Stmt, cx: &Ctx, hints: &mut Vec<InlayHint>) {
     match stmt {
-        Stmt::Let { ty, init, id, span, .. } => {
+        Stmt::Let {
+            ty, init, id, span, ..
+        } => {
             // Hint only when there is no explicit annotation.
             if ty.is_none() {
                 push_let_hint(*id, *span, cx, hints);
@@ -101,14 +107,27 @@ fn collect_for_stmt(stmt: &Stmt, cx: &Ctx, hints: &mut Vec<InlayHint>) {
 
 fn collect_for_expr(expr: &Expr, cx: &Ctx, hints: &mut Vec<InlayHint>) {
     match expr {
-        Expr::Block { stmts, expr: tail, .. } => {
-            for s in stmts { collect_for_stmt(s, cx, hints); }
-            if let Some(t) = tail { collect_for_expr(t, cx, hints); }
+        Expr::Block {
+            stmts, expr: tail, ..
+        } => {
+            for s in stmts {
+                collect_for_stmt(s, cx, hints);
+            }
+            if let Some(t) = tail {
+                collect_for_expr(t, cx, hints);
+            }
         }
-        Expr::If { cond, then_branch, else_branch, .. } => {
+        Expr::If {
+            cond,
+            then_branch,
+            else_branch,
+            ..
+        } => {
             collect_for_expr(cond, cx, hints);
             collect_for_expr(then_branch, cx, hints);
-            if let Some(e) = else_branch { collect_for_expr(e, cx, hints); }
+            if let Some(e) = else_branch {
+                collect_for_expr(e, cx, hints);
+            }
         }
         Expr::While { cond, body, .. } => {
             collect_for_expr(cond, cx, hints);
@@ -121,34 +140,48 @@ fn collect_for_expr(expr: &Expr, cx: &Ctx, hints: &mut Vec<InlayHint>) {
         }
         Expr::Unary { expr: inner, .. } => collect_for_expr(inner, cx, hints),
         Expr::Call { callee, args, .. } => {
-            for a in args { collect_for_expr(&a.value, cx, hints); }
+            for a in args {
+                collect_for_expr(&a.value, cx, hints);
+            }
             collect_for_expr(callee, cx, hints);
         }
         Expr::Return { expr: Some(e), .. } => collect_for_expr(e, cx, hints),
-        Expr::Closure { params, body, id, .. } => {
+        Expr::Closure {
+            params, body, id, ..
+        } => {
             push_closure_param_hints(*id, params, cx, hints);
             collect_for_expr(body, cx, hints);
         }
         Expr::FieldAccess { expr: receiver, .. } => collect_for_expr(receiver, cx, hints),
         Expr::MethodCall { receiver, args, .. } => {
             collect_for_expr(receiver, cx, hints);
-            for a in args { collect_for_expr(&a.value, cx, hints); }
+            for a in args {
+                collect_for_expr(&a.value, cx, hints);
+            }
         }
-        Expr::Match { scrutinee, arms, .. } => {
+        Expr::Match {
+            scrutinee, arms, ..
+        } => {
             collect_for_expr(scrutinee, cx, hints);
-            for arm in arms { collect_for_expr(&arm.body, cx, hints); }
+            for arm in arms {
+                collect_for_expr(&arm.body, cx, hints);
+            }
         }
         Expr::Tuple { elements, .. }
         | Expr::ArrayLit { elements, .. }
         | Expr::VariantCtor { args: elements, .. } => {
-            for e in elements { collect_for_expr(e, cx, hints); }
+            for e in elements {
+                collect_for_expr(e, cx, hints);
+            }
         }
         Expr::Index { array, index, .. } => {
             collect_for_expr(array, cx, hints);
             collect_for_expr(index, cx, hints);
         }
         Expr::StructLit { fields, .. } => {
-            for (_, e) in fields { collect_for_expr(e, cx, hints); }
+            for (_, e) in fields {
+                collect_for_expr(e, cx, hints);
+            }
         }
         Expr::Cast(c) => collect_for_expr(&c.expr, cx, hints),
         // Leaves: Literal, Variable, Break, Continue, Shell — no hints.
@@ -160,16 +193,17 @@ fn collect_for_expr(expr: &Expr, cx: &Ctx, hints: &mut Vec<InlayHint>) {
 // Hint emitters
 // ---------------------------------------------------------------------------
 
-fn push_let_hint(
-    stmt_id: NodeId,
-    stmt_span: Span,
-    cx: &Ctx,
-    hints: &mut Vec<InlayHint>,
-) {
-    let Some(ty) = cx.types.node_types.get(&stmt_id) else { return; };
-    let Some(name_end) = let_name_end(cx.source, stmt_span) else { return; };
+fn push_let_hint(stmt_id: NodeId, stmt_span: Span, cx: &Ctx, hints: &mut Vec<InlayHint>) {
+    let Some(ty) = cx.types.node_types.get(&stmt_id) else {
+        return;
+    };
+    let Some(name_end) = let_name_end(cx.source, stmt_span) else {
+        return;
+    };
     let position = cx.li.position_of(name_end);
-    if !position_in_range(position, cx.range) { return; }
+    if !position_in_range(position, cx.range) {
+        return;
+    }
     hints.push(make_hint(position, ty));
 }
 
@@ -184,21 +218,32 @@ fn push_closure_param_hints(
     cx: &Ctx,
     hints: &mut Vec<InlayHint>,
 ) {
-    let Some(closure_ty) = cx.types.node_types.get(&closure_id) else { return; };
-    let Ty::Fn { params: param_tys, .. } = closure_ty else {
+    let Some(closure_ty) = cx.types.node_types.get(&closure_id) else {
+        return;
+    };
+    let Ty::Fn {
+        params: param_tys, ..
+    } = closure_ty
+    else {
         // Closure type didn't resolve to an Fn (still a free var, etc.).
         // Skip rather than guess.
         return;
     };
-    if param_tys.len() != params.len() { return; } // defensive
+    if param_tys.len() != params.len() {
+        return;
+    } // defensive
 
     for (param, ty) in params.iter().zip(param_tys.iter()) {
         if !matches!(param.ty, TypeAnnotation::Infer) {
             continue; // user wrote an explicit annotation already
         }
-        let Some(name_end) = param_name_end(cx.source, param.span) else { continue; };
+        let Some(name_end) = param_name_end(cx.source, param.span) else {
+            continue;
+        };
         let position = cx.li.position_of(name_end);
-        if !position_in_range(position, cx.range) { continue; }
+        if !position_in_range(position, cx.range) {
+            continue;
+        }
         hints.push(make_hint(position, ty));
     }
 }
@@ -206,13 +251,13 @@ fn push_closure_param_hints(
 fn make_hint(position: Position, ty: &Ty) -> InlayHint {
     InlayHint {
         position,
-        label:           InlayHintLabel::String(format!(": {ty}")),
-        kind:            Some(InlayHintKind::TYPE),
-        text_edits:      None,
-        tooltip:         None,
-        padding_left:    Some(false),
-        padding_right:   Some(false),
-        data:            None,
+        label: InlayHintLabel::String(format!(": {ty}")),
+        kind: Some(InlayHintKind::TYPE),
+        text_edits: None,
+        tooltip: None,
+        padding_left: Some(false),
+        padding_right: Some(false),
+        data: None,
     }
 }
 
@@ -235,13 +280,14 @@ fn let_name_end(source: &str, stmt_span: Span) -> Option<u32> {
     let s = match s.strip_prefix("mut") {
         // `mut` must be followed by whitespace to count as the modifier
         // (otherwise it's part of an identifier like `mutable`).
-        Some(rest) if rest.starts_with(|c: char| c.is_whitespace())
-            => trim_left_ws(rest),
-        _   => s,
+        Some(rest) if rest.starts_with(|c: char| c.is_whitespace()) => trim_left_ws(rest),
+        _ => s,
     };
     let consumed_before_name = (source.len() - start) - s.len();
     let name_byte_len = ident_byte_len(s);
-    if name_byte_len == 0 { return None; }
+    if name_byte_len == 0 {
+        return None;
+    }
     Some((start + consumed_before_name + name_byte_len) as u32)
 }
 
@@ -251,7 +297,9 @@ fn param_name_end(source: &str, param_span: Span) -> Option<u32> {
     let start = param_span.start as usize;
     let s = source.get(start..)?;
     let name_byte_len = ident_byte_len(s);
-    if name_byte_len == 0 { return None; }
+    if name_byte_len == 0 {
+        return None;
+    }
     Some((start + name_byte_len) as u32)
 }
 
@@ -267,10 +315,10 @@ fn ident_byte_len(s: &str) -> usize {
 }
 
 fn position_in_range(p: Position, r: Range) -> bool {
-    let after_start = p.line > r.start.line
-        || (p.line == r.start.line && p.character >= r.start.character);
-    let before_end  = p.line < r.end.line
-        || (p.line == r.end.line && p.character <= r.end.character);
+    let after_start =
+        p.line > r.start.line || (p.line == r.start.line && p.character >= r.start.character);
+    let before_end =
+        p.line < r.end.line || (p.line == r.end.line && p.character <= r.end.character);
     after_start && before_end
 }
 
@@ -285,8 +333,14 @@ mod tests {
 
     fn full_range() -> Range {
         Range {
-            start: Position { line: 0,       character: 0 },
-            end:   Position { line: u32::MAX, character: u32::MAX },
+            start: Position {
+                line: 0,
+                character: 0,
+            },
+            end: Position {
+                line: u32::MAX,
+                character: u32::MAX,
+            },
         }
     }
 
@@ -308,9 +362,15 @@ mod tests {
         assert_eq!(h.len(), 1);
         assert_eq!(label(&h[0]), ": Int");
         // Position should land immediately after `x` (line 0, char 5).
-        assert_eq!(h[0].position, Position { line: 0, character: 5 });
+        assert_eq!(
+            h[0].position,
+            Position {
+                line: 0,
+                character: 5
+            }
+        );
         assert_eq!(h[0].kind, Some(InlayHintKind::TYPE));
-        assert_eq!(h[0].padding_left,  Some(false));
+        assert_eq!(h[0].padding_left, Some(false));
         assert_eq!(h[0].padding_right, Some(false));
     }
 
@@ -326,14 +386,23 @@ mod tests {
         assert_eq!(h.len(), 1);
         assert_eq!(label(&h[0]), ": Int");
         // "let mut counter" → `counter` ends at byte 15.
-        assert_eq!(h[0].position, Position { line: 0, character: 15 });
+        assert_eq!(
+            h[0].position,
+            Position {
+                line: 0,
+                character: 15
+            }
+        );
     }
 
     #[test]
     fn nested_let_inside_fn_emits_hint() {
         let h = hints_for("fn main() -> Unit { let pi = 3.14 }");
         let pi_hint = h.iter().find(|h| label(h) == ": Float");
-        assert!(pi_hint.is_some(), "expected `: Float` hint inside fn body, got {h:?}");
+        assert!(
+            pi_hint.is_some(),
+            "expected `: Float` hint inside fn body, got {h:?}"
+        );
     }
 
     #[test]
@@ -356,8 +425,14 @@ mod tests {
         // Hint would land at line 0; ask for line 5 only.
         let snap = run_pipeline("file:///tmp/t.fe".into(), 1, "let x = 1".into());
         let off_screen = Range {
-            start: Position { line: 5, character: 0 },
-            end:   Position { line: 9, character: 0 },
+            start: Position {
+                line: 5,
+                character: 0,
+            },
+            end: Position {
+                line: 9,
+                character: 0,
+            },
         };
         let h = inlay_hints(&snap, off_screen);
         assert!(h.is_empty(), "hint outside range was returned: {h:?}");
@@ -371,10 +446,13 @@ mod tests {
 
     #[test]
     fn name_end_helper_handles_let() {
-        assert_eq!(let_name_end("let x = 1",         Span::new(0, 9)),  Some(5));
-        assert_eq!(let_name_end("let mut counter=0", Span::new(0, 17)), Some(15));
+        assert_eq!(let_name_end("let x = 1", Span::new(0, 9)), Some(5));
+        assert_eq!(
+            let_name_end("let mut counter=0", Span::new(0, 17)),
+            Some(15)
+        );
         // Identifier with underscores and digits.
-        assert_eq!(let_name_end("let abc_42 = 1",    Span::new(0, 14)), Some(10));
+        assert_eq!(let_name_end("let abc_42 = 1", Span::new(0, 14)), Some(10));
     }
 
     #[test]
@@ -396,7 +474,11 @@ mod tests {
         //   - `: Int` after `let n`
         let param_hint = h.iter().find(|h| {
             // `x` of the closure starts at byte 9, ends at byte 10 — line 0, char 10.
-            h.position == Position { line: 0, character: 10 }
+            h.position
+                == Position {
+                    line: 0,
+                    character: 10,
+                }
                 && label(h) == ": Int"
         });
         assert!(
@@ -412,9 +494,7 @@ mod tests {
         // The let `r` and let `n` may still have hints, but no hint should
         // appear *inside* the closure param (positions 9..15).
         let param_hint = h.iter().find(|h| {
-            h.position.line == 0
-                && h.position.character >= 9
-                && h.position.character <= 15
+            h.position.line == 0 && h.position.character >= 9 && h.position.character <= 15
         });
         assert!(
             param_hint.is_none(),

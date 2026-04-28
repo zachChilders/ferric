@@ -1,21 +1,21 @@
+use ferric_async::lower_async;
 use ferric_common::{
     ExhaustivenessError, ExhaustivenessResult, Interner, LexResult, ManifestResult, ModuleResult,
     ParseResult, ResolveResult, Symbol, TypeResult,
 };
+use ferric_diagnostics::Renderer;
+use ferric_exhaust::check_exhaustiveness;
+use ferric_infer::typecheck;
 use ferric_lexer::lex;
+use ferric_manifest::load_manifest;
+use ferric_module::resolve_modules;
 use ferric_parser::parse_with_interner;
 use ferric_resolve::{resolve_with_imports_and_builtins, resolve_with_natives_and_builtins};
-use ferric_async::lower_async;
-use ferric_infer::typecheck;
-use ferric_traits::build_registry;
-use ferric_exhaust::check_exhaustiveness;
-use ferric_vm::{BytecodeVM, Executor, Value};
 use ferric_stdlib::{
     NativeRegistry, async_intrinsic_param_table, builtin_enum_table, register_stdlib,
 };
-use ferric_manifest::load_manifest;
-use ferric_module::resolve_modules;
-use ferric_diagnostics::Renderer;
+use ferric_traits::build_registry;
+use ferric_vm::{BytecodeVM, Executor, Value};
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -66,11 +66,10 @@ fn main() {
 /// External tools (LSPs, formatters, linters) consume Ferric's AST through
 /// this entry point. No later stage runs.
 fn dump_ast(filename: &str) {
-    let source = fs::read_to_string(filename)
-        .unwrap_or_else(|e| {
-            eprintln!("Error reading file '{filename}': {e}");
-            process::exit(1);
-        });
+    let source = fs::read_to_string(filename).unwrap_or_else(|e| {
+        eprintln!("Error reading file '{filename}': {e}");
+        process::exit(1);
+    });
 
     let mut interner = Interner::new();
     let lex_result = lex(&source, &mut interner);
@@ -88,11 +87,10 @@ fn dump_ast(filename: &str) {
 }
 
 fn run_file(filename: &str) {
-    let source = fs::read_to_string(filename)
-        .unwrap_or_else(|e| {
-            eprintln!("Error reading file '{filename}': {e}");
-            process::exit(1);
-        });
+    let source = fs::read_to_string(filename).unwrap_or_else(|e| {
+        eprintln!("Error reading file '{filename}': {e}");
+        process::exit(1);
+    });
 
     // Create interner
     let mut interner = Interner::new();
@@ -175,7 +173,8 @@ fn run_file(filename: &str) {
     }
 
     // Compile to bytecode.
-    let program = ferric_compiler::compile(&async_result.ast, &resolve_result, &type_result, &interner);
+    let program =
+        ferric_compiler::compile(&async_result.ast, &resolve_result, &type_result, &interner);
 
     // Create VM
     let mut vm: Box<dyn Executor> = Box::new(BytecodeVM::new());
@@ -342,12 +341,8 @@ fn run_session(source: &str) -> Result<(), String> {
         eprint!("{}", r.render_async_warning(warn));
     }
 
-    let program = ferric_compiler::compile(
-        &async_result.ast,
-        &resolve_result,
-        &type_result,
-        &interner,
-    );
+    let program =
+        ferric_compiler::compile(&async_result.ast, &resolve_result, &type_result, &interner);
     let mut vm: Box<dyn Executor> = Box::new(BytecodeVM::new());
     match vm.run(program, natives, &interner) {
         Ok(value) => {

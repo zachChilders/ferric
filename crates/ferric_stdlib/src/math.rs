@@ -155,7 +155,11 @@ fn builtin_math_div_floor(args: &[NativeValue]) -> Result<NativeValue, String> {
         .checked_div(b)
         .ok_or_else(|| "MathError::Overflow: div_floor overflowed".to_string())?;
     let r = a % b;
-    let adj = if (r != 0) && ((r < 0) != (b < 0)) { 1 } else { 0 };
+    let adj = if (r != 0) && ((r < 0) != (b < 0)) {
+        1
+    } else {
+        0
+    };
     q.checked_sub(adj)
         .map(NativeValue::Int)
         .ok_or_else(|| "MathError::Overflow: div_floor overflowed".to_string())
@@ -171,7 +175,11 @@ fn builtin_math_div_ceil(args: &[NativeValue]) -> Result<NativeValue, String> {
     let q = a / b;
     let r = a % b;
     // If remainder is non-zero and signs of (r) and (b) match, add one.
-    let adj = if (r != 0) && ((r < 0) == (b < 0)) { 1 } else { 0 };
+    let adj = if (r != 0) && ((r < 0) == (b < 0)) {
+        1
+    } else {
+        0
+    };
     q.checked_add(adj)
         .map(NativeValue::Int)
         .ok_or_else(|| "MathError::Overflow: div_ceil overflowed".to_string())
@@ -276,7 +284,9 @@ fn builtin_math_log(args: &[NativeValue]) -> Result<NativeValue, String> {
     let n = expect_float(&args[0])?;
     let base = expect_float(&args[1])?;
     if n <= 0.0 {
-        return Err(format!("MathError::LogOfNonPositive: log({n}) is undefined"));
+        return Err(format!(
+            "MathError::LogOfNonPositive: log({n}) is undefined"
+        ));
     }
     if base <= 0.0 || base == 1.0 {
         return Err(format!(
@@ -299,7 +309,9 @@ fn builtin_math_log2(args: &[NativeValue]) -> Result<NativeValue, String> {
     check_arg_count(args, 1)?;
     let n = expect_float(&args[0])?;
     if n <= 0.0 {
-        return Err(format!("MathError::LogOfNonPositive: log2({n}) is undefined"));
+        return Err(format!(
+            "MathError::LogOfNonPositive: log2({n}) is undefined"
+        ));
     }
     Ok(NativeValue::Float(n.log2()))
 }
@@ -308,7 +320,9 @@ fn builtin_math_log10(args: &[NativeValue]) -> Result<NativeValue, String> {
     check_arg_count(args, 1)?;
     let n = expect_float(&args[0])?;
     if n <= 0.0 {
-        return Err(format!("MathError::LogOfNonPositive: log10({n}) is undefined"));
+        return Err(format!(
+            "MathError::LogOfNonPositive: log10({n}) is undefined"
+        ));
     }
     Ok(NativeValue::Float(n.log10()))
 }
@@ -451,66 +465,66 @@ pub fn register(registry: &mut NativeRegistry, interner: &mut Interner) {
     type Entry = (&'static str, &'static [&'static str], crate::NativeFn);
     let entries: &[Entry] = &[
         // Integer
-        ("math_abs",          &["n"],                 builtin_math_abs),
-        ("math_min",          &["a", "b"],            builtin_math_min),
-        ("math_max",          &["a", "b"],            builtin_math_max),
-        ("math_clamp",        &["n", "low", "high"],  builtin_math_clamp),
-        ("math_pow",          &["base", "exp"],       builtin_math_pow),
-        ("math_gcd",          &["a", "b"],            builtin_math_gcd),
-        ("math_lcm",          &["a", "b"],            builtin_math_lcm),
-        ("math_div_floor",    &["a", "b"],            builtin_math_div_floor),
-        ("math_div_ceil",     &["a", "b"],            builtin_math_div_ceil),
-        ("math_rem_euclean",  &["a", "b"],            builtin_math_rem_euclean),
+        ("math_abs", &["n"], builtin_math_abs),
+        ("math_min", &["a", "b"], builtin_math_min),
+        ("math_max", &["a", "b"], builtin_math_max),
+        ("math_clamp", &["n", "low", "high"], builtin_math_clamp),
+        ("math_pow", &["base", "exp"], builtin_math_pow),
+        ("math_gcd", &["a", "b"], builtin_math_gcd),
+        ("math_lcm", &["a", "b"], builtin_math_lcm),
+        ("math_div_floor", &["a", "b"], builtin_math_div_floor),
+        ("math_div_ceil", &["a", "b"], builtin_math_div_ceil),
+        ("math_rem_euclean", &["a", "b"], builtin_math_rem_euclean),
         // Float
-        ("math_abs_f",        &["n"],                 builtin_math_abs_f),
-        ("math_min_f",        &["a", "b"],            builtin_math_min_f),
-        ("math_max_f",        &["a", "b"],            builtin_math_max_f),
-        ("math_clamp_f",      &["n", "low", "high"],  builtin_math_clamp_f),
-        ("math_floor",        &["n"],                 builtin_math_floor),
-        ("math_ceil",         &["n"],                 builtin_math_ceil),
-        ("math_round",        &["n"],                 builtin_math_round),
-        ("math_trunc",        &["n"],                 builtin_math_trunc),
-        ("math_fract",        &["n"],                 builtin_math_fract),
-        ("math_sqrt",         &["n"],                 builtin_math_sqrt),
-        ("math_cbrt",         &["n"],                 builtin_math_cbrt),
-        ("math_pow_f",        &["base", "exp"],       builtin_math_pow_f),
-        ("math_log",          &["n", "base"],         builtin_math_log),
-        ("math_ln",           &["n"],                 builtin_math_ln),
-        ("math_log2",         &["n"],                 builtin_math_log2),
-        ("math_log10",        &["n"],                 builtin_math_log10),
-        ("math_exp",          &["n"],                 builtin_math_exp),
-        ("math_sin",          &["n"],                 builtin_math_sin),
-        ("math_cos",          &["n"],                 builtin_math_cos),
-        ("math_tan",          &["n"],                 builtin_math_tan),
-        ("math_asin",         &["n"],                 builtin_math_asin),
-        ("math_acos",         &["n"],                 builtin_math_acos),
-        ("math_atan",         &["n"],                 builtin_math_atan),
-        ("math_atan2",        &["y", "x"],            builtin_math_atan2),
-        ("math_hypot",        &["a", "b"],            builtin_math_hypot),
-        ("math_is_nan",       &["n"],                 builtin_math_is_nan),
-        ("math_is_finite",    &["n"],                 builtin_math_is_finite),
-        ("math_is_inf",       &["n"],                 builtin_math_is_inf),
+        ("math_abs_f", &["n"], builtin_math_abs_f),
+        ("math_min_f", &["a", "b"], builtin_math_min_f),
+        ("math_max_f", &["a", "b"], builtin_math_max_f),
+        ("math_clamp_f", &["n", "low", "high"], builtin_math_clamp_f),
+        ("math_floor", &["n"], builtin_math_floor),
+        ("math_ceil", &["n"], builtin_math_ceil),
+        ("math_round", &["n"], builtin_math_round),
+        ("math_trunc", &["n"], builtin_math_trunc),
+        ("math_fract", &["n"], builtin_math_fract),
+        ("math_sqrt", &["n"], builtin_math_sqrt),
+        ("math_cbrt", &["n"], builtin_math_cbrt),
+        ("math_pow_f", &["base", "exp"], builtin_math_pow_f),
+        ("math_log", &["n", "base"], builtin_math_log),
+        ("math_ln", &["n"], builtin_math_ln),
+        ("math_log2", &["n"], builtin_math_log2),
+        ("math_log10", &["n"], builtin_math_log10),
+        ("math_exp", &["n"], builtin_math_exp),
+        ("math_sin", &["n"], builtin_math_sin),
+        ("math_cos", &["n"], builtin_math_cos),
+        ("math_tan", &["n"], builtin_math_tan),
+        ("math_asin", &["n"], builtin_math_asin),
+        ("math_acos", &["n"], builtin_math_acos),
+        ("math_atan", &["n"], builtin_math_atan),
+        ("math_atan2", &["y", "x"], builtin_math_atan2),
+        ("math_hypot", &["a", "b"], builtin_math_hypot),
+        ("math_is_nan", &["n"], builtin_math_is_nan),
+        ("math_is_finite", &["n"], builtin_math_is_finite),
+        ("math_is_inf", &["n"], builtin_math_is_inf),
         // Constants (zero-arg)
-        ("math_PI",           &[],                    builtin_math_pi),
-        ("math_E",            &[],                    builtin_math_e),
-        ("math_TAU",          &[],                    builtin_math_tau),
-        ("math_INF",          &[],                    builtin_math_inf),
-        ("math_NAN",          &[],                    builtin_math_nan),
+        ("math_PI", &[], builtin_math_pi),
+        ("math_E", &[], builtin_math_e),
+        ("math_TAU", &[], builtin_math_tau),
+        ("math_INF", &[], builtin_math_inf),
+        ("math_NAN", &[], builtin_math_nan),
         // Conversion
-        ("math_int_to_float", &["n"],                 builtin_math_int_to_float),
-        ("math_float_to_int", &["n"],                 builtin_math_float_to_int),
+        ("math_int_to_float", &["n"], builtin_math_int_to_float),
+        ("math_float_to_int", &["n"], builtin_math_float_to_int),
         // Unprefixed aliases — short names for the most common ops. Most
         // share the prefixed impl; sqrt/pow/floor/ceil have different ABIs
         // from their `math_*` siblings (return raw values, not Result), so
         // they delegate to the standalone `crate::builtin_*` impls.
-        ("abs",            &["n"],                 builtin_math_abs),
-        ("min",            &["a", "b"],            builtin_math_min),
-        ("max",            &["a", "b"],            builtin_math_max),
-        ("int_to_float",   &["n"],                 builtin_math_int_to_float),
-        ("sqrt",           &["n"],                 crate::builtin_sqrt),
-        ("pow",            &["base", "exp"],       crate::builtin_pow),
-        ("floor",          &["n"],                 crate::builtin_floor),
-        ("ceil",           &["n"],                 crate::builtin_ceil),
+        ("abs", &["n"], builtin_math_abs),
+        ("min", &["a", "b"], builtin_math_min),
+        ("max", &["a", "b"], builtin_math_max),
+        ("int_to_float", &["n"], builtin_math_int_to_float),
+        ("sqrt", &["n"], crate::builtin_sqrt),
+        ("pow", &["base", "exp"], crate::builtin_pow),
+        ("floor", &["n"], crate::builtin_floor),
+        ("ceil", &["n"], crate::builtin_ceil),
     ];
     for (name, params, f) in entries {
         registry.register_named(interner, name, params, *f);
@@ -598,7 +612,10 @@ mod tests {
 
     #[test]
     fn pow_basics() {
-        assert_eq!(unwrap_int(builtin_math_pow(&[int(2), int(10)]).unwrap()), 1024);
+        assert_eq!(
+            unwrap_int(builtin_math_pow(&[int(2), int(10)]).unwrap()),
+            1024
+        );
         assert_eq!(unwrap_int(builtin_math_pow(&[int(3), int(0)]).unwrap()), 1);
     }
 
@@ -618,7 +635,10 @@ mod tests {
         assert_eq!(unwrap_int(builtin_math_gcd(&[int(12), int(8)]).unwrap()), 4);
         assert_eq!(unwrap_int(builtin_math_gcd(&[int(0), int(5)]).unwrap()), 5);
         assert_eq!(unwrap_int(builtin_math_gcd(&[int(0), int(0)]).unwrap()), 0);
-        assert_eq!(unwrap_int(builtin_math_gcd(&[int(-12), int(8)]).unwrap()), 4);
+        assert_eq!(
+            unwrap_int(builtin_math_gcd(&[int(-12), int(8)]).unwrap()),
+            4
+        );
     }
 
     #[test]
@@ -776,23 +796,15 @@ mod tests {
             2.0
         ));
         assert!(approx_eq(
-            unwrap_float(
-                builtin_math_clamp_f(&[float(5.0), float(0.0), float(3.0)]).unwrap()
-            ),
+            unwrap_float(builtin_math_clamp_f(&[float(5.0), float(0.0), float(3.0)]).unwrap()),
             3.0
         ));
     }
 
     #[test]
     fn clamp_f_invalid_bounds_errors() {
-        assert!(
-            builtin_math_clamp_f(&[float(1.0), float(5.0), float(0.0)])
-                .is_err()
-        );
-        assert!(
-            builtin_math_clamp_f(&[float(1.0), float(f64::NAN), float(0.0)])
-                .is_err()
-        );
+        assert!(builtin_math_clamp_f(&[float(1.0), float(5.0), float(0.0)]).is_err());
+        assert!(builtin_math_clamp_f(&[float(1.0), float(f64::NAN), float(0.0)]).is_err());
     }
 
     #[test]
@@ -947,7 +959,9 @@ mod tests {
 
     #[test]
     fn is_nan_finite_inf() {
-        assert!(unwrap_bool(builtin_math_is_nan(&[float(f64::NAN)]).unwrap()));
+        assert!(unwrap_bool(
+            builtin_math_is_nan(&[float(f64::NAN)]).unwrap()
+        ));
         assert!(!unwrap_bool(builtin_math_is_nan(&[float(1.0)]).unwrap()));
         assert!(!unwrap_bool(
             builtin_math_is_finite(&[float(f64::INFINITY)]).unwrap()
@@ -1044,21 +1058,54 @@ mod tests {
 
         let names = [
             // Integer
-            "math_abs", "math_min", "math_max", "math_clamp", "math_pow",
-            "math_gcd", "math_lcm", "math_div_floor", "math_div_ceil",
+            "math_abs",
+            "math_min",
+            "math_max",
+            "math_clamp",
+            "math_pow",
+            "math_gcd",
+            "math_lcm",
+            "math_div_floor",
+            "math_div_ceil",
             "math_rem_euclean",
             // Float
-            "math_abs_f", "math_min_f", "math_max_f", "math_clamp_f",
-            "math_floor", "math_ceil", "math_round", "math_trunc",
-            "math_fract", "math_sqrt", "math_cbrt", "math_pow_f",
-            "math_log", "math_ln", "math_log2", "math_log10", "math_exp",
-            "math_sin", "math_cos", "math_tan", "math_asin", "math_acos",
-            "math_atan", "math_atan2", "math_hypot", "math_is_nan",
-            "math_is_finite", "math_is_inf",
+            "math_abs_f",
+            "math_min_f",
+            "math_max_f",
+            "math_clamp_f",
+            "math_floor",
+            "math_ceil",
+            "math_round",
+            "math_trunc",
+            "math_fract",
+            "math_sqrt",
+            "math_cbrt",
+            "math_pow_f",
+            "math_log",
+            "math_ln",
+            "math_log2",
+            "math_log10",
+            "math_exp",
+            "math_sin",
+            "math_cos",
+            "math_tan",
+            "math_asin",
+            "math_acos",
+            "math_atan",
+            "math_atan2",
+            "math_hypot",
+            "math_is_nan",
+            "math_is_finite",
+            "math_is_inf",
             // Constants
-            "math_PI", "math_E", "math_TAU", "math_INF", "math_NAN",
+            "math_PI",
+            "math_E",
+            "math_TAU",
+            "math_INF",
+            "math_NAN",
             // Conversion
-            "math_int_to_float", "math_float_to_int",
+            "math_int_to_float",
+            "math_float_to_int",
         ];
 
         for name in names {

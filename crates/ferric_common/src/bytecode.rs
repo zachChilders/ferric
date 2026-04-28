@@ -10,8 +10,8 @@
 //! and `TailCall` opcodes; both are deferred — `Call` dispatches polymorphically
 //! on the popped callable.
 
+use crate::Symbol;
 use serde::{Deserialize, Serialize};
-use crate::{Symbol};
 
 /// A compiled function (or the entry chunk for top-level script code).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -23,7 +23,11 @@ pub struct Chunk {
 
 impl Chunk {
     pub fn new(name: Symbol) -> Self {
-        Self { code: Vec::new(), constants: Vec::new(), name }
+        Self {
+            code: Vec::new(),
+            constants: Vec::new(),
+            name,
+        }
     }
 }
 

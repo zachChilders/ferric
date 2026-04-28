@@ -137,7 +137,13 @@ impl Lowerer {
                 ..f.clone()
             }),
             Item::AsyncFn(decl) => self.lower_async_fn(decl),
-            Item::ImplBlock { id, trait_name, type_name, methods, span } => {
+            Item::ImplBlock {
+                id,
+                trait_name,
+                type_name,
+                methods,
+                span,
+            } => {
                 let methods = methods
                     .iter()
                     .map(|m| ImplMethod {
@@ -194,11 +200,10 @@ impl Lowerer {
         self.async_depth -= 1;
 
         if recurses {
-            self.errors
-                .push(AsyncLowerError::InfiniteAsyncRecursion {
-                    fn_name: f.name,
-                    span,
-                });
+            self.errors.push(AsyncLowerError::InfiniteAsyncRecursion {
+                fn_name: f.name,
+                span,
+            });
         }
 
         Item::AsyncFn(AsyncFnItem {
@@ -223,7 +228,14 @@ impl Lowerer {
 impl Lowerer {
     fn lower_stmt(&mut self, stmt: &Stmt) -> Stmt {
         match stmt {
-            Stmt::Let { name, mutable, ty, init, id, span } => Stmt::Let {
+            Stmt::Let {
+                name,
+                mutable,
+                ty,
+                init,
+                id,
+                span,
+            } => Stmt::Let {
                 name: *name,
                 mutable: *mutable,
                 ty: ty.clone(),
@@ -231,13 +243,20 @@ impl Lowerer {
                 id: *id,
                 span: *span,
             },
-            Stmt::Assign { target, value, id, span } => Stmt::Assign {
+            Stmt::Assign {
+                target,
+                value,
+                id,
+                span,
+            } => Stmt::Assign {
                 target: self.lower_expr(target),
                 value: self.lower_expr(value),
                 id: *id,
                 span: *span,
             },
-            Stmt::Expr { expr } => Stmt::Expr { expr: self.lower_expr(expr) },
+            Stmt::Expr { expr } => Stmt::Expr {
+                expr: self.lower_expr(expr),
+            },
             Stmt::Require(req) => Stmt::Require(RequireStmt {
                 span: req.span,
                 mode: req.mode.clone(),
@@ -245,7 +264,14 @@ impl Lowerer {
                 message: req.message.as_ref().map(|m| Box::new(self.lower_expr(m))),
                 set_fn: req.set_fn.as_ref().map(|s| Box::new(self.lower_expr(s))),
             }),
-            Stmt::For { var, var_id, iter, body, id, span } => Stmt::For {
+            Stmt::For {
+                var,
+                var_id,
+                iter,
+                body,
+                id,
+                span,
+            } => Stmt::For {
                 var: *var,
                 var_id: *var_id,
                 iter: self.lower_expr(iter),
@@ -267,20 +293,36 @@ impl Lowerer {
             | Expr::Break { .. }
             | Expr::Continue { .. } => expr.clone(),
 
-            Expr::Binary { op, left, right, id, span } => Expr::Binary {
+            Expr::Binary {
+                op,
+                left,
+                right,
+                id,
+                span,
+            } => Expr::Binary {
                 op: *op,
                 left: Box::new(self.lower_expr(left)),
                 right: Box::new(self.lower_expr(right)),
                 id: *id,
                 span: *span,
             },
-            Expr::Unary { op, expr: inner, id, span } => Expr::Unary {
+            Expr::Unary {
+                op,
+                expr: inner,
+                id,
+                span,
+            } => Expr::Unary {
                 op: *op,
                 expr: Box::new(self.lower_expr(inner)),
                 id: *id,
                 span: *span,
             },
-            Expr::Call { callee, args, id, span } => Expr::Call {
+            Expr::Call {
+                callee,
+                args,
+                id,
+                span,
+            } => Expr::Call {
                 callee: Box::new(self.lower_expr(callee)),
                 args: args
                     .iter()
@@ -293,14 +335,25 @@ impl Lowerer {
                 id: *id,
                 span: *span,
             },
-            Expr::If { cond, then_branch, else_branch, id, span } => Expr::If {
+            Expr::If {
+                cond,
+                then_branch,
+                else_branch,
+                id,
+                span,
+            } => Expr::If {
                 cond: Box::new(self.lower_expr(cond)),
                 then_branch: Box::new(self.lower_expr(then_branch)),
                 else_branch: else_branch.as_ref().map(|e| Box::new(self.lower_expr(e))),
                 id: *id,
                 span: *span,
             },
-            Expr::Block { stmts, expr: tail, id, span } => Expr::Block {
+            Expr::Block {
+                stmts,
+                expr: tail,
+                id,
+                span,
+            } => Expr::Block {
                 stmts: stmts.iter().map(|s| self.lower_stmt(s)).collect(),
                 expr: tail.as_ref().map(|e| Box::new(self.lower_expr(e))),
                 id: *id,
@@ -311,7 +364,12 @@ impl Lowerer {
                 id: *id,
                 span: *span,
             },
-            Expr::While { cond, body, id, span } => Expr::While {
+            Expr::While {
+                cond,
+                body,
+                id,
+                span,
+            } => Expr::While {
                 cond: Box::new(self.lower_expr(cond)),
                 body: Box::new(self.lower_expr(body)),
                 id: *id,
@@ -322,25 +380,48 @@ impl Lowerer {
                 id: *id,
                 span: *span,
             },
-            Expr::Closure { params, body, id, span } => Expr::Closure {
+            Expr::Closure {
+                params,
+                body,
+                id,
+                span,
+            } => Expr::Closure {
                 params: params.clone(),
                 body: Box::new(self.lower_expr(body)),
                 id: *id,
                 span: *span,
             },
-            Expr::StructLit { name, fields, id, span } => Expr::StructLit {
+            Expr::StructLit {
+                name,
+                fields,
+                id,
+                span,
+            } => Expr::StructLit {
                 name: *name,
-                fields: fields.iter().map(|(n, e)| (*n, self.lower_expr(e))).collect(),
+                fields: fields
+                    .iter()
+                    .map(|(n, e)| (*n, self.lower_expr(e)))
+                    .collect(),
                 id: *id,
                 span: *span,
             },
-            Expr::FieldAccess { expr: e, field, id, span } => Expr::FieldAccess {
+            Expr::FieldAccess {
+                expr: e,
+                field,
+                id,
+                span,
+            } => Expr::FieldAccess {
                 expr: Box::new(self.lower_expr(e)),
                 field: *field,
                 id: *id,
                 span: *span,
             },
-            Expr::Match { scrutinee, arms, id, span } => Expr::Match {
+            Expr::Match {
+                scrutinee,
+                arms,
+                id,
+                span,
+            } => Expr::Match {
                 scrutinee: Box::new(self.lower_expr(scrutinee)),
                 arms: arms
                     .iter()
@@ -358,7 +439,13 @@ impl Lowerer {
                 id: *id,
                 span: *span,
             },
-            Expr::VariantCtor { enum_name, variant, args, id, span } => Expr::VariantCtor {
+            Expr::VariantCtor {
+                enum_name,
+                variant,
+                args,
+                id,
+                span,
+            } => Expr::VariantCtor {
                 enum_name: *enum_name,
                 variant: *variant,
                 args: args.iter().map(|a| self.lower_expr(a)).collect(),
@@ -370,13 +457,24 @@ impl Lowerer {
                 id: *id,
                 span: *span,
             },
-            Expr::Index { array, index, id, span } => Expr::Index {
+            Expr::Index {
+                array,
+                index,
+                id,
+                span,
+            } => Expr::Index {
                 array: Box::new(self.lower_expr(array)),
                 index: Box::new(self.lower_expr(index)),
                 id: *id,
                 span: *span,
             },
-            Expr::MethodCall { receiver, method, args, id, span } => Expr::MethodCall {
+            Expr::MethodCall {
+                receiver,
+                method,
+                args,
+                id,
+                span,
+            } => Expr::MethodCall {
                 receiver: Box::new(self.lower_expr(receiver)),
                 method: *method,
                 args: args
@@ -426,9 +524,7 @@ impl Lowerer {
             .iter()
             .map(|p| match p {
                 ShellPart::Literal(s) => ShellPart::Literal(s.clone()),
-                ShellPart::Interpolated(e) => {
-                    ShellPart::Interpolated(Box::new(self.lower_expr(e)))
-                }
+                ShellPart::Interpolated(e) => ShellPart::Interpolated(Box::new(self.lower_expr(e))),
             })
             .collect();
 
@@ -437,7 +533,11 @@ impl Lowerer {
                 span,
                 kind: AsyncWarningKind::BlockingShell,
             });
-            return Expr::Shell { parts: lowered_parts, id, span };
+            return Expr::Shell {
+                parts: lowered_parts,
+                id,
+                span,
+            };
         }
 
         // Inside an async context: rewrite to `await shell_run_async(cmd: <s>)`.
@@ -507,7 +607,12 @@ fn body_directly_self_awaits(body: &Expr, fn_name: Symbol) -> bool {
 
 fn unwrap_block_tail(expr: &Expr) -> &Expr {
     let mut cur = expr;
-    while let Expr::Block { expr: Some(tail), stmts, .. } = cur {
+    while let Expr::Block {
+        expr: Some(tail),
+        stmts,
+        ..
+    } = cur
+    {
         if !stmts.is_empty() {
             return cur;
         }
@@ -548,10 +653,7 @@ fn walk_node_ids_item(item: &Item, f: &mut impl FnMut(NodeId)) {
                 f(tm.id);
             }
         }
-        Item::StructDef { .. }
-        | Item::EnumDef { .. }
-        | Item::Import(_)
-        | Item::TypeAlias(_) => {}
+        Item::StructDef { .. } | Item::EnumDef { .. } | Item::Import(_) | Item::TypeAlias(_) => {}
     }
 }
 
@@ -598,14 +700,21 @@ fn walk_node_ids_expr(expr: &Expr, f: &mut impl FnMut(NodeId)) {
                 walk_node_ids_expr(&a.value, f);
             }
         }
-        Expr::If { cond, then_branch, else_branch, .. } => {
+        Expr::If {
+            cond,
+            then_branch,
+            else_branch,
+            ..
+        } => {
             walk_node_ids_expr(cond, f);
             walk_node_ids_expr(then_branch, f);
             if let Some(e) = else_branch {
                 walk_node_ids_expr(e, f);
             }
         }
-        Expr::Block { stmts, expr: tail, .. } => {
+        Expr::Block {
+            stmts, expr: tail, ..
+        } => {
             for s in stmts {
                 walk_node_ids_stmt(s, f);
             }
@@ -638,7 +747,9 @@ fn walk_node_ids_expr(expr: &Expr, f: &mut impl FnMut(NodeId)) {
             }
         }
         Expr::FieldAccess { expr: e, .. } => walk_node_ids_expr(e, f),
-        Expr::Match { scrutinee, arms, .. } => {
+        Expr::Match {
+            scrutinee, arms, ..
+        } => {
             walk_node_ids_expr(scrutinee, f);
             for arm in arms {
                 walk_node_ids_expr(&arm.body, f);

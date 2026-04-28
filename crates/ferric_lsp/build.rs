@@ -21,8 +21,7 @@ fn main() {
         .join("syntaxes")
         .join("ferric.tmLanguage.json");
 
-    fs::create_dir_all(out_path.parent().unwrap())
-        .expect("create syntaxes/ directory");
+    fs::create_dir_all(out_path.parent().unwrap()).expect("create syntaxes/ directory");
 
     let grammar = build_grammar();
     let json = serde_json::to_string_pretty(&grammar).expect("serialise grammar");

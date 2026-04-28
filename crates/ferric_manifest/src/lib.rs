@@ -166,9 +166,18 @@ ferric-json = "0.8.3"
         let result = load_manifest(dir.path());
         assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
         let m = result.manifest.expect("manifest present");
-        assert_eq!(m.submodules, vec!["src/db".to_string(), "src/http".to_string()]);
-        assert_eq!(m.dependencies.get("ferric-http").map(String::as_str), Some("1.2.0"));
-        assert_eq!(m.dependencies.get("ferric-json").map(String::as_str), Some("0.8.3"));
+        assert_eq!(
+            m.submodules,
+            vec!["src/db".to_string(), "src/http".to_string()]
+        );
+        assert_eq!(
+            m.dependencies.get("ferric-http").map(String::as_str),
+            Some("1.2.0")
+        );
+        assert_eq!(
+            m.dependencies.get("ferric-json").map(String::as_str),
+            Some("0.8.3")
+        );
     }
 
     #[test]
@@ -177,7 +186,12 @@ ferric-json = "0.8.3"
         fs::write(dir.path().join("Ferric.toml"), "this is = = invalid").unwrap();
         let result = load_manifest(dir.path());
         assert!(result.manifest.is_none());
-        assert!(result.errors.iter().any(|e| matches!(e, ManifestError::ParseError { .. })));
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|e| matches!(e, ManifestError::ParseError { .. }))
+        );
     }
 
     #[test]
@@ -224,7 +238,12 @@ version = "0.1.0"
             .unwrap()
             .as_nanos();
         let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-        p.push(format!("ferric-manifest-test-{}-{}-{}", std::process::id(), nonce, n));
+        p.push(format!(
+            "ferric-manifest-test-{}-{}-{}",
+            std::process::id(),
+            nonce,
+            n
+        ));
         std::fs::create_dir_all(&p).unwrap();
         TempDir { path: p }
     }

@@ -343,22 +343,86 @@ impl BytecodeVM {
                 }
 
                 // ---------------- Comparisons ----------------------------
-                Op::EqInt => { let b = self.pop_int()?;   let a = self.pop_int()?;   self.stack.push(Value::new_bool(a == b)); }
-                Op::NeInt => { let b = self.pop_int()?;   let a = self.pop_int()?;   self.stack.push(Value::new_bool(a != b)); }
-                Op::LtInt => { let b = self.pop_int()?;   let a = self.pop_int()?;   self.stack.push(Value::new_bool(a <  b)); }
-                Op::GtInt => { let b = self.pop_int()?;   let a = self.pop_int()?;   self.stack.push(Value::new_bool(a >  b)); }
-                Op::LeInt => { let b = self.pop_int()?;   let a = self.pop_int()?;   self.stack.push(Value::new_bool(a <= b)); }
-                Op::GeInt => { let b = self.pop_int()?;   let a = self.pop_int()?;   self.stack.push(Value::new_bool(a >= b)); }
-                Op::EqFloat => { let b = self.pop_float()?; let a = self.pop_float()?; self.stack.push(Value::new_bool(a == b)); }
-                Op::NeFloat => { let b = self.pop_float()?; let a = self.pop_float()?; self.stack.push(Value::new_bool(a != b)); }
-                Op::LtFloat => { let b = self.pop_float()?; let a = self.pop_float()?; self.stack.push(Value::new_bool(a <  b)); }
-                Op::GtFloat => { let b = self.pop_float()?; let a = self.pop_float()?; self.stack.push(Value::new_bool(a >  b)); }
-                Op::LeFloat => { let b = self.pop_float()?; let a = self.pop_float()?; self.stack.push(Value::new_bool(a <= b)); }
-                Op::GeFloat => { let b = self.pop_float()?; let a = self.pop_float()?; self.stack.push(Value::new_bool(a >= b)); }
-                Op::EqBool => { let b = self.pop_bool()?; let a = self.pop_bool()?; self.stack.push(Value::new_bool(a == b)); }
-                Op::NeBool => { let b = self.pop_bool()?; let a = self.pop_bool()?; self.stack.push(Value::new_bool(a != b)); }
-                Op::EqStr  => { let b = self.pop_str()?;  let a = self.pop_str()?;  self.stack.push(Value::new_bool(a == b)); }
-                Op::NeStr  => { let b = self.pop_str()?;  let a = self.pop_str()?;  self.stack.push(Value::new_bool(a != b)); }
+                Op::EqInt => {
+                    let b = self.pop_int()?;
+                    let a = self.pop_int()?;
+                    self.stack.push(Value::new_bool(a == b));
+                }
+                Op::NeInt => {
+                    let b = self.pop_int()?;
+                    let a = self.pop_int()?;
+                    self.stack.push(Value::new_bool(a != b));
+                }
+                Op::LtInt => {
+                    let b = self.pop_int()?;
+                    let a = self.pop_int()?;
+                    self.stack.push(Value::new_bool(a < b));
+                }
+                Op::GtInt => {
+                    let b = self.pop_int()?;
+                    let a = self.pop_int()?;
+                    self.stack.push(Value::new_bool(a > b));
+                }
+                Op::LeInt => {
+                    let b = self.pop_int()?;
+                    let a = self.pop_int()?;
+                    self.stack.push(Value::new_bool(a <= b));
+                }
+                Op::GeInt => {
+                    let b = self.pop_int()?;
+                    let a = self.pop_int()?;
+                    self.stack.push(Value::new_bool(a >= b));
+                }
+                Op::EqFloat => {
+                    let b = self.pop_float()?;
+                    let a = self.pop_float()?;
+                    self.stack.push(Value::new_bool(a == b));
+                }
+                Op::NeFloat => {
+                    let b = self.pop_float()?;
+                    let a = self.pop_float()?;
+                    self.stack.push(Value::new_bool(a != b));
+                }
+                Op::LtFloat => {
+                    let b = self.pop_float()?;
+                    let a = self.pop_float()?;
+                    self.stack.push(Value::new_bool(a < b));
+                }
+                Op::GtFloat => {
+                    let b = self.pop_float()?;
+                    let a = self.pop_float()?;
+                    self.stack.push(Value::new_bool(a > b));
+                }
+                Op::LeFloat => {
+                    let b = self.pop_float()?;
+                    let a = self.pop_float()?;
+                    self.stack.push(Value::new_bool(a <= b));
+                }
+                Op::GeFloat => {
+                    let b = self.pop_float()?;
+                    let a = self.pop_float()?;
+                    self.stack.push(Value::new_bool(a >= b));
+                }
+                Op::EqBool => {
+                    let b = self.pop_bool()?;
+                    let a = self.pop_bool()?;
+                    self.stack.push(Value::new_bool(a == b));
+                }
+                Op::NeBool => {
+                    let b = self.pop_bool()?;
+                    let a = self.pop_bool()?;
+                    self.stack.push(Value::new_bool(a != b));
+                }
+                Op::EqStr => {
+                    let b = self.pop_str()?;
+                    let a = self.pop_str()?;
+                    self.stack.push(Value::new_bool(a == b));
+                }
+                Op::NeStr => {
+                    let b = self.pop_str()?;
+                    let a = self.pop_str()?;
+                    self.stack.push(Value::new_bool(a != b));
+                }
 
                 // ---------------- Boolean logic --------------------------
                 Op::Not => {
@@ -734,7 +798,10 @@ impl BytecodeVM {
             // we'll write the real Ready value back when the body completes.
             let taken = std::mem::replace(&mut *state, AsyncState::Ready(Value::Unit));
             match taken {
-                AsyncState::Pending { chunk_idx, captures } => (chunk_idx, captures),
+                AsyncState::Pending {
+                    chunk_idx,
+                    captures,
+                } => (chunk_idx, captures),
                 AsyncState::Ready(v) => return Ok(v),
             }
         };
@@ -819,7 +886,10 @@ impl BytecodeVM {
                     self.stack.push(Value::new_handle(id));
                     return Ok(());
                 }
-                AsyncState::Pending { chunk_idx, captures } => (chunk_idx, captures),
+                AsyncState::Pending {
+                    chunk_idx,
+                    captures,
+                } => (chunk_idx, captures),
             }
         };
 
@@ -831,8 +901,7 @@ impl BytecodeVM {
         let scheduler = Arc::clone(&self.scheduler);
 
         let join_handle = thread::spawn(move || {
-            let mut worker =
-                BytecodeVM::worker(chunks, natives, interner, intrinsics, scheduler);
+            let mut worker = BytecodeVM::worker(chunks, natives, interner, intrinsics, scheduler);
             worker.run_chunk_to_completion(chunk_idx, captures)
         });
 
@@ -956,9 +1025,7 @@ fn value_to_native(v: &Value) -> NativeValue {
         Value::Str(s) => NativeValue::Str(s.clone()),
         Value::Unit => NativeValue::Unit,
         Value::ShellOutput(out) => NativeValue::ShellOutput(out.clone()),
-        Value::Array(elems) => {
-            NativeValue::Array(elems.iter().map(value_to_native).collect())
-        }
+        Value::Array(elems) => NativeValue::Array(elems.iter().map(value_to_native).collect()),
         // Functions, structs, enums, and closures don't cross the native
         // boundary; surface them as Unit so a wrong-type native call produces
         // a descriptive error inside the native rather than a panic here.
@@ -985,9 +1052,7 @@ fn native_to_value(v: NativeValue) -> Value {
         NativeValue::Str(s) => Value::new_str(s),
         NativeValue::Unit => Value::new_unit(),
         NativeValue::ShellOutput(out) => Value::ShellOutput(out),
-        NativeValue::Array(elems)
-        | NativeValue::List(elems)
-        | NativeValue::Tuple(elems) => {
+        NativeValue::Array(elems) | NativeValue::List(elems) | NativeValue::Tuple(elems) => {
             Value::new_array(elems.into_iter().map(native_to_value).collect())
         }
         // Extended stdlib variants land in the VM as opaque Unit for now —
@@ -1080,10 +1145,10 @@ fn type_mismatch(expected: &str, found: &Value) -> RuntimeError {
 mod tests {
     use super::*;
     use ferric_common::{Interner, Symbol};
+    use ferric_infer::typecheck;
     use ferric_lexer::lex;
     use ferric_parser::parse;
     use ferric_resolve::resolve_with_natives;
-    use ferric_infer::typecheck;
     use ferric_stdlib::register_stdlib;
 
     fn run_source(src: &str) -> Result<Value, RuntimeError> {
@@ -1092,26 +1157,45 @@ mod tests {
         register_stdlib(&mut natives, &mut interner);
 
         let native_fns: Vec<(Symbol, Vec<Symbol>)> = vec![
-            (interner.intern("println"),         vec![interner.intern("s")]),
-            (interner.intern("print"),           vec![interner.intern("s")]),
-            (interner.intern("int_to_str"),      vec![interner.intern("n")]),
-            (interner.intern("float_to_str"),    vec![interner.intern("n")]),
-            (interner.intern("bool_to_str"),     vec![interner.intern("b")]),
-            (interner.intern("int_to_float"),    vec![interner.intern("n")]),
-            (interner.intern("shell_stdout"),    vec![interner.intern("output")]),
-            (interner.intern("shell_exit_code"), vec![interner.intern("output")]),
+            (interner.intern("println"), vec![interner.intern("s")]),
+            (interner.intern("print"), vec![interner.intern("s")]),
+            (interner.intern("int_to_str"), vec![interner.intern("n")]),
+            (interner.intern("float_to_str"), vec![interner.intern("n")]),
+            (interner.intern("bool_to_str"), vec![interner.intern("b")]),
+            (interner.intern("int_to_float"), vec![interner.intern("n")]),
+            (
+                interner.intern("shell_stdout"),
+                vec![interner.intern("output")],
+            ),
+            (
+                interner.intern("shell_exit_code"),
+                vec![interner.intern("output")],
+            ),
         ];
 
         let lex_result = lex(src, &mut interner);
         assert!(lex_result.errors.is_empty(), "lex: {:?}", lex_result.errors);
         let parse_result = parse(&lex_result);
-        assert!(parse_result.errors.is_empty(), "parse: {:?}", parse_result.errors);
+        assert!(
+            parse_result.errors.is_empty(),
+            "parse: {:?}",
+            parse_result.errors
+        );
         let resolve_result = resolve_with_natives(&parse_result, &native_fns);
-        assert!(resolve_result.errors.is_empty(), "resolve: {:?}", resolve_result.errors);
+        assert!(
+            resolve_result.errors.is_empty(),
+            "resolve: {:?}",
+            resolve_result.errors
+        );
         let registry = ferric_common::TraitRegistry::new();
         let type_result = typecheck(&parse_result, &resolve_result, &interner, &registry);
-        assert!(type_result.errors.is_empty(), "types: {:?}", type_result.errors);
-        let program = ferric_compiler::compile(&parse_result, &resolve_result, &type_result, &interner);
+        assert!(
+            type_result.errors.is_empty(),
+            "types: {:?}",
+            type_result.errors
+        );
+        let program =
+            ferric_compiler::compile(&parse_result, &resolve_result, &type_result, &interner);
 
         let mut vm = BytecodeVM::new();
         vm.run(program, natives, &interner)
@@ -1276,10 +1360,7 @@ fn name(c: Color) -> Str {
 }
 name(c: Color::Blue)
 ";
-        assert_eq!(
-            run_source(src).unwrap(),
-            Value::Str("other".to_string())
-        );
+        assert_eq!(run_source(src).unwrap(), Value::Str("other".to_string()));
     }
 
     #[test]
@@ -1307,10 +1388,7 @@ fn classify(p: Pt) -> Str {
 }
 classify(p: Pt { x: 3, y: 0 })
 ";
-        assert_eq!(
-            run_source(src).unwrap(),
-            Value::Str("x-axis".to_string())
-        );
+        assert_eq!(run_source(src).unwrap(), Value::Str("x-axis".to_string()));
     }
 
     #[test]

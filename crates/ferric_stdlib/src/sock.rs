@@ -36,7 +36,11 @@ use crate::{NativeRegistry, NativeValue};
 
 fn check_arg_count(args: &[NativeValue], expected: usize) -> Result<(), String> {
     if args.len() != expected {
-        Err(format!("expected {} argument(s), got {}", expected, args.len()))
+        Err(format!(
+            "expected {} argument(s), got {}",
+            expected,
+            args.len()
+        ))
     } else {
         Ok(())
     }
@@ -140,8 +144,8 @@ fn builtin_sock_tcp_connect(args: &[NativeValue]) -> Result<NativeValue, String>
     let port_i = expect_int(&args[1])?;
     let port = parse_port(port_i)?;
 
-    let stream = TcpStream::connect((host.as_str(), port))
-        .map_err(|e| map_io_err(&e, &host, port_i))?;
+    let stream =
+        TcpStream::connect((host.as_str(), port)).map_err(|e| map_io_err(&e, &host, port_i))?;
     Ok(NativeValue::TcpStream(Rc::new(RefCell::new(stream))))
 }
 
@@ -164,8 +168,8 @@ fn builtin_sock_tcp_connect_timeout(args: &[NativeValue]) -> Result<NativeValue,
         .next()
         .ok_or_else(|| format!("InvalidAddress: {host}:{port} resolved to no addresses"))?;
 
-    let stream = TcpStream::connect_timeout(&addr, dur)
-        .map_err(|e| map_io_err(&e, &host, port_i))?;
+    let stream =
+        TcpStream::connect_timeout(&addr, dur).map_err(|e| map_io_err(&e, &host, port_i))?;
     Ok(NativeValue::TcpStream(Rc::new(RefCell::new(stream))))
 }
 
@@ -366,8 +370,8 @@ fn builtin_sock_tcp_listen(args: &[NativeValue]) -> Result<NativeValue, String> 
     check_arg_count(args, 1)?;
     let port_i = expect_int(&args[0])?;
     let port = parse_port(port_i)?;
-    let listener = TcpListener::bind(("127.0.0.1", port))
-        .map_err(|e| map_io_err(&e, "127.0.0.1", port_i))?;
+    let listener =
+        TcpListener::bind(("127.0.0.1", port)).map_err(|e| map_io_err(&e, "127.0.0.1", port_i))?;
     Ok(NativeValue::TcpListener(Rc::new(listener)))
 }
 
@@ -376,8 +380,8 @@ fn builtin_sock_tcp_listen_addr(args: &[NativeValue]) -> Result<NativeValue, Str
     let addr = expect_str(&args[0])?.clone();
     let port_i = expect_int(&args[1])?;
     let port = parse_port(port_i)?;
-    let listener = TcpListener::bind((addr.as_str(), port))
-        .map_err(|e| map_io_err(&e, &addr, port_i))?;
+    let listener =
+        TcpListener::bind((addr.as_str(), port)).map_err(|e| map_io_err(&e, &addr, port_i))?;
     Ok(NativeValue::TcpListener(Rc::new(listener)))
 }
 
@@ -418,8 +422,8 @@ fn builtin_sock_udp_bind(args: &[NativeValue]) -> Result<NativeValue, String> {
     check_arg_count(args, 1)?;
     let port_i = expect_int(&args[0])?;
     let port = parse_port(port_i)?;
-    let socket = UdpSocket::bind(("127.0.0.1", port))
-        .map_err(|e| map_io_err(&e, "127.0.0.1", port_i))?;
+    let socket =
+        UdpSocket::bind(("127.0.0.1", port)).map_err(|e| map_io_err(&e, "127.0.0.1", port_i))?;
     Ok(NativeValue::UdpSocket(Rc::new(socket)))
 }
 
@@ -428,8 +432,8 @@ fn builtin_sock_udp_bind_addr(args: &[NativeValue]) -> Result<NativeValue, Strin
     let addr = expect_str(&args[0])?.clone();
     let port_i = expect_int(&args[1])?;
     let port = parse_port(port_i)?;
-    let socket = UdpSocket::bind((addr.as_str(), port))
-        .map_err(|e| map_io_err(&e, &addr, port_i))?;
+    let socket =
+        UdpSocket::bind((addr.as_str(), port)).map_err(|e| map_io_err(&e, &addr, port_i))?;
     Ok(NativeValue::UdpSocket(Rc::new(socket)))
 }
 
@@ -473,30 +477,54 @@ pub fn register(registry: &mut NativeRegistry, interner: &mut Interner) {
     type Entry = (&'static str, &'static [&'static str], crate::NativeFn);
     let entries: &[Entry] = &[
         // TCP client
-        ("sock_tcp_connect",         &["host", "port"],          builtin_sock_tcp_connect),
-        ("sock_tcp_connect_timeout", &["host", "port", "ms"],    builtin_sock_tcp_connect_timeout),
+        (
+            "sock_tcp_connect",
+            &["host", "port"],
+            builtin_sock_tcp_connect,
+        ),
+        (
+            "sock_tcp_connect_timeout",
+            &["host", "port", "ms"],
+            builtin_sock_tcp_connect_timeout,
+        ),
         // TCP stream ops
-        ("sock_read",          &["s", "buf"],         builtin_sock_read),
-        ("sock_read_exact",    &["s", "n"],           builtin_sock_read_exact),
-        ("sock_read_line",     &["s"],                builtin_sock_read_line),
-        ("sock_write",         &["s", "data"],        builtin_sock_write),
-        ("sock_write_all",     &["s", "data"],        builtin_sock_write_all),
-        ("sock_write_str",     &["s", "data"],        builtin_sock_write_str),
-        ("sock_flush",         &["s"],                builtin_sock_flush),
-        ("sock_close",         &["s"],                builtin_sock_close),
-        ("sock_set_timeout",   &["s", "ms"],          builtin_sock_set_timeout),
-        ("sock_local_addr",    &["s"],                builtin_sock_local_addr),
-        ("sock_peer_addr",     &["s"],                builtin_sock_peer_addr),
+        ("sock_read", &["s", "buf"], builtin_sock_read),
+        ("sock_read_exact", &["s", "n"], builtin_sock_read_exact),
+        ("sock_read_line", &["s"], builtin_sock_read_line),
+        ("sock_write", &["s", "data"], builtin_sock_write),
+        ("sock_write_all", &["s", "data"], builtin_sock_write_all),
+        ("sock_write_str", &["s", "data"], builtin_sock_write_str),
+        ("sock_flush", &["s"], builtin_sock_flush),
+        ("sock_close", &["s"], builtin_sock_close),
+        ("sock_set_timeout", &["s", "ms"], builtin_sock_set_timeout),
+        ("sock_local_addr", &["s"], builtin_sock_local_addr),
+        ("sock_peer_addr", &["s"], builtin_sock_peer_addr),
         // TCP server
-        ("sock_tcp_listen",      &["port"],           builtin_sock_tcp_listen),
-        ("sock_tcp_listen_addr", &["addr", "port"],   builtin_sock_tcp_listen_addr),
-        ("sock_accept",          &["l"],              builtin_sock_accept),
-        ("sock_accept_loop",     &["l", "handler"],   builtin_sock_accept_loop),
+        ("sock_tcp_listen", &["port"], builtin_sock_tcp_listen),
+        (
+            "sock_tcp_listen_addr",
+            &["addr", "port"],
+            builtin_sock_tcp_listen_addr,
+        ),
+        ("sock_accept", &["l"], builtin_sock_accept),
+        (
+            "sock_accept_loop",
+            &["l", "handler"],
+            builtin_sock_accept_loop,
+        ),
         // UDP
-        ("sock_udp_bind",      &["port"],             builtin_sock_udp_bind),
-        ("sock_udp_bind_addr", &["addr", "port"],     builtin_sock_udp_bind_addr),
-        ("sock_udp_send",      &["s", "to", "port", "data"], builtin_sock_udp_send),
-        ("sock_udp_recv",      &["s"],                builtin_sock_udp_recv),
+        ("sock_udp_bind", &["port"], builtin_sock_udp_bind),
+        (
+            "sock_udp_bind_addr",
+            &["addr", "port"],
+            builtin_sock_udp_bind_addr,
+        ),
+        (
+            "sock_udp_send",
+            &["s", "to", "port", "data"],
+            builtin_sock_udp_send,
+        ),
+        ("sock_udp_recv", &["s"], builtin_sock_udp_recv),
     ];
     for (name, params, f) in entries {
         registry.register_named(interner, name, params, *f);
@@ -554,13 +582,14 @@ mod tests {
         // Listener doesn't expose local_addr through our surface (only TcpStream does),
         // but a paired connect will let us check peer_addr resolves to that port.
         let l = into_send_listener(listener);
-        let join = thread::spawn(move || {
-            l.accept().expect("accept").0
-        });
+        let join = thread::spawn(move || l.accept().expect("accept").0);
         let stream = StdTcpStream::connect(("127.0.0.1", port)).expect("connect");
         let _ = join.join().expect("join");
         let peer = stream.peer_addr().unwrap().to_string();
-        assert!(peer.contains(&port.to_string()), "peer addr {peer} missing port {port}");
+        assert!(
+            peer.contains(&port.to_string()),
+            "peer addr {peer} missing port {port}"
+        );
     }
 
     #[test]
@@ -576,11 +605,8 @@ mod tests {
                 NativeValue::Str(s) => s,
                 other => panic!("expected str, got {other:?}"),
             };
-            builtin_sock_write_str(&[
-                stream_v.clone(),
-                NativeValue::Str(format!("{s}\n")),
-            ])
-            .expect("write_str");
+            builtin_sock_write_str(&[stream_v.clone(), NativeValue::Str(format!("{s}\n"))])
+                .expect("write_str");
         });
 
         let client = builtin_sock_tcp_connect(&[
@@ -588,11 +614,8 @@ mod tests {
             NativeValue::Int(port as i64),
         ])
         .expect("connect");
-        builtin_sock_write_str(&[
-            client.clone(),
-            NativeValue::Str("hi\n".into()),
-        ])
-        .expect("client write");
+        builtin_sock_write_str(&[client.clone(), NativeValue::Str("hi\n".into())])
+            .expect("client write");
         let resp = builtin_sock_read_line(&[client.clone()]).expect("client read");
         assert_eq!(resp, NativeValue::Str("hi".to_string()));
         let _ = builtin_sock_close(&[client]);
@@ -610,7 +633,10 @@ mod tests {
             NativeValue::Int(port as i64),
             NativeValue::Int(200),
         ]);
-        assert!(r.is_err(), "expected error connecting to closed port, got {r:?}");
+        assert!(
+            r.is_err(),
+            "expected error connecting to closed port, got {r:?}"
+        );
         let msg = r.unwrap_err();
         assert!(
             msg.starts_with("ConnectionRefused")
@@ -690,7 +716,8 @@ mod tests {
 
         // Configure a generous read timeout via std::net so the test never hangs.
         if let NativeValue::UdpSocket(s) = &a {
-            s.set_read_timeout(Some(Duration::from_secs(2))).expect("set_read_timeout");
+            s.set_read_timeout(Some(Duration::from_secs(2)))
+                .expect("set_read_timeout");
         }
         let r = builtin_sock_udp_recv(&[a]).expect("udp recv");
         match r {
@@ -804,10 +831,8 @@ mod tests {
         assert!(r.is_err());
         assert!(r.unwrap_err().starts_with("InvalidAddress"));
 
-        let r2 = builtin_sock_tcp_connect(&[
-            NativeValue::Str("127.0.0.1".into()),
-            NativeValue::Int(-1),
-        ]);
+        let r2 =
+            builtin_sock_tcp_connect(&[NativeValue::Str("127.0.0.1".into()), NativeValue::Int(-1)]);
         assert!(r2.is_err());
     }
 
@@ -826,11 +851,8 @@ mod tests {
             NativeValue::Int(port as i64),
         ])
         .expect("connect");
-        let n = builtin_sock_write(&[
-            client.clone(),
-            NativeValue::Bytes(b"hello".to_vec()),
-        ])
-        .expect("write");
+        let n = builtin_sock_write(&[client.clone(), NativeValue::Bytes(b"hello".to_vec())])
+            .expect("write");
         assert_eq!(n, NativeValue::Int(5));
         let _ = builtin_sock_close(&[client]);
         server.join().expect("server thread");

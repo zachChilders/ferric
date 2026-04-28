@@ -212,8 +212,10 @@ fn render_with(
 ) -> String {
     // Sort fields alphabetically by key for stable output. We clone into a
     // local Vec so callers can pass any order.
-    let mut sorted: Vec<(&str, &str)> =
-        fields.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+    let mut sorted: Vec<(&str, &str)> = fields
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect();
     sorted.sort_by(|a, b| a.0.cmp(b.0));
 
     match fmt {
@@ -260,8 +262,7 @@ fn render_with(
 fn chrono_now_iso8601() -> String {
     // `chrono::Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true)` →
     // `2026-04-25T14:30:00Z`.
-    chrono::Utc::now()
-        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+    chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
 }
 
 fn json_string(s: &str) -> String {
@@ -381,7 +382,9 @@ fn builtin_log_with(args: &[NativeValue]) -> Result<NativeValue, String> {
 
     let mut new_fields = logger.fields.clone();
     new_fields.push((key.clone(), val.clone()));
-    Ok(NativeValue::Logger(Rc::new(LoggerRepr { fields: new_fields })))
+    Ok(NativeValue::Logger(Rc::new(LoggerRepr {
+        fields: new_fields,
+    })))
 }
 
 fn logger_emit(args: &[NativeValue], level: LogLevelRepr) -> Result<NativeValue, String> {
@@ -434,25 +437,41 @@ pub fn register(registry: &mut NativeRegistry, interner: &mut Interner) {
     type Entry = (&'static str, &'static [&'static str], crate::NativeFn);
     let entries: &[Entry] = &[
         // Direct-level emitters
-        ("log_debug",          &["msg"],                  builtin_log_debug),
-        ("log_info",           &["msg"],                  builtin_log_info),
-        ("log_warn",           &["msg"],                  builtin_log_warn),
-        ("log_error",          &["msg"],                  builtin_log_error),
+        ("log_debug", &["msg"], builtin_log_debug),
+        ("log_info", &["msg"], builtin_log_info),
+        ("log_warn", &["msg"], builtin_log_warn),
+        ("log_error", &["msg"], builtin_log_error),
         // With-fields variants
-        ("log_debug_fields",   &["msg", "fields"],        builtin_log_debug_fields),
-        ("log_info_fields",    &["msg", "fields"],        builtin_log_info_fields),
-        ("log_warn_fields",    &["msg", "fields"],        builtin_log_warn_fields),
-        ("log_error_fields",   &["msg", "fields"],        builtin_log_error_fields),
+        (
+            "log_debug_fields",
+            &["msg", "fields"],
+            builtin_log_debug_fields,
+        ),
+        (
+            "log_info_fields",
+            &["msg", "fields"],
+            builtin_log_info_fields,
+        ),
+        (
+            "log_warn_fields",
+            &["msg", "fields"],
+            builtin_log_warn_fields,
+        ),
+        (
+            "log_error_fields",
+            &["msg", "fields"],
+            builtin_log_error_fields,
+        ),
         // Logger constructors and scoped emitters
-        ("log_new",            &["fields"],               builtin_log_new),
-        ("log_with",           &["l", "key", "val"],      builtin_log_with),
-        ("log_log_debug",      &["l", "msg"],             builtin_log_log_debug),
-        ("log_log_info",       &["l", "msg"],             builtin_log_log_info),
-        ("log_log_warn",       &["l", "msg"],             builtin_log_log_warn),
-        ("log_log_error",      &["l", "msg"],             builtin_log_log_error),
+        ("log_new", &["fields"], builtin_log_new),
+        ("log_with", &["l", "key", "val"], builtin_log_with),
+        ("log_log_debug", &["l", "msg"], builtin_log_log_debug),
+        ("log_log_info", &["l", "msg"], builtin_log_log_info),
+        ("log_log_warn", &["l", "msg"], builtin_log_log_warn),
+        ("log_log_error", &["l", "msg"], builtin_log_log_error),
         // Level control
-        ("log_set_level",      &["level"],                builtin_log_set_level),
-        ("log_get_level",      &[],                       builtin_log_get_level),
+        ("log_set_level", &["level"], builtin_log_set_level),
+        ("log_get_level", &[], builtin_log_get_level),
     ];
     for (name, params, f) in entries {
         registry.register_named(interner, name, params, *f);
@@ -476,7 +495,9 @@ mod tests {
     }
     impl LevelGuard {
         fn new() -> Self {
-            Self { previous: current_level() }
+            Self {
+                previous: current_level(),
+            }
         }
     }
     impl Drop for LevelGuard {
@@ -487,20 +508,17 @@ mod tests {
 
     /// Helper to build a fields slice from a literal list.
     fn f(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
-        pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
     }
 
     // ---- render() shape ----
 
     #[test]
     fn pretty_no_fields_matches_iso8601_shape() {
-        let s = render_with(
-            "INFO",
-            "hello",
-            &[],
-            Format::Pretty,
-            "2026-04-25T14:30:00Z",
-        );
+        let s = render_with("INFO", "hello", &[], Format::Pretty, "2026-04-25T14:30:00Z");
         // Equivalent to the regex `^\d{4}-\d{2}-\d{2}T.*Z INFO\s+hello\s*$`.
         assert!(s.starts_with("2026-04-25T14:30:00Z "));
         assert!(s.contains(" INFO "));
@@ -625,10 +643,13 @@ mod tests {
         let v = builtin_log_new(&[NativeValue::Map(m)]).unwrap();
         match v {
             NativeValue::Logger(l) => {
-                assert_eq!(l.fields, vec![
-                    ("a".to_string(), "1".to_string()),
-                    ("b".to_string(), "2".to_string()),
-                ]);
+                assert_eq!(
+                    l.fields,
+                    vec![
+                        ("a".to_string(), "1".to_string()),
+                        ("b".to_string(), "2".to_string()),
+                    ]
+                );
             }
             other => panic!("expected Logger, got {other:?}"),
         }
@@ -683,10 +704,7 @@ mod tests {
 
     #[test]
     fn info_fields_rejects_non_map_second_arg() {
-        let r = builtin_log_info_fields(&[
-            NativeValue::Str("msg".into()),
-            NativeValue::Int(42),
-        ]);
+        let r = builtin_log_info_fields(&[NativeValue::Str("msg".into()), NativeValue::Int(42)]);
         assert!(r.is_err());
     }
 

@@ -12,17 +12,15 @@
 //! type lookup that's not in scope here.
 
 use ferric_common::keywords::KEYWORDS;
-use tower_lsp::lsp_types::{
-    CompletionItem, CompletionItemKind, CompletionResponse, Position,
-};
+use tower_lsp::lsp_types::{CompletionItem, CompletionItemKind, CompletionResponse, Position};
 
 use crate::pipeline::PipelineSnapshot;
 use crate::stdlib_names::STDLIB_FUNCTIONS;
 
 pub fn complete(
-    snapshot:  &PipelineSnapshot,
+    snapshot: &PipelineSnapshot,
     last_good: Option<&PipelineSnapshot>,
-    _pos:      Position,
+    _pos: Position,
 ) -> CompletionResponse {
     let mut items = Vec::new();
 
@@ -30,7 +28,7 @@ pub fn complete(
     for &kw in KEYWORDS {
         items.push(CompletionItem {
             label: kw.into(),
-            kind:  Some(CompletionItemKind::KEYWORD),
+            kind: Some(CompletionItemKind::KEYWORD),
             ..Default::default()
         });
     }
@@ -38,8 +36,8 @@ pub fn complete(
     // 2. Stdlib — always available, with signature in `detail`.
     for (name, signature) in STDLIB_FUNCTIONS {
         items.push(CompletionItem {
-            label:  (*name).into(),
-            kind:   Some(CompletionItemKind::FUNCTION),
+            label: (*name).into(),
+            kind: Some(CompletionItemKind::FUNCTION),
             detail: Some((*signature).into()),
             ..Default::default()
         });
@@ -51,9 +49,9 @@ pub fn complete(
     //    that produced the defs — symbols are not portable across runs.
     let (defs_source, interner) = match snapshot.resolve.as_ref() {
         Some(r) => (Some(r), &snapshot.interner),
-        None    => match last_good {
+        None => match last_good {
             Some(g) => (g.resolve.as_ref(), &g.interner),
-            None    => (None, &snapshot.interner),
+            None => (None, &snapshot.interner),
         },
     };
 
@@ -89,7 +87,14 @@ mod tests {
 
     fn complete_for(src: &str) -> Vec<CompletionItem> {
         let snap = run_pipeline("file:///tmp/t.fe".into(), 1, src.into());
-        match complete(&snap, None, Position { line: 0, character: 0 }) {
+        match complete(
+            &snap,
+            None,
+            Position {
+                line: 0,
+                character: 0,
+            },
+        ) {
             CompletionResponse::Array(v) => v,
             _ => panic!("handler should return Array"),
         }
@@ -99,7 +104,9 @@ mod tests {
     fn every_keyword_appears() {
         let items = complete_for("");
         for &kw in KEYWORDS {
-            let found = items.iter().any(|i| i.label == kw && i.kind == Some(CompletionItemKind::KEYWORD));
+            let found = items
+                .iter()
+                .any(|i| i.label == kw && i.kind == Some(CompletionItemKind::KEYWORD));
             assert!(found, "keyword `{kw}` missing from completions");
         }
     }
@@ -121,21 +128,38 @@ mod tests {
     fn user_defined_names_appear() {
         let items = complete_for("fn greet(who: Str) -> Unit { } let answer = 42");
         assert!(items.iter().any(|i| i.label == "greet"), "missing user fn");
-        assert!(items.iter().any(|i| i.label == "answer"), "missing user let");
+        assert!(
+            items.iter().any(|i| i.label == "answer"),
+            "missing user let"
+        );
     }
 
     #[test]
     fn last_good_used_when_current_has_no_resolve() {
         // `last_good` carries the user-defined `greet`; current has none.
-        let good = run_pipeline("file:///tmp/t.fe".into(), 1, "fn greet() -> Unit { }".into());
+        let good = run_pipeline(
+            "file:///tmp/t.fe".into(),
+            1,
+            "fn greet() -> Unit { }".into(),
+        );
         let mut bad = run_pipeline("file:///tmp/t.fe".into(), 2, "@".into());
         bad.resolve = None;
 
-        let items = match complete(&bad, Some(&good), Position { line: 0, character: 0 }) {
+        let items = match complete(
+            &bad,
+            Some(&good),
+            Position {
+                line: 0,
+                character: 0,
+            },
+        ) {
             CompletionResponse::Array(v) => v,
             _ => panic!(),
         };
-        assert!(items.iter().any(|i| i.label == "greet"), "fallback to last-good failed");
+        assert!(
+            items.iter().any(|i| i.label == "greet"),
+            "fallback to last-good failed"
+        );
     }
 
     #[test]
@@ -143,7 +167,14 @@ mod tests {
         // No fallback either — but keywords + stdlib should still appear.
         let mut snap = run_pipeline("file:///tmp/t.fe".into(), 1, "@".into());
         snap.resolve = None;
-        let items = match complete(&snap, None, Position { line: 0, character: 0 }) {
+        let items = match complete(
+            &snap,
+            None,
+            Position {
+                line: 0,
+                character: 0,
+            },
+        ) {
             CompletionResponse::Array(v) => v,
             _ => panic!(),
         };

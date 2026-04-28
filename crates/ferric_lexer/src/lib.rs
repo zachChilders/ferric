@@ -3,9 +3,7 @@
 //! This crate provides a single public entry point: the `lex` function,
 //! which converts source code into a stream of tokens.
 
-use ferric_common::{
-    Interner, LexError, LexResult, ShellTokenPart, Span, Token, TokenKind,
-};
+use ferric_common::{Interner, LexError, LexResult, ShellTokenPart, Span, Token, TokenKind};
 
 /// Raw intermediate shell part used during phase-1 lexing. Phase 2 converts
 /// `Interpolated` raw parts into `ShellTokenPart::Interpolated(Vec<Token>)`.
@@ -49,7 +47,10 @@ pub fn lex(source: &str, interner: &mut Interner) -> LexResult {
         for part in raw_parts {
             match part {
                 RawShellPart::Literal(s) => cooked_parts.push(ShellTokenPart::Literal(s)),
-                RawShellPart::Interpolated { content, start_offset } => {
+                RawShellPart::Interpolated {
+                    content,
+                    start_offset,
+                } => {
                     let sub_result = lex(&content, interner);
                     for err in sub_result.errors {
                         errors.push(offset_lex_error(err, start_offset));
@@ -98,10 +99,15 @@ fn offset_token(tok: Token, offset: u32) -> Token {
 fn offset_lex_error(err: LexError, offset: u32) -> LexError {
     let shift = |s: Span| Span::new(s.start + offset, s.end + offset);
     match err {
-        LexError::UnexpectedChar { ch, span } => LexError::UnexpectedChar { ch, span: shift(span) },
+        LexError::UnexpectedChar { ch, span } => LexError::UnexpectedChar {
+            ch,
+            span: shift(span),
+        },
         LexError::UnterminatedString { span } => LexError::UnterminatedString { span: shift(span) },
         LexError::NestedShellInterp { span } => LexError::NestedShellInterp { span: shift(span) },
-        LexError::UnclosedShellInterp { span } => LexError::UnclosedShellInterp { span: shift(span) },
+        LexError::UnclosedShellInterp { span } => {
+            LexError::UnclosedShellInterp { span: shift(span) }
+        }
     }
 }
 
@@ -394,9 +400,9 @@ impl<'a> Lexer<'a> {
                             self.advance();
                         }
                         self.advance(); // `\n`
-                        // Continue lexing the next physical line as part of
-                        // the same logical shell line. Leading whitespace is
-                        // preserved in the emitted literal.
+                    // Continue lexing the next physical line as part of
+                    // the same logical shell line. Leading whitespace is
+                    // preserved in the emitted literal.
                     } else {
                         // Literal backslash — pass through to the shell.
                         current_literal.push('\\');
@@ -511,7 +517,8 @@ impl<'a> Lexer<'a> {
                         self.advance(); // `@`
                         self.advance(); // `{`
                         let nested_span = Span::new(nested_start, self.position);
-                        self.errors.push(LexError::NestedShellInterp { span: nested_span });
+                        self.errors
+                            .push(LexError::NestedShellInterp { span: nested_span });
                         nested_seen = true;
                         // Recovery: skip the entire nested `@{...}` segment.
                         let mut inner_depth: i32 = 1;
@@ -768,7 +775,10 @@ mod tests {
         let result = lex(r#""hello"#, &mut interner);
         assert!(result.has_errors());
         assert_eq!(result.errors.len(), 1);
-        assert!(matches!(result.errors[0], LexError::UnterminatedString { .. }));
+        assert!(matches!(
+            result.errors[0],
+            LexError::UnterminatedString { .. }
+        ));
     }
 
     #[test]
@@ -777,7 +787,10 @@ mod tests {
         let result = lex("@", &mut interner);
         assert!(result.has_errors());
         assert_eq!(result.errors.len(), 1);
-        assert!(matches!(result.errors[0], LexError::UnexpectedChar { ch: '@', .. }));
+        assert!(matches!(
+            result.errors[0],
+            LexError::UnexpectedChar { ch: '@', .. }
+        ));
     }
 
     #[test]
@@ -926,10 +939,12 @@ mod tests {
         let mut interner = Interner::new();
         let result = lex("$ echo @{@{x}}", &mut interner);
         assert!(result.has_errors());
-        assert!(result
-            .errors
-            .iter()
-            .any(|e| matches!(e, LexError::NestedShellInterp { .. })));
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|e| matches!(e, LexError::NestedShellInterp { .. }))
+        );
     }
 
     #[test]
@@ -937,10 +952,12 @@ mod tests {
         let mut interner = Interner::new();
         let result = lex("$ echo @{x\nlet y = 1", &mut interner);
         assert!(result.has_errors());
-        assert!(result
-            .errors
-            .iter()
-            .any(|e| matches!(e, LexError::UnclosedShellInterp { .. })));
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|e| matches!(e, LexError::UnclosedShellInterp { .. }))
+        );
     }
 
     /// Architectural guarantee: every entry in `ferric_common::keywords::KEYWORDS`

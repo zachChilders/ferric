@@ -12,11 +12,11 @@
 //! All other implementation details are private.
 
 use ferric_common::{
-    AsyncBlockExpr, AsyncFnItem, AwaitExpr, BinOp, CastExpr, Expr, ExportDecl, FnItem,
-    ImplMethod, ImportDecl, ImportItem, ImportItems, ImportPath, Interner, Item, LexResult,
-    Literal, MatchArm, NamedArg, NodeId, Param, ParseError, ParseResult, Pattern, RequireMode,
-    RequireStmt, ShellPart, ShellTokenPart, Span, Stmt, Symbol, Token, TokenKind, TraitMethod,
-    TypeAliasItem, TypeAnnotation, TypeParam, UnOp,
+    AsyncBlockExpr, AsyncFnItem, AwaitExpr, BinOp, CastExpr, ExportDecl, Expr, FnItem, ImplMethod,
+    ImportDecl, ImportItem, ImportItems, ImportPath, Interner, Item, LexResult, Literal, MatchArm,
+    NamedArg, NodeId, Param, ParseError, ParseResult, Pattern, RequireMode, RequireStmt, ShellPart,
+    ShellTokenPart, Span, Stmt, Symbol, Token, TokenKind, TraitMethod, TypeAliasItem,
+    TypeAnnotation, TypeParam, UnOp,
 };
 
 /// Generates unique NodeIds for AST nodes.
@@ -119,7 +119,9 @@ impl<'a> Parser<'a> {
     fn peek(&self) -> &Token {
         self.tokens.get(self.current).unwrap_or_else(|| {
             // If we're past the end, return the last token (should be EOF)
-            self.tokens.last().expect("Token stream should not be empty")
+            self.tokens
+                .last()
+                .expect("Token stream should not be empty")
         })
     }
 
@@ -130,7 +132,9 @@ impl<'a> Parser<'a> {
             self.current += 1;
         }
         self.tokens.get(current).unwrap_or_else(|| {
-            self.tokens.last().expect("Token stream should not be empty")
+            self.tokens
+                .last()
+                .expect("Token stream should not be empty")
         })
     }
 
@@ -363,7 +367,12 @@ impl<'a> Parser<'a> {
 
         let span = start_span.to(end_span);
         let id = self.node_id_gen.next();
-        Some(Item::StructDef { id, name, fields, span })
+        Some(Item::StructDef {
+            id,
+            name,
+            fields,
+            span,
+        })
     }
 
     /// Parses an enum definition: `enum Name { Variant(Types), ... }`
@@ -441,7 +450,12 @@ impl<'a> Parser<'a> {
 
         let span = start_span.to(end_span);
         let id = self.node_id_gen.next();
-        Some(Item::EnumDef { id, name, variants, span })
+        Some(Item::EnumDef {
+            id,
+            name,
+            variants,
+            span,
+        })
     }
 
     /// Parses a top-level require statement (script mode).
@@ -580,7 +594,8 @@ impl<'a> Parser<'a> {
                 // JS-style default import: `import X from "..."`. Report and
                 // skip the rest of the declaration so we don't cascade.
                 let ident_span = self.peek().span;
-                self.errors.push(ParseError::DefaultImport { span: ident_span });
+                self.errors
+                    .push(ParseError::DefaultImport { span: ident_span });
                 let _ = self.skip_import_decl_remainder();
                 return None;
             }
@@ -621,13 +636,15 @@ impl<'a> Parser<'a> {
             Some(text) => match classify_import_path(&text) {
                 Some(p) => p,
                 None => {
-                    self.errors.push(ParseError::InvalidImportPath { span: path_span });
+                    self.errors
+                        .push(ParseError::InvalidImportPath { span: path_span });
                     return None;
                 }
             },
             // Without an interner we cannot classify; report and skip.
             None => {
-                self.errors.push(ParseError::InvalidImportPath { span: path_span });
+                self.errors
+                    .push(ParseError::InvalidImportPath { span: path_span });
                 return None;
             }
         };
@@ -727,7 +744,9 @@ impl<'a> Parser<'a> {
             TokenKind::Type => self.parse_type_alias().map(Item::TypeAlias),
             _ => {
                 let tok = self.peek().clone();
-                self.errors.push(ParseError::InvalidExportPosition { span: start_span.to(tok.span) });
+                self.errors.push(ParseError::InvalidExportPosition {
+                    span: start_span.to(tok.span),
+                });
                 return None;
             }
         };
@@ -895,9 +914,8 @@ impl<'a> Parser<'a> {
                     None
                 };
 
-                let param_span = param_start.to(
-                    default.as_ref().map(|d| d.span()).unwrap_or(ty_end_span)
-                );
+                let param_span =
+                    param_start.to(default.as_ref().map(|d| d.span()).unwrap_or(ty_end_span));
                 params.push(Param {
                     span: param_span,
                     name: param_name,
@@ -1129,8 +1147,7 @@ impl<'a> Parser<'a> {
             };
 
             // Optional ; or , between methods
-            let _ = self.match_token(&TokenKind::Semi)
-                || self.match_token(&TokenKind::Comma);
+            let _ = self.match_token(&TokenKind::Semi) || self.match_token(&TokenKind::Comma);
 
             let m_span = m_start.to(self.tokens[self.current - 1].span);
             let id = self.node_id_gen.next();
@@ -1151,7 +1168,12 @@ impl<'a> Parser<'a> {
 
         let span = start_span.to(end_span);
         let id = self.node_id_gen.next();
-        Some(Item::TraitDef { id, name, methods, span })
+        Some(Item::TraitDef {
+            id,
+            name,
+            methods,
+            span,
+        })
     }
 
     /// Parses an impl block: `impl Trait for Type { fn method(self, ...) { body } ... }`.
@@ -1533,10 +1555,9 @@ impl<'a> Parser<'a> {
                 | TokenKind::LBracket  // array literal: [1, 2]
                 | TokenKind::ShellLine(_)
                 | TokenKind::Async     // async { ... } block expression
-                | TokenKind::Await     // prefix `await expr`
+                | TokenKind::Await // prefix `await expr`
         )
     }
-
 
     /// Parses an assignment statement: `name = expr;`
     fn parse_assign_stmt(&mut self) -> Option<Stmt> {
@@ -1694,7 +1715,6 @@ impl<'a> Parser<'a> {
         })
     }
 
-
     /// Parses an expression.
     fn parse_expr(&mut self) -> Expr {
         // Handle control flow keywords as special cases
@@ -1835,7 +1855,12 @@ impl<'a> Parser<'a> {
         let span = start_span.to(body.span());
         let id = self.node_id_gen.next();
 
-        Expr::While { cond, body, id, span }
+        Expr::While {
+            cond,
+            body,
+            id,
+            span,
+        }
     }
 
     /// Parses an infinite loop: `loop block`
@@ -1915,7 +1940,11 @@ impl<'a> Parser<'a> {
             }
             let body = self.with_struct_literal_allowed(|p| p.parse_expr());
             let span = arm_start.to(body.span());
-            arms.push(MatchArm { pattern, body, span });
+            arms.push(MatchArm {
+                pattern,
+                body,
+                span,
+            });
 
             if !self.match_token(&TokenKind::Comma) {
                 break;
@@ -1930,7 +1959,12 @@ impl<'a> Parser<'a> {
 
         let span = start_span.to(end_span);
         let id = self.node_id_gen.next();
-        Expr::Match { scrutinee, arms, id, span }
+        Expr::Match {
+            scrutinee,
+            arms,
+            id,
+            span,
+        }
     }
 
     /// Parses a single pattern.
@@ -2180,7 +2214,8 @@ impl<'a> Parser<'a> {
             // Reject chained casts: `x as A as B`.
             if matches!(self.peek().kind, TokenKind::As) {
                 let chain_span = as_span.to(self.peek().span);
-                self.errors.push(ParseError::ChainedCast { span: chain_span });
+                self.errors
+                    .push(ParseError::ChainedCast { span: chain_span });
                 // Consume the chained `as <Type>` for recovery so that one
                 // chain doesn't yield a cascade of follow-on errors.
                 self.advance(); // 'as'
@@ -2299,14 +2334,23 @@ impl<'a> Parser<'a> {
                             };
                             let value = self.with_struct_literal_allowed(|p| p.parse_expr());
                             let span = arg_start.to(value.span());
-                            args.push(NamedArg { span, name, value: Box::new(value) });
+                            args.push(NamedArg {
+                                span,
+                                name,
+                                value: Box::new(value),
+                            });
                         } else {
                             // Positional arg — error and recover
-                            self.errors.push(ParseError::PositionalArg { span: arg_start });
+                            self.errors
+                                .push(ParseError::PositionalArg { span: arg_start });
                             let value = self.with_struct_literal_allowed(|p| p.parse_expr());
                             let span = arg_start.to(value.span());
                             // Use a sentinel name (sym 0) for error recovery
-                            args.push(NamedArg { span, name: Symbol::new(0), value: Box::new(value) });
+                            args.push(NamedArg {
+                                span,
+                                name: Symbol::new(0),
+                                value: Box::new(value),
+                            });
                         }
 
                         if !self.match_token(&TokenKind::Comma) {
@@ -2420,12 +2464,21 @@ impl<'a> Parser<'a> {
                 };
                 let value = self.with_struct_literal_allowed(|p| p.parse_expr());
                 let span = arg_start.to(value.span());
-                args.push(NamedArg { span, name, value: Box::new(value) });
+                args.push(NamedArg {
+                    span,
+                    name,
+                    value: Box::new(value),
+                });
             } else {
-                self.errors.push(ParseError::PositionalArg { span: arg_start });
+                self.errors
+                    .push(ParseError::PositionalArg { span: arg_start });
                 let value = self.with_struct_literal_allowed(|p| p.parse_expr());
                 let span = arg_start.to(value.span());
-                args.push(NamedArg { span, name: Symbol::new(0), value: Box::new(value) });
+                args.push(NamedArg {
+                    span,
+                    name: Symbol::new(0),
+                    value: Box::new(value),
+                });
             }
             if !self.match_token(&TokenKind::Comma) {
                 break;
@@ -2682,14 +2735,9 @@ impl<'a> Parser<'a> {
                 // identifier (named param). Anything else triggers a single
                 // clear `StrayPipe` error instead of cascading through the
                 // closure-parameter parser.
-                let next_kind = self
-                    .tokens
-                    .get(self.current + 1)
-                    .map(|t| &t.kind);
-                let looks_like_closure = matches!(
-                    next_kind,
-                    Some(TokenKind::Pipe) | Some(TokenKind::Ident(_))
-                );
+                let next_kind = self.tokens.get(self.current + 1).map(|t| &t.kind);
+                let looks_like_closure =
+                    matches!(next_kind, Some(TokenKind::Pipe) | Some(TokenKind::Ident(_)));
                 if !looks_like_closure {
                     let pipe_span = token.span;
                     self.errors.push(ParseError::StrayPipe { span: pipe_span });
@@ -2758,8 +2806,7 @@ impl<'a> Parser<'a> {
                 let mut elements: Vec<Expr> = Vec::new();
                 if !self.check(&TokenKind::RBracket) {
                     loop {
-                        let elem =
-                            self.with_struct_literal_allowed(|p| p.parse_expr());
+                        let elem = self.with_struct_literal_allowed(|p| p.parse_expr());
                         elements.push(elem);
                         if !self.match_token(&TokenKind::Comma) {
                             break;
@@ -2823,7 +2870,8 @@ impl<'a> Parser<'a> {
                 }
                 _ => {
                     let tok = self.peek().clone();
-                    self.errors.push(ParseError::InvalidRequireMode { span: tok.span });
+                    self.errors
+                        .push(ParseError::InvalidRequireMode { span: tok.span });
                     // recover: skip to ')'
                     while !self.check(&TokenKind::RParen) && !self.is_at_end() {
                         self.advance();
@@ -2854,17 +2902,18 @@ impl<'a> Parser<'a> {
                 message = Some(Box::new(self.parse_expr()));
 
                 // Second optional comma-separated part (set:)
-                if self.match_token(&TokenKind::Comma)
-                    && self.is_set_label_start() {
-                        set_fn = self.parse_set_clause();
-                    }
+                if self.match_token(&TokenKind::Comma) && self.is_set_label_start() {
+                    set_fn = self.parse_set_clause();
+                }
             }
         }
 
         // Optional trailing semicolon
         self.match_token(&TokenKind::Semi);
 
-        let end_span = set_fn.as_ref().map(|e| e.span())
+        let end_span = set_fn
+            .as_ref()
+            .map(|e| e.span())
             .or_else(|| message.as_ref().map(|e| e.span()))
             .unwrap_or(expr.span());
 
@@ -2896,7 +2945,9 @@ impl<'a> Parser<'a> {
                     sub_tokens.push(Token::new(TokenKind::Eof, eof_span));
                     // Run a fresh sub-parser on the interpolated tokens.
                     let mut sub_parser = Parser::new(&sub_tokens);
-                    sub_parser.node_id_gen = NodeIdGen { next: self.node_id_gen.next };
+                    sub_parser.node_id_gen = NodeIdGen {
+                        next: self.node_id_gen.next,
+                    };
                     let expr = sub_parser.parse_expr();
                     self.node_id_gen.next = sub_parser.node_id_gen.next;
                     self.errors.extend(sub_parser.errors);
@@ -3015,7 +3066,9 @@ mod tests {
         assert_eq!(result.errors.len(), 0);
 
         match &result.items[0] {
-            Item::Fn(FnItem { name, params, body, .. }) => {
+            Item::Fn(FnItem {
+                name, params, body, ..
+            }) => {
                 assert_eq!(*name, foo);
                 assert_eq!(params.len(), 0);
                 match body {
@@ -3067,7 +3120,12 @@ mod tests {
         assert_eq!(result.errors.len(), 0);
 
         match &result.items[0] {
-            Item::Fn(FnItem { name, params, ret_ty, .. }) => {
+            Item::Fn(FnItem {
+                name,
+                params,
+                ret_ty,
+                ..
+            }) => {
                 assert_eq!(*name, add);
                 assert_eq!(params.len(), 2);
                 assert_eq!(params[0].name, x);
@@ -3108,13 +3166,23 @@ mod tests {
         match &result.items[0] {
             Item::Fn(FnItem { body, .. }) => {
                 match body {
-                    Expr::Block { expr: Some(expr), .. } => {
+                    Expr::Block {
+                        expr: Some(expr), ..
+                    } => {
                         // Should be: 1 + (2 * 3)
                         match expr.as_ref() {
-                            Expr::Binary { op: BinOp::Add, left, right, .. } => {
+                            Expr::Binary {
+                                op: BinOp::Add,
+                                left,
+                                right,
+                                ..
+                            } => {
                                 // Left should be literal 1
                                 match left.as_ref() {
-                                    Expr::Literal { value: Literal::Int(1), .. } => {}
+                                    Expr::Literal {
+                                        value: Literal::Int(1),
+                                        ..
+                                    } => {}
                                     _ => panic!("Expected literal 1"),
                                 }
                                 // Right should be 2 * 3
@@ -3235,7 +3303,9 @@ mod tests {
 
         match &result.items[0] {
             Item::Fn(FnItem { body, .. }) => match body {
-                Expr::Block { expr: Some(expr), .. } => match expr.as_ref() {
+                Expr::Block {
+                    expr: Some(expr), ..
+                } => match expr.as_ref() {
                     Expr::Call { args, .. } => {
                         assert_eq!(args.len(), 2);
                         assert_eq!(args[0].name, x);
@@ -3275,7 +3345,10 @@ mod tests {
 
         assert_eq!(result.items.len(), 1);
         assert_eq!(result.errors.len(), 1);
-        assert!(matches!(result.errors[0], ferric_common::ParseError::PositionalArg { .. }));
+        assert!(matches!(
+            result.errors[0],
+            ferric_common::ParseError::PositionalArg { .. }
+        ));
     }
 
     #[test]
@@ -3415,8 +3488,10 @@ mod tests {
                         assert_eq!(interner.resolve(items[0].name), "connect");
                         assert!(items[0].alias.is_none());
                         assert_eq!(interner.resolve(items[1].name), "disconnect");
-                        assert_eq!(items[1].alias.map(|s| interner.resolve(s).to_string()),
-                                   Some("d".to_string()));
+                        assert_eq!(
+                            items[1].alias.map(|s| interner.resolve(s).to_string()),
+                            Some("d".to_string())
+                        );
                     }
                     other => panic!("expected named imports, got {other:?}"),
                 }
@@ -3443,7 +3518,9 @@ mod tests {
         let (_, result) = lex_parse(r#"import { Config } from "@/config""#);
         assert_eq!(result.errors.len(), 0, "errors: {:?}", result.errors);
         match &result.items[0] {
-            Item::Import(decl) => assert!(matches!(decl.path, ImportPath::Workspace(ref s) if s == "@/config")),
+            Item::Import(decl) => {
+                assert!(matches!(decl.path, ImportPath::Workspace(ref s) if s == "@/config"))
+            }
             _ => panic!("expected import"),
         }
     }
@@ -3453,7 +3530,9 @@ mod tests {
         let (_, result) = lex_parse(r#"import { HttpClient } from "ferric-http""#);
         assert_eq!(result.errors.len(), 0, "errors: {:?}", result.errors);
         match &result.items[0] {
-            Item::Import(decl) => assert!(matches!(decl.path, ImportPath::Cache(ref s) if s == "ferric-http")),
+            Item::Import(decl) => {
+                assert!(matches!(decl.path, ImportPath::Cache(ref s) if s == "ferric-http"))
+            }
             _ => panic!("expected import"),
         }
     }
@@ -3461,20 +3540,35 @@ mod tests {
     #[test]
     fn test_invalid_import_path() {
         let (_, result) = lex_parse(r#"import { X } from "not/a/valid/cache/name""#);
-        assert!(result.errors.iter().any(|e| matches!(e, ParseError::InvalidImportPath { .. })));
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|e| matches!(e, ParseError::InvalidImportPath { .. }))
+        );
     }
 
     #[test]
     fn test_default_import_is_error() {
         let (_, result) = lex_parse(r#"import db from "./db""#);
-        assert!(result.errors.iter().any(|e| matches!(e, ParseError::DefaultImport { .. })));
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|e| matches!(e, ParseError::DefaultImport { .. }))
+        );
     }
 
     #[test]
     fn test_late_import_is_error() {
         let src = "fn foo() { }\nimport { bar } from \"./bar\"\n";
         let (_, result) = lex_parse(src);
-        assert!(result.errors.iter().any(|e| matches!(e, ParseError::LateImport { .. })));
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|e| matches!(e, ParseError::LateImport { .. }))
+        );
         // Only the legal item (the fn) should remain.
         assert_eq!(result.items.len(), 1);
         assert!(matches!(result.items[0], Item::Fn(_)));
@@ -3539,7 +3633,9 @@ mod tests {
                 assert_eq!(interner.resolve(decl.name), "Url");
                 assert_eq!(decl.params.len(), 0);
                 assert!(decl.opaque);
-                assert!(matches!(&decl.ty, TypeAnnotation::Named(s) if interner.resolve(*s) == "Str"));
+                assert!(
+                    matches!(&decl.ty, TypeAnnotation::Named(s) if interner.resolve(*s) == "Str")
+                );
             }
             _ => panic!("expected type alias"),
         }
@@ -3564,7 +3660,10 @@ mod tests {
         let (_, result) = lex_parse(r#"let u = "x" as Url"#);
         assert_eq!(result.errors.len(), 0, "errors: {:?}", result.errors);
         match &result.items[0] {
-            Item::Script { stmt: Stmt::Let { init, .. }, .. } => {
+            Item::Script {
+                stmt: Stmt::Let { init, .. },
+                ..
+            } => {
                 assert!(matches!(init, Expr::Cast(_)));
             }
             _ => panic!("expected let"),
@@ -3577,8 +3676,15 @@ mod tests {
         let (_, result) = lex_parse("let r = a + b as Int");
         assert_eq!(result.errors.len(), 0, "errors: {:?}", result.errors);
         match &result.items[0] {
-            Item::Script { stmt: Stmt::Let { init, .. }, .. } => match init {
-                Expr::Binary { op: BinOp::Add, right, .. } => {
+            Item::Script {
+                stmt: Stmt::Let { init, .. },
+                ..
+            } => match init {
+                Expr::Binary {
+                    op: BinOp::Add,
+                    right,
+                    ..
+                } => {
                     assert!(matches!(**right, Expr::Cast(_)));
                 }
                 other => panic!("expected `+` at the root, got {other:?}"),
@@ -3593,7 +3699,10 @@ mod tests {
         let (_, result) = lex_parse("let u = obj.field as Url");
         assert_eq!(result.errors.len(), 0, "errors: {:?}", result.errors);
         match &result.items[0] {
-            Item::Script { stmt: Stmt::Let { init, .. }, .. } => match init {
+            Item::Script {
+                stmt: Stmt::Let { init, .. },
+                ..
+            } => match init {
                 Expr::Cast(c) => assert!(matches!(*c.expr, Expr::FieldAccess { .. })),
                 other => panic!("expected cast at the root, got {other:?}"),
             },
@@ -3604,7 +3713,12 @@ mod tests {
     #[test]
     fn test_chained_cast_is_error() {
         let (_, result) = lex_parse("let x = y as Foo as Bar");
-        assert!(result.errors.iter().any(|e| matches!(e, ParseError::ChainedCast { .. })));
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|e| matches!(e, ParseError::ChainedCast { .. }))
+        );
     }
 
     // =============== M8 — async fn / await / async blocks ===============
@@ -3626,8 +3740,12 @@ mod tests {
     fn test_async_on_non_fn_is_error() {
         let (_, result) = lex_parse("async let x = 5");
         assert!(
-            result.errors.iter().any(|e| matches!(e, ParseError::AsyncOnNonFn { .. })),
-            "errors: {:?}", result.errors,
+            result
+                .errors
+                .iter()
+                .any(|e| matches!(e, ParseError::AsyncOnNonFn { .. })),
+            "errors: {:?}",
+            result.errors,
         );
     }
 
@@ -3635,8 +3753,12 @@ mod tests {
     fn test_async_struct_is_error() {
         let (_, result) = lex_parse("async struct Foo { }");
         assert!(
-            result.errors.iter().any(|e| matches!(e, ParseError::AsyncOnNonFn { .. })),
-            "errors: {:?}", result.errors,
+            result
+                .errors
+                .iter()
+                .any(|e| matches!(e, ParseError::AsyncOnNonFn { .. })),
+            "errors: {:?}",
+            result.errors,
         );
     }
 
@@ -3646,9 +3768,13 @@ mod tests {
         assert_eq!(result.errors.len(), 0, "errors: {:?}", result.errors);
         match &result.items[0] {
             Item::AsyncFn(decl) => match &decl.item.body {
-                Expr::Block { expr: Some(tail), .. } => {
-                    assert!(matches!(tail.as_ref(), Expr::Await(_)),
-                        "tail expr should be Await, got {tail:?}");
+                Expr::Block {
+                    expr: Some(tail), ..
+                } => {
+                    assert!(
+                        matches!(tail.as_ref(), Expr::Await(_)),
+                        "tail expr should be Await, got {tail:?}"
+                    );
                 }
                 other => panic!("expected block body, got {other:?}"),
             },
@@ -3684,8 +3810,12 @@ mod tests {
         // No enclosing function — fast-path parse error fires.
         let (_, result) = lex_parse("let x = await foo()");
         assert!(
-            result.errors.iter().any(|e| matches!(e, ParseError::AwaitOutsideAsync { .. })),
-            "errors: {:?}", result.errors,
+            result
+                .errors
+                .iter()
+                .any(|e| matches!(e, ParseError::AwaitOutsideAsync { .. })),
+            "errors: {:?}",
+            result.errors,
         );
     }
 
@@ -3696,8 +3826,12 @@ mod tests {
         // expansion outcomes.
         let (_, result) = lex_parse("fn f() -> Int { await bar() }");
         assert!(
-            !result.errors.iter().any(|e| matches!(e, ParseError::AwaitOutsideAsync { .. })),
-            "parser should defer to typechecker; got: {:?}", result.errors,
+            !result
+                .errors
+                .iter()
+                .any(|e| matches!(e, ParseError::AwaitOutsideAsync { .. })),
+            "parser should defer to typechecker; got: {:?}",
+            result.errors,
         );
     }
 
@@ -3706,9 +3840,14 @@ mod tests {
         let (_, result) = lex_parse("let task = async { 42 }");
         assert_eq!(result.errors.len(), 0, "errors: {:?}", result.errors);
         match &result.items[0] {
-            Item::Script { stmt: Stmt::Let { init, .. }, .. } => {
-                assert!(matches!(init, Expr::AsyncBlock(_)),
-                    "init should be AsyncBlock, got {init:?}");
+            Item::Script {
+                stmt: Stmt::Let { init, .. },
+                ..
+            } => {
+                assert!(
+                    matches!(init, Expr::AsyncBlock(_)),
+                    "init should be AsyncBlock, got {init:?}"
+                );
             }
             other => panic!("expected let, got {other:?}"),
         }
@@ -3726,8 +3865,12 @@ mod tests {
         // block bumps fn_depth.
         let (_, result) = lex_parse("let r = async { await foo() }");
         assert!(
-            !result.errors.iter().any(|e| matches!(e, ParseError::AwaitOutsideAsync { .. })),
-            "errors: {:?}", result.errors,
+            !result
+                .errors
+                .iter()
+                .any(|e| matches!(e, ParseError::AwaitOutsideAsync { .. })),
+            "errors: {:?}",
+            result.errors,
         );
     }
 
@@ -3737,7 +3880,10 @@ mod tests {
         let (interner, result) = lex_parse("let t: Async<Int> = async { 1 }");
         assert_eq!(result.errors.len(), 0, "errors: {:?}", result.errors);
         match &result.items[0] {
-            Item::Script { stmt: Stmt::Let { ty: Some(ty), .. }, .. } => match ty {
+            Item::Script {
+                stmt: Stmt::Let { ty: Some(ty), .. },
+                ..
+            } => match ty {
                 TypeAnnotation::Generic { head, args } => {
                     assert_eq!(interner.resolve(*head), "Async");
                     assert_eq!(args.len(), 1);

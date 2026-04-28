@@ -11,8 +11,7 @@ use std::collections::{HashMap, HashSet};
 use ferric_common::{
     BinOp, DefId, Expr, FnItem, ImplMethod, Interner, Item, Literal, MatchArm, NamedArg, NodeId,
     Param, ParseResult, Pattern, RequireStmt, ResolveResult, ShellPart, Span, Stmt, Symbol,
-    TraitRegistry, Ty, TyVar, TypeAnnotation, TypeError, TypeParam, TypeResult, TypeScheme,
-    UnOp,
+    TraitRegistry, Ty, TyVar, TypeAnnotation, TypeError, TypeParam, TypeResult, TypeScheme, UnOp,
 };
 
 /// Type-checks (and infers) a parsed AST with resolution information.
@@ -74,12 +73,20 @@ impl Substitution {
                 ret: Box::new(self.apply(ret)),
             },
             Ty::Tuple(elems) => Ty::Tuple(elems.iter().map(|t| self.apply(t)).collect()),
-            Ty::Struct { def_id, name, fields } => Ty::Struct {
+            Ty::Struct {
+                def_id,
+                name,
+                fields,
+            } => Ty::Struct {
                 def_id: *def_id,
                 name: *name,
                 fields: fields.iter().map(|(n, t)| (*n, self.apply(t))).collect(),
             },
-            Ty::Enum { def_id, name, variants } => Ty::Enum {
+            Ty::Enum {
+                def_id,
+                name,
+                variants,
+            } => Ty::Enum {
                 def_id: *def_id,
                 name: *name,
                 variants: variants
@@ -89,13 +96,10 @@ impl Substitution {
             },
             Ty::Array(inner) => Ty::Array(Box::new(self.apply(inner))),
             Ty::Option(inner) => Ty::Option(Box::new(self.apply(inner))),
-            Ty::Result(ok, err) => Ty::Result(
-                Box::new(self.apply(ok)),
-                Box::new(self.apply(err)),
-            ),
-            Ty::Async(inner)  => Ty::Async(Box::new(self.apply(inner))),
+            Ty::Result(ok, err) => Ty::Result(Box::new(self.apply(ok)), Box::new(self.apply(err))),
+            Ty::Async(inner) => Ty::Async(Box::new(self.apply(inner))),
             Ty::Handle(inner) => Ty::Handle(Box::new(self.apply(inner))),
-            Ty::Poll(inner)   => Ty::Poll(Box::new(self.apply(inner))),
+            Ty::Poll(inner) => Ty::Poll(Box::new(self.apply(inner))),
             other => other.clone(),
         }
     }
@@ -114,9 +118,7 @@ fn occurs(var: TyVar, ty: &Ty, subst: &Substitution) -> bool {
 fn occurs_raw(var: TyVar, ty: &Ty) -> bool {
     match ty {
         Ty::Var(v) => *v == var,
-        Ty::Fn { params, ret } => {
-            params.iter().any(|t| occurs_raw(var, t)) || occurs_raw(var, ret)
-        }
+        Ty::Fn { params, ret } => params.iter().any(|t| occurs_raw(var, t)) || occurs_raw(var, ret),
         Ty::Tuple(elems) => elems.iter().any(|t| occurs_raw(var, t)),
         Ty::Struct { fields, .. } => fields.iter().any(|(_, t)| occurs_raw(var, t)),
         Ty::Enum { variants, .. } => variants
@@ -425,9 +427,13 @@ impl<'a> TypeInfer<'a> {
                 &TypeAnnotation,
                 bool,
             ) = match item {
-                Item::Fn(FnItem { name, type_params, params, ret_ty, .. }) => {
-                    (*name, type_params, params, ret_ty, false)
-                }
+                Item::Fn(FnItem {
+                    name,
+                    type_params,
+                    params,
+                    ret_ty,
+                    ..
+                }) => (*name, type_params, params, ret_ty, false),
                 Item::AsyncFn(decl) => {
                     let f = &decl.item;
                     (f.name, &f.type_params, &f.params, &f.ret_ty, true)
@@ -490,7 +496,13 @@ impl<'a> TypeInfer<'a> {
         for item in &self.ast.items {
             let item = unwrap_export(item);
             match item {
-                Item::Fn(FnItem { id, params, ret_ty, body, .. }) => {
+                Item::Fn(FnItem {
+                    id,
+                    params,
+                    ret_ty,
+                    body,
+                    ..
+                }) => {
                     let aliases = fn_aliases[fn_idx].clone();
                     fn_idx += 1;
                     self.check_fn_def(*id, params, ret_ty, body, aliases);
@@ -511,7 +523,13 @@ impl<'a> TypeInfer<'a> {
                     // only. Trait method signatures are picked up via the
                     // registry, not type-checked here.
                 }
-                Item::ImplBlock { trait_name, type_name, methods, span, .. } => {
+                Item::ImplBlock {
+                    trait_name,
+                    type_name,
+                    methods,
+                    span,
+                    ..
+                } => {
                     // Verify the trait exists. If not, emit an error and skip
                     // the body checks — downstream consumers ignore unknown
                     // impls.
@@ -638,7 +656,11 @@ impl<'a> TypeInfer<'a> {
             ("str_contains", &[Ty::Str, Ty::Str], Ty::Bool),
             ("str_starts_with", &[Ty::Str, Ty::Str], Ty::Bool),
             ("str_parse_int", &[Ty::Str], Ty::Int),
-            ("str_split", &[Ty::Str, Ty::Str], Ty::Array(Box::new(Ty::Str))),
+            (
+                "str_split",
+                &[Ty::Str, Ty::Str],
+                Ty::Array(Box::new(Ty::Str)),
+            ),
             ("abs", &[Ty::Int], Ty::Int),
             ("min", &[Ty::Int, Ty::Int], Ty::Int),
             ("max", &[Ty::Int, Ty::Int], Ty::Int),
@@ -668,8 +690,13 @@ impl<'a> TypeInfer<'a> {
                 params: vec![Ty::Array(Box::new(Ty::Var(elem_var)))],
                 ret: Box::new(Ty::Int),
             };
-            self.env
-                .define(sym, TypeScheme { forall: vec![elem_var], ty: fn_ty });
+            self.env.define(
+                sym,
+                TypeScheme {
+                    forall: vec![elem_var],
+                    ty: fn_ty,
+                },
+            );
         }
 
         // M8 Task 3: `spawn(task: Async<T>) -> Handle<T>` — generic in T.
@@ -680,8 +707,13 @@ impl<'a> TypeInfer<'a> {
                 params: vec![Ty::Async(Box::new(Ty::Var(t)))],
                 ret: Box::new(Ty::Handle(Box::new(Ty::Var(t)))),
             };
-            self.env
-                .define(sym, TypeScheme { forall: vec![t], ty: fn_ty });
+            self.env.define(
+                sym,
+                TypeScheme {
+                    forall: vec![t],
+                    ty: fn_ty,
+                },
+            );
         }
 
         // M8 Task 3: `join(a: Handle<A>, b: Handle<B>) -> (A, B)` — generic in
@@ -701,8 +733,13 @@ impl<'a> TypeInfer<'a> {
                 ],
                 ret: Box::new(Ty::Tuple(vec![Ty::Var(a), Ty::Var(b)])),
             };
-            self.env
-                .define(sym, TypeScheme { forall: vec![a, b], ty: fn_ty });
+            self.env.define(
+                sym,
+                TypeScheme {
+                    forall: vec![a, b],
+                    ty: fn_ty,
+                },
+            );
         }
 
         // M8 Task 5: `sleep(ms: Int) -> Async<Unit>` — wall-clock pause.
@@ -737,8 +774,13 @@ impl<'a> TypeInfer<'a> {
                 params: vec![Ty::Async(Box::new(Ty::Var(t)))],
                 ret: Box::new(Ty::Var(t)),
             };
-            self.env
-                .define(sym, TypeScheme { forall: vec![t], ty: fn_ty });
+            self.env.define(
+                sym,
+                TypeScheme {
+                    forall: vec![t],
+                    ty: fn_ty,
+                },
+            );
         }
     }
 
@@ -845,22 +887,22 @@ impl<'a> TypeInfer<'a> {
             TypeAnnotation::Generic { head, args } => {
                 let name = self.interner.resolve(*head);
                 match (name, args.as_slice()) {
-                    ("Option", [inner]) => Ty::Option(Box::new(
-                        self.resolve_type_annotation(inner, aliases),
-                    )),
+                    ("Option", [inner]) => {
+                        Ty::Option(Box::new(self.resolve_type_annotation(inner, aliases)))
+                    }
                     ("Result", [ok, err]) => Ty::Result(
                         Box::new(self.resolve_type_annotation(ok, aliases)),
                         Box::new(self.resolve_type_annotation(err, aliases)),
                     ),
-                    ("Async", [inner]) => Ty::Async(Box::new(
-                        self.resolve_type_annotation(inner, aliases),
-                    )),
-                    ("Handle", [inner]) => Ty::Handle(Box::new(
-                        self.resolve_type_annotation(inner, aliases),
-                    )),
-                    ("Poll", [inner]) => Ty::Poll(Box::new(
-                        self.resolve_type_annotation(inner, aliases),
-                    )),
+                    ("Async", [inner]) => {
+                        Ty::Async(Box::new(self.resolve_type_annotation(inner, aliases)))
+                    }
+                    ("Handle", [inner]) => {
+                        Ty::Handle(Box::new(self.resolve_type_annotation(inner, aliases)))
+                    }
+                    ("Poll", [inner]) => {
+                        Ty::Poll(Box::new(self.resolve_type_annotation(inner, aliases)))
+                    }
                     _ => self.fresh_tyvar(),
                 }
             }
@@ -921,7 +963,14 @@ impl<'a> TypeInfer<'a> {
 
     fn check_stmt(&mut self, stmt: &Stmt) {
         match stmt {
-            Stmt::Let { name, ty, init, id, span, .. } => {
+            Stmt::Let {
+                name,
+                ty,
+                init,
+                id,
+                span,
+                ..
+            } => {
                 let init_ty = self.infer_expr(init);
 
                 let bound_ty = if let Some(ann) = ty {
@@ -957,7 +1006,12 @@ impl<'a> TypeInfer<'a> {
 
                 self.node_types.insert(*id, self.subst.apply(&bound_ty));
             }
-            Stmt::Assign { target, value, span, .. } => {
+            Stmt::Assign {
+                target,
+                value,
+                span,
+                ..
+            } => {
                 let value_ty = self.infer_expr(value);
                 let target_ty = self.infer_expr(target);
                 self.unify(&target_ty, &value_ty, *span);
@@ -968,7 +1022,14 @@ impl<'a> TypeInfer<'a> {
             Stmt::Require(req) => {
                 self.check_require(req);
             }
-            Stmt::For { var, var_id, iter, body, span, .. } => {
+            Stmt::For {
+                var,
+                var_id,
+                iter,
+                body,
+                span,
+                ..
+            } => {
                 let iter_ty = self.infer_expr(iter);
                 let elem_ty = self.fresh_tyvar();
                 self.unify(&iter_ty, &Ty::Array(Box::new(elem_ty.clone())), *span);
@@ -987,19 +1048,22 @@ impl<'a> TypeInfer<'a> {
 
     fn check_require(&mut self, req: &RequireStmt) {
         let expr_ty = self.infer_expr(&req.expr);
-        if !self.unify_or(
-            &expr_ty,
-            &Ty::Bool,
-            req.expr.span(),
-            |found| TypeError::RequireNonBool { found, span: req.expr.span() },
-        ) {
+        if !self.unify_or(&expr_ty, &Ty::Bool, req.expr.span(), |found| {
+            TypeError::RequireNonBool {
+                found,
+                span: req.expr.span(),
+            }
+        }) {
             // unify_or already pushed an error, no further action.
         }
 
         if let Some(msg) = &req.message {
             let msg_ty = self.infer_expr(msg);
             self.unify_or(&msg_ty, &Ty::Str, msg.span(), |found| {
-                TypeError::RequireMessageNonStr { found, span: msg.span() }
+                TypeError::RequireMessageNonStr {
+                    found,
+                    span: msg.span(),
+                }
             });
         }
 
@@ -1010,7 +1074,10 @@ impl<'a> TypeInfer<'a> {
                 ret: Box::new(Ty::Unit),
             };
             self.unify_or(&set_fn_ty, &expected, set_fn.span(), |found| {
-                TypeError::RequireSetType { found, span: set_fn.span() }
+                TypeError::RequireSetType {
+                    found,
+                    span: set_fn.span(),
+                }
             });
         }
     }
@@ -1040,8 +1107,6 @@ impl<'a> TypeInfer<'a> {
     // ------------------------------------------------------------------
 
     fn infer_expr(&mut self, expr: &Expr) -> Ty {
-        
-
         match expr {
             Expr::Literal { value, id, .. } => {
                 let lit_ty = match value {
@@ -1068,7 +1133,13 @@ impl<'a> TypeInfer<'a> {
                 ty
             }
 
-            Expr::Binary { op, left, right, id, span } => {
+            Expr::Binary {
+                op,
+                left,
+                right,
+                id,
+                span,
+            } => {
                 let left_ty = self.infer_expr(left);
                 let right_ty = self.infer_expr(right);
                 let result_ty = self.infer_binary_op(*op, &left_ty, &right_ty, *span);
@@ -1076,24 +1147,33 @@ impl<'a> TypeInfer<'a> {
                 result_ty
             }
 
-            Expr::Unary { op, expr: inner, id, span } => {
+            Expr::Unary {
+                op,
+                expr: inner,
+                id,
+                span,
+            } => {
                 let inner_ty = self.infer_expr(inner);
                 let result_ty = self.infer_unary_op(*op, &inner_ty, *span);
                 self.node_types.insert(*id, result_ty.clone());
                 result_ty
             }
 
-            Expr::Call { callee, args, id, span } => {
+            Expr::Call {
+                callee,
+                args,
+                id,
+                span,
+            } => {
                 let callee_ty = self.infer_expr(callee);
                 // Use canonical args (definition order, defaults inserted) when
                 // available — every direct call to a known function has them.
-                let arg_tys: Vec<Ty> = if let Some(canon) =
-                    self.resolve.canonical_call_args.get(id).cloned()
-                {
-                    self.infer_args(&canon)
-                } else {
-                    self.infer_args(args)
-                };
+                let arg_tys: Vec<Ty> =
+                    if let Some(canon) = self.resolve.canonical_call_args.get(id).cloned() {
+                        self.infer_args(&canon)
+                    } else {
+                        self.infer_args(args)
+                    };
 
                 // M8 Task 3: friendlier errors for stdlib `spawn` / `join`.
                 // When the callee is a direct reference to one of these and an
@@ -1178,7 +1258,13 @@ impl<'a> TypeInfer<'a> {
                 ret_ty
             }
 
-            Expr::If { cond, then_branch, else_branch, id, span } => {
+            Expr::If {
+                cond,
+                then_branch,
+                else_branch,
+                id,
+                span,
+            } => {
                 let cond_ty = self.infer_expr(cond);
                 self.unify(&Ty::Bool, &cond_ty, cond.span());
 
@@ -1196,7 +1282,12 @@ impl<'a> TypeInfer<'a> {
                 result_ty
             }
 
-            Expr::Block { stmts, expr: tail, id, .. } => {
+            Expr::Block {
+                stmts,
+                expr: tail,
+                id,
+                ..
+            } => {
                 self.env.push_scope();
                 for stmt in stmts {
                     self.check_stmt(stmt);
@@ -1211,7 +1302,11 @@ impl<'a> TypeInfer<'a> {
                 block_ty
             }
 
-            Expr::Return { expr: ret_expr, id, span } => {
+            Expr::Return {
+                expr: ret_expr,
+                id,
+                span,
+            } => {
                 let ret_ty = if let Some(e) = ret_expr {
                     self.infer_expr(e)
                 } else {
@@ -1247,7 +1342,9 @@ impl<'a> TypeInfer<'a> {
                 diverges
             }
 
-            Expr::Closure { params, body, id, .. } => {
+            Expr::Closure {
+                params, body, id, ..
+            } => {
                 self.env.push_scope();
                 let mut aliases = std::mem::take(&mut self.generic_aliases);
                 let param_tys: Vec<Ty> = params
@@ -1292,7 +1389,12 @@ impl<'a> TypeInfer<'a> {
                 Ty::ShellOutput
             }
 
-            Expr::StructLit { name, fields, id, span } => {
+            Expr::StructLit {
+                name,
+                fields,
+                id,
+                span,
+            } => {
                 let struct_ty = self
                     .lookup_user_type(*name)
                     .filter(|t| matches!(t, Ty::Struct { .. }))
@@ -1302,13 +1404,17 @@ impl<'a> TypeInfer<'a> {
                         self.fresh_tyvar()
                     });
 
-                if let Ty::Struct { fields: declared, name: sname, .. } = &struct_ty {
+                if let Ty::Struct {
+                    fields: declared,
+                    name: sname,
+                    ..
+                } = &struct_ty
+                {
                     let declared = declared.clone();
                     let sname = *sname;
                     for (fname, fexpr) in fields {
                         let expr_ty = self.infer_expr(fexpr);
-                        if let Some((_, decl_ty)) = declared.iter().find(|(n, _)| *n == *fname)
-                        {
+                        if let Some((_, decl_ty)) = declared.iter().find(|(n, _)| *n == *fname) {
                             if self.try_unify(decl_ty, &expr_ty).is_err() {
                                 let expected = self.subst.apply(decl_ty);
                                 let found = self.subst.apply(&expr_ty);
@@ -1334,23 +1440,26 @@ impl<'a> TypeInfer<'a> {
                 struct_ty
             }
 
-            Expr::FieldAccess { expr, field, id, span } => {
+            Expr::FieldAccess {
+                expr,
+                field,
+                id,
+                span,
+            } => {
                 let recv_ty = self.infer_expr(expr);
                 let resolved = self.subst.apply(&recv_ty);
                 let result_ty = match &resolved {
-                    Ty::Struct { fields, .. } => {
-                        match fields.iter().find(|(n, _)| *n == *field) {
-                            Some((_, t)) => t.clone(),
-                            None => {
-                                self.errors.push(TypeError::NoSuchField {
-                                    ty: resolved.clone(),
-                                    field: *field,
-                                    span: *span,
-                                });
-                                self.fresh_tyvar()
-                            }
+                    Ty::Struct { fields, .. } => match fields.iter().find(|(n, _)| *n == *field) {
+                        Some((_, t)) => t.clone(),
+                        None => {
+                            self.errors.push(TypeError::NoSuchField {
+                                ty: resolved.clone(),
+                                field: *field,
+                                span: *span,
+                            });
+                            self.fresh_tyvar()
                         }
-                    }
+                    },
                     Ty::Var(_) => {
                         // Could not narrow yet; emit CannotInfer at the end.
                         self.fresh_tyvar()
@@ -1367,7 +1476,12 @@ impl<'a> TypeInfer<'a> {
                 result_ty
             }
 
-            Expr::Match { scrutinee, arms, id, span } => {
+            Expr::Match {
+                scrutinee,
+                arms,
+                id,
+                span,
+            } => {
                 let scrutinee_ty = self.infer_expr(scrutinee);
 
                 let result_ty = self.fresh_tyvar();
@@ -1390,7 +1504,13 @@ impl<'a> TypeInfer<'a> {
                 tuple_ty
             }
 
-            Expr::MethodCall { receiver, method, args, id, span } => {
+            Expr::MethodCall {
+                receiver,
+                method,
+                args,
+                id,
+                span,
+            } => {
                 let receiver_ty = self.infer_expr(receiver);
 
                 // Type-check arg expressions up front so any errors land
@@ -1474,7 +1594,13 @@ impl<'a> TypeInfer<'a> {
                 ret_ty
             }
 
-            Expr::VariantCtor { enum_name, variant, args, id, span } => {
+            Expr::VariantCtor {
+                enum_name,
+                variant,
+                args,
+                id,
+                span,
+            } => {
                 if let Some(ty) = self.infer_builtin_variant_ctor(*enum_name, *variant, args) {
                     let _ = span;
                     self.node_types.insert(*id, ty.clone());
@@ -1529,7 +1655,12 @@ impl<'a> TypeInfer<'a> {
                 array_ty
             }
 
-            Expr::Index { array, index, id, span } => {
+            Expr::Index {
+                array,
+                index,
+                id,
+                span,
+            } => {
                 let array_ty = self.infer_expr(array);
                 let index_ty = self.infer_expr(index);
                 self.unify(&index_ty, &Ty::Int, index.span());
@@ -1707,8 +1838,7 @@ impl<'a> TypeInfer<'a> {
                 self.unify(scrutinee_ty, &lit_ty, *span);
             }
             Pattern::Tuple { patterns, span } => {
-                let elem_tys: Vec<Ty> =
-                    (0..patterns.len()).map(|_| self.fresh_tyvar()).collect();
+                let elem_tys: Vec<Ty> = (0..patterns.len()).map(|_| self.fresh_tyvar()).collect();
                 let tuple_ty = Ty::Tuple(elem_tys.clone());
                 self.unify(scrutinee_ty, &tuple_ty, *span);
                 for (sub, ty) in patterns.iter().zip(elem_tys.iter()) {
@@ -1721,7 +1851,10 @@ impl<'a> TypeInfer<'a> {
                     .filter(|t| matches!(t, Ty::Struct { .. }))
                     .unwrap_or_else(|| self.fresh_tyvar());
                 self.unify(scrutinee_ty, &struct_ty, *span);
-                if let Ty::Struct { fields: declared, .. } = &struct_ty {
+                if let Ty::Struct {
+                    fields: declared, ..
+                } = &struct_ty
+                {
                     let declared = declared.clone();
                     for (fname, fpat) in fields {
                         let field_ty = declared
@@ -1904,8 +2037,14 @@ impl<'a> TypeInfer<'a> {
             }
 
             (
-                Ty::Fn { params: p1, ret: r1 },
-                Ty::Fn { params: p2, ret: r2 },
+                Ty::Fn {
+                    params: p1,
+                    ret: r1,
+                },
+                Ty::Fn {
+                    params: p2,
+                    ret: r2,
+                },
             ) => {
                 if p1.len() != p2.len() {
                     return Err(());
@@ -2000,7 +2139,9 @@ impl<'a> TypeInfer<'a> {
             .items
             .iter()
             .find_map(|item| match item {
-                Item::Fn(FnItem { name, type_params, .. }) if *name == fn_name => Some(
+                Item::Fn(FnItem {
+                    name, type_params, ..
+                }) if *name == fn_name => Some(
                     type_params
                         .iter()
                         .filter(|tp| !tp.bounds.is_empty())
@@ -2132,10 +2273,7 @@ impl<'a> TypeInfer<'a> {
             if self.method_dispatch.contains_key(call_id) {
                 continue;
             }
-            let recv_ty = resolved
-                .get(recv_id)
-                .cloned()
-                .unwrap_or(Ty::Unit);
+            let recv_ty = resolved.get(recv_id).cloned().unwrap_or(Ty::Unit);
             if let Some((_, def_id)) = self.registry.find_method(&recv_ty, *method) {
                 self.method_dispatch.insert(*call_id, def_id);
             } else if !matches!(recv_ty, Ty::Var(_)) {
@@ -2174,7 +2312,11 @@ fn rename_vars(ty: &Ty, mapping: &HashMap<TyVar, Ty>) -> Ty {
             ret: Box::new(rename_vars(ret, mapping)),
         },
         Ty::Tuple(elems) => Ty::Tuple(elems.iter().map(|t| rename_vars(t, mapping)).collect()),
-        Ty::Struct { def_id, name, fields } => Ty::Struct {
+        Ty::Struct {
+            def_id,
+            name,
+            fields,
+        } => Ty::Struct {
             def_id: *def_id,
             name: *name,
             fields: fields
@@ -2182,7 +2324,11 @@ fn rename_vars(ty: &Ty, mapping: &HashMap<TyVar, Ty>) -> Ty {
                 .map(|(n, t)| (*n, rename_vars(t, mapping)))
                 .collect(),
         },
-        Ty::Enum { def_id, name, variants } => Ty::Enum {
+        Ty::Enum {
+            def_id,
+            name,
+            variants,
+        } => Ty::Enum {
             def_id: *def_id,
             name: *name,
             variants: variants
@@ -2196,9 +2342,9 @@ fn rename_vars(ty: &Ty, mapping: &HashMap<TyVar, Ty>) -> Ty {
             Box::new(rename_vars(ok, mapping)),
             Box::new(rename_vars(err, mapping)),
         ),
-        Ty::Async(inner)  => Ty::Async(Box::new(rename_vars(inner, mapping))),
+        Ty::Async(inner) => Ty::Async(Box::new(rename_vars(inner, mapping))),
         Ty::Handle(inner) => Ty::Handle(Box::new(rename_vars(inner, mapping))),
-        Ty::Poll(inner)   => Ty::Poll(Box::new(rename_vars(inner, mapping))),
+        Ty::Poll(inner) => Ty::Poll(Box::new(rename_vars(inner, mapping))),
         other => other.clone(),
     }
 }
@@ -2215,7 +2361,11 @@ fn default_remaining_vars(ty: &Ty) -> Ty {
             ret: Box::new(default_remaining_vars(ret)),
         },
         Ty::Tuple(elems) => Ty::Tuple(elems.iter().map(default_remaining_vars).collect()),
-        Ty::Struct { def_id, name, fields } => Ty::Struct {
+        Ty::Struct {
+            def_id,
+            name,
+            fields,
+        } => Ty::Struct {
             def_id: *def_id,
             name: *name,
             fields: fields
@@ -2223,7 +2373,11 @@ fn default_remaining_vars(ty: &Ty) -> Ty {
                 .map(|(n, t)| (*n, default_remaining_vars(t)))
                 .collect(),
         },
-        Ty::Enum { def_id, name, variants } => Ty::Enum {
+        Ty::Enum {
+            def_id,
+            name,
+            variants,
+        } => Ty::Enum {
             def_id: *def_id,
             name: *name,
             variants: variants
@@ -2237,9 +2391,9 @@ fn default_remaining_vars(ty: &Ty) -> Ty {
             Box::new(default_remaining_vars(ok)),
             Box::new(default_remaining_vars(err)),
         ),
-        Ty::Async(inner)  => Ty::Async(Box::new(default_remaining_vars(inner))),
+        Ty::Async(inner) => Ty::Async(Box::new(default_remaining_vars(inner))),
         Ty::Handle(inner) => Ty::Handle(Box::new(default_remaining_vars(inner))),
-        Ty::Poll(inner)   => Ty::Poll(Box::new(default_remaining_vars(inner))),
+        Ty::Poll(inner) => Ty::Poll(Box::new(default_remaining_vars(inner))),
         other => other.clone(),
     }
 }
@@ -2281,15 +2435,13 @@ fn span_in_stmt(stmt: &Stmt, target: NodeId) -> Option<Span> {
     }
     match stmt {
         Stmt::Let { init, .. } => span_in_expr(init, target),
-        Stmt::Assign { target: t, value, .. } => {
-            span_in_expr(t, target).or_else(|| span_in_expr(value, target))
-        }
+        Stmt::Assign {
+            target: t, value, ..
+        } => span_in_expr(t, target).or_else(|| span_in_expr(value, target)),
         Stmt::Expr { expr } => span_in_expr(expr, target),
-        Stmt::Require(req) => {
-            span_in_expr(&req.expr, target)
-                .or_else(|| req.message.as_ref().and_then(|m| span_in_expr(m, target)))
-                .or_else(|| req.set_fn.as_ref().and_then(|s| span_in_expr(s, target)))
-        }
+        Stmt::Require(req) => span_in_expr(&req.expr, target)
+            .or_else(|| req.message.as_ref().and_then(|m| span_in_expr(m, target)))
+            .or_else(|| req.set_fn.as_ref().and_then(|s| span_in_expr(s, target))),
         Stmt::For { iter, body, .. } => {
             span_in_expr(iter, target).or_else(|| span_in_expr(body, target))
         }
@@ -2301,18 +2453,22 @@ fn span_in_expr(expr: &Expr, target: NodeId) -> Option<Span> {
         return Some(expr.span());
     }
     match expr {
-        Expr::Literal { .. } | Expr::Variable { .. } | Expr::Break { .. } | Expr::Continue { .. } => None,
+        Expr::Literal { .. }
+        | Expr::Variable { .. }
+        | Expr::Break { .. }
+        | Expr::Continue { .. } => None,
         Expr::Binary { left, right, .. } => {
             span_in_expr(left, target).or_else(|| span_in_expr(right, target))
         }
         Expr::Unary { expr, .. } => span_in_expr(expr, target),
-        Expr::Call { callee, args, .. } => {
-            span_in_expr(callee, target).or_else(|| {
-                args.iter()
-                    .find_map(|a| span_in_expr(&a.value, target))
-            })
-        }
-        Expr::If { cond, then_branch, else_branch, .. } => span_in_expr(cond, target)
+        Expr::Call { callee, args, .. } => span_in_expr(callee, target)
+            .or_else(|| args.iter().find_map(|a| span_in_expr(&a.value, target))),
+        Expr::If {
+            cond,
+            then_branch,
+            else_branch,
+            ..
+        } => span_in_expr(cond, target)
             .or_else(|| span_in_expr(then_branch, target))
             .or_else(|| else_branch.as_ref().and_then(|e| span_in_expr(e, target))),
         Expr::Block { stmts, expr, .. } => stmts
@@ -2329,20 +2485,17 @@ fn span_in_expr(expr: &Expr, target: NodeId) -> Option<Span> {
             ShellPart::Interpolated(e) => span_in_expr(e, target),
             ShellPart::Literal(_) => None,
         }),
-        Expr::StructLit { fields, .. } => {
-            fields.iter().find_map(|(_, e)| span_in_expr(e, target))
-        }
+        Expr::StructLit { fields, .. } => fields.iter().find_map(|(_, e)| span_in_expr(e, target)),
         Expr::FieldAccess { expr, .. } => span_in_expr(expr, target),
-        Expr::Match { scrutinee, arms, .. } => span_in_expr(scrutinee, target).or_else(|| {
-            arms.iter().find_map(|arm| span_in_expr(&arm.body, target))
-        }),
+        Expr::Match {
+            scrutinee, arms, ..
+        } => span_in_expr(scrutinee, target)
+            .or_else(|| arms.iter().find_map(|arm| span_in_expr(&arm.body, target))),
         Expr::Tuple { elements, .. } => elements.iter().find_map(|e| span_in_expr(e, target)),
         Expr::VariantCtor { args, .. } => args.iter().find_map(|e| span_in_expr(e, target)),
         Expr::MethodCall { receiver, args, .. } => span_in_expr(receiver, target)
             .or_else(|| args.iter().find_map(|a| span_in_expr(&a.value, target))),
-        Expr::ArrayLit { elements, .. } => {
-            elements.iter().find_map(|e| span_in_expr(e, target))
-        }
+        Expr::ArrayLit { elements, .. } => elements.iter().find_map(|e| span_in_expr(e, target)),
         Expr::Index { array, index, .. } => {
             span_in_expr(array, target).or_else(|| span_in_expr(index, target))
         }
@@ -2459,9 +2612,15 @@ mod tests {
             Ty::Var(tv) => tv,
             _ => unreachable!(),
         };
-        let bad = Ty::Fn { params: vec![v.clone()], ret: Box::new(v.clone()) };
+        let bad = Ty::Fn {
+            params: vec![v.clone()],
+            ret: Box::new(v.clone()),
+        };
         infer.unify(&Ty::Var(inner), &bad, Span::new(0, 0));
-        assert!(matches!(infer.errors.first(), Some(TypeError::InfiniteType { .. })));
+        assert!(matches!(
+            infer.errors.first(),
+            Some(TypeError::InfiniteType { .. })
+        ));
     }
 
     #[test]
@@ -2490,7 +2649,10 @@ mod tests {
         let alpha = TyVar(99);
         let scheme = TypeScheme {
             forall: vec![alpha],
-            ty: Ty::Fn { params: vec![Ty::Var(alpha)], ret: Box::new(Ty::Var(alpha)) },
+            ty: Ty::Fn {
+                params: vec![Ty::Var(alpha)],
+                ret: Box::new(Ty::Var(alpha)),
+            },
         };
         let ty1 = infer.instantiate(&scheme);
         let ty2 = infer.instantiate(&scheme);

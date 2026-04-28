@@ -24,7 +24,11 @@ use ferric_common::Interner;
 
 fn check_arg_count(args: &[NativeValue], expected: usize) -> Result<(), String> {
     if args.len() != expected {
-        Err(format!("expected {} argument(s), got {}", expected, args.len()))
+        Err(format!(
+            "expected {} argument(s), got {}",
+            expected,
+            args.len()
+        ))
     } else {
         Ok(())
     }
@@ -405,25 +409,37 @@ pub fn register(registry: &mut NativeRegistry, interner: &mut Interner) {
     type Entry = (&'static str, &'static [&'static str], crate::NativeFn);
     let entries: &[Entry] = &[
         // Base64
-        ("encode_base64",              &["data"],     builtin_encode_base64),
-        ("encode_base64_url",          &["data"],     builtin_encode_base64_url),
-        ("encode_base64_decode",       &["s"],        builtin_encode_base64_decode),
-        ("encode_base64_url_decode",   &["s"],        builtin_encode_base64_url_decode),
+        ("encode_base64", &["data"], builtin_encode_base64),
+        ("encode_base64_url", &["data"], builtin_encode_base64_url),
+        ("encode_base64_decode", &["s"], builtin_encode_base64_decode),
+        (
+            "encode_base64_url_decode",
+            &["s"],
+            builtin_encode_base64_url_decode,
+        ),
         // Hex
-        ("encode_hex",                 &["data"],     builtin_encode_hex),
-        ("encode_hex_upper",           &["data"],     builtin_encode_hex_upper),
-        ("encode_hex_decode",          &["s"],        builtin_encode_hex_decode),
+        ("encode_hex", &["data"], builtin_encode_hex),
+        ("encode_hex_upper", &["data"], builtin_encode_hex_upper),
+        ("encode_hex_decode", &["s"], builtin_encode_hex_decode),
         // URL
-        ("encode_url_encode",          &["s"],        builtin_encode_url_encode),
-        ("encode_url_decode",          &["s"],        builtin_encode_url_decode),
-        ("encode_url_encode_component",&["s"],        builtin_encode_url_encode_component),
-        ("encode_url_decode_component",&["s"],        builtin_encode_url_decode_component),
+        ("encode_url_encode", &["s"], builtin_encode_url_encode),
+        ("encode_url_decode", &["s"], builtin_encode_url_decode),
+        (
+            "encode_url_encode_component",
+            &["s"],
+            builtin_encode_url_encode_component,
+        ),
+        (
+            "encode_url_decode_component",
+            &["s"],
+            builtin_encode_url_decode_component,
+        ),
         // HTML
-        ("encode_html_escape",         &["s"],        builtin_encode_html_escape),
-        ("encode_html_unescape",       &["s"],        builtin_encode_html_unescape),
+        ("encode_html_escape", &["s"], builtin_encode_html_escape),
+        ("encode_html_unescape", &["s"], builtin_encode_html_unescape),
         // CSV
-        ("encode_csv_row",             &["fields"],   builtin_encode_csv_row),
-        ("encode_csv_parse_row",       &["s"],        builtin_encode_csv_parse_row),
+        ("encode_csv_row", &["fields"], builtin_encode_csv_row),
+        ("encode_csv_parse_row", &["s"], builtin_encode_csv_parse_row),
     ];
     for (name, params, f) in entries {
         registry.register_named(interner, name, params, *f);
@@ -566,8 +582,7 @@ mod tests {
     #[test]
     fn test_url_encode_full_preserves_reserved() {
         // Whole-URL encoding leaves reserved chars alone.
-        let encoded =
-            unwrap_str(builtin_encode_url_encode(&[s("https://x/y?a=b&c=d")]).unwrap());
+        let encoded = unwrap_str(builtin_encode_url_encode(&[s("https://x/y?a=b&c=d")]).unwrap());
         assert_eq!(encoded, "https://x/y?a=b&c=d");
     }
 
@@ -580,10 +595,8 @@ mod tests {
     #[test]
     fn test_url_decode_component_roundtrip() {
         let original = "name=François & Co.";
-        let encoded =
-            unwrap_str(builtin_encode_url_encode_component(&[s(original)]).unwrap());
-        let decoded =
-            unwrap_str(builtin_encode_url_decode_component(&[s(&encoded)]).unwrap());
+        let encoded = unwrap_str(builtin_encode_url_encode_component(&[s(original)]).unwrap());
+        let decoded = unwrap_str(builtin_encode_url_decode_component(&[s(&encoded)]).unwrap());
         assert_eq!(decoded, original);
     }
 
@@ -605,8 +618,7 @@ mod tests {
 
     #[test]
     fn test_html_escape_attribute() {
-        let escaped =
-            unwrap_str(builtin_encode_html_escape(&[s("<a href=\"x\">")]).unwrap());
+        let escaped = unwrap_str(builtin_encode_html_escape(&[s("<a href=\"x\">")]).unwrap());
         assert_eq!(escaped, "&lt;a href=&quot;x&quot;&gt;");
     }
 
@@ -673,9 +685,8 @@ mod tests {
     #[test]
     fn test_csv_roundtrip() {
         let fields = vec![s("a"), s("b,c"), s("d\"e"), s("plain")];
-        let row = unwrap_str(
-            builtin_encode_csv_row(&[NativeValue::Array(fields.clone())]).unwrap(),
-        );
+        let row =
+            unwrap_str(builtin_encode_csv_row(&[NativeValue::Array(fields.clone())]).unwrap());
         let parsed = unwrap_array(builtin_encode_csv_parse_row(&[s(&row)]).unwrap());
         assert_eq!(parsed, fields);
     }

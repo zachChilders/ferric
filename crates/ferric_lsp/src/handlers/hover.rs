@@ -8,9 +8,7 @@
 //!
 //! Type rendering uses the `Display for Ty` impl from LSP Task 1.
 
-use tower_lsp::lsp_types::{
-    Hover, HoverContents, MarkupContent, MarkupKind, Position,
-};
+use tower_lsp::lsp_types::{Hover, HoverContents, MarkupContent, MarkupKind, Position};
 
 use crate::ast_lookup::find_ident_at_byte;
 use crate::pipeline::PipelineSnapshot;
@@ -23,8 +21,8 @@ pub fn hover(snapshot: &PipelineSnapshot, pos: Position) -> Option<Hover> {
 
     // Resolve the use to its definition (so we can render the canonical name
     // even if the use site is shadowed or aliased).
-    let resolve  = snapshot.resolve.as_ref()?;
-    let def_id   = resolve.resolutions.get(&use_node_id).copied()?;
+    let resolve = snapshot.resolve.as_ref()?;
+    let def_id = resolve.resolutions.get(&use_node_id).copied()?;
     let def_info = resolve.def(def_id)?;
     let name_str = snapshot.interner.resolve(def_info.name).to_string();
 
@@ -38,12 +36,12 @@ pub fn hover(snapshot: &PipelineSnapshot, pos: Position) -> Option<Hover> {
 
     let body = match type_str {
         Some(ty) => format!("**{name_str}**: {ty}"),
-        None     => format!("**{name_str}**"),
+        None => format!("**{name_str}**"),
     };
 
     Some(Hover {
         contents: HoverContents::Markup(MarkupContent {
-            kind:  MarkupKind::Markdown,
+            kind: MarkupKind::Markdown,
             value: body,
         }),
         range: Some(snapshot.line_index.range_of(span)),

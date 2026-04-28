@@ -430,11 +430,7 @@ impl NativeRegistry {
     /// parameter names. Suitable for feeding the resolver's
     /// `resolve_with_imports_and_builtins` or `resolve_with_natives_and_builtins`.
     pub fn fn_table(&self) -> Vec<(Symbol, Vec<Symbol>)> {
-        let mut out: Vec<_> = self
-            .params
-            .iter()
-            .map(|(k, v)| (*k, v.clone()))
-            .collect();
+        let mut out: Vec<_> = self.params.iter().map(|(k, v)| (*k, v.clone())).collect();
         // Sort by raw symbol id for deterministic iteration order across runs.
         out.sort_by_key(|(k, _)| k.0);
         out
@@ -454,7 +450,11 @@ impl Default for NativeRegistry {
 /// Checks that the argument count matches the expected count.
 fn check_arg_count(args: &[NativeValue], expected: usize) -> Result<(), String> {
     if args.len() != expected {
-        Err(format!("expected {} argument(s), got {}", expected, args.len()))
+        Err(format!(
+            "expected {} argument(s), got {}",
+            expected,
+            args.len()
+        ))
     } else {
         Ok(())
     }
@@ -560,7 +560,10 @@ fn run_shell_command(cmd: &str) -> ShellOutput {
     #[cfg(any(unix, windows))]
     {
         let output = if cfg!(windows) {
-            std::process::Command::new("cmd").arg("/C").arg(cmd).output()
+            std::process::Command::new("cmd")
+                .arg("/C")
+                .arg(cmd)
+                .output()
         } else {
             std::process::Command::new("sh").arg("-c").arg(cmd).output()
         };
@@ -570,13 +573,19 @@ fn run_shell_command(cmd: &str) -> ShellOutput {
                 let exit_code = out.status.code().unwrap_or(-1);
                 ShellOutput { stdout, exit_code }
             }
-            Err(_) => ShellOutput { stdout: String::new(), exit_code: 126 },
+            Err(_) => ShellOutput {
+                stdout: String::new(),
+                exit_code: 126,
+            },
         }
     }
     #[cfg(not(any(unix, windows)))]
     {
         let _ = cmd;
-        ShellOutput { stdout: String::new(), exit_code: 126 }
+        ShellOutput {
+            stdout: String::new(),
+            exit_code: 126,
+        }
     }
 }
 
@@ -615,9 +624,7 @@ pub(crate) fn builtin_str_split(args: &[NativeValue]) -> Result<NativeValue, Str
     let s = expect_str(&args[0])?;
     let sep = expect_str(&args[1])?;
     let parts: Vec<NativeValue> = if sep.is_empty() {
-        s.chars()
-            .map(|c| NativeValue::Str(c.to_string()))
-            .collect()
+        s.chars().map(|c| NativeValue::Str(c.to_string())).collect()
     } else {
         s.split(sep.as_str())
             .map(|p| NativeValue::Str(p.to_string()))
@@ -683,10 +690,7 @@ pub fn builtin_enum_table(
     vec![
         (
             option_sym,
-            vec![
-                (some_sym, vec![TypeAnnotation::Infer]),
-                (none_sym, vec![]),
-            ],
+            vec![(some_sym, vec![TypeAnnotation::Infer]), (none_sym, vec![])],
         ),
         (
             result_sym,
@@ -748,8 +752,13 @@ pub fn register_stdlib(registry: &mut NativeRegistry, interner: &mut ferric_comm
     // on a `ShellOutput` value. `__shell_exec` is emitted by the compiler
     // when lowering `$ cmd @{interp}` expressions — it isn't callable from
     // Ferric source, so it goes through the param-less `register`.
-    registry.register_named(interner, "shell_stdout",    &["output"], builtin_shell_stdout);
-    registry.register_named(interner, "shell_exit_code", &["output"], builtin_shell_exit_code);
+    registry.register_named(interner, "shell_stdout", &["output"], builtin_shell_stdout);
+    registry.register_named(
+        interner,
+        "shell_exit_code",
+        &["output"],
+        builtin_shell_exit_code,
+    );
     let shell_exec_sym = interner.intern(SHELL_EXEC_NATIVE);
     registry.register(shell_exec_sym, builtin_shell_exec);
 }
@@ -766,15 +775,13 @@ pub fn register_stdlib(registry: &mut NativeRegistry, interner: &mut ferric_comm
 /// Returns `(name, params)` for every async-runtime intrinsic. The resolver
 /// concatenates this with [`NativeRegistry::fn_table`] so that named-arg
 /// validation works for both stdlib natives and async intrinsics.
-pub fn async_intrinsic_param_table(
-    interner: &mut Interner,
-) -> Vec<(Symbol, Vec<Symbol>)> {
+pub fn async_intrinsic_param_table(interner: &mut Interner) -> Vec<(Symbol, Vec<Symbol>)> {
     let entries: &[(&str, &[&str])] = &[
-        ("spawn",           &["task"]),
-        ("join",            &["a", "b"]),
-        ("sleep",           &["ms"]),
+        ("spawn", &["task"]),
+        ("join", &["a", "b"]),
+        ("sleep", &["ms"]),
         ("shell_run_async", &["cmd"]),
-        ("block_on",        &["task"]),
+        ("block_on", &["task"]),
     ];
     entries
         .iter()
@@ -862,7 +869,11 @@ mod tests {
         let result = builtin_println(&args);
 
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("expected 1 argument(s), got 0"));
+        assert!(
+            result
+                .unwrap_err()
+                .contains("expected 1 argument(s), got 0")
+        );
     }
 
     #[test]
@@ -874,7 +885,11 @@ mod tests {
         let result = builtin_println(&args);
 
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("expected 1 argument(s), got 2"));
+        assert!(
+            result
+                .unwrap_err()
+                .contains("expected 1 argument(s), got 2")
+        );
     }
 
     #[test]
@@ -901,7 +916,11 @@ mod tests {
         let result = builtin_print(&args);
 
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("expected 1 argument(s), got 0"));
+        assert!(
+            result
+                .unwrap_err()
+                .contains("expected 1 argument(s), got 0")
+        );
     }
 
     #[test]
@@ -946,7 +965,11 @@ mod tests {
         let result = builtin_int_to_str(&args);
 
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("expected 1 argument(s), got 0"));
+        assert!(
+            result
+                .unwrap_err()
+                .contains("expected 1 argument(s), got 0")
+        );
     }
 
     #[test]

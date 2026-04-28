@@ -32,10 +32,12 @@ fn walk_item(item: &Item, byte: u32) -> Option<(NodeId, Span)> {
 
 fn walk_stmt(stmt: &Stmt, byte: u32) -> Option<(NodeId, Span)> {
     match stmt {
-        Stmt::Let { init, .. }      => walk_expr(init, byte),
-        Stmt::Assign { target, value, .. } => walk_expr(target, byte).or_else(|| walk_expr(value, byte)),
-        Stmt::Expr { expr }         => walk_expr(expr, byte),
-        Stmt::Require(req)          => walk_expr(&req.expr, byte),
+        Stmt::Let { init, .. } => walk_expr(init, byte),
+        Stmt::Assign { target, value, .. } => {
+            walk_expr(target, byte).or_else(|| walk_expr(value, byte))
+        }
+        Stmt::Expr { expr } => walk_expr(expr, byte),
+        Stmt::Require(req) => walk_expr(&req.expr, byte),
         Stmt::For { iter, body, .. } => walk_expr(iter, byte).or_else(|| walk_expr(body, byte)),
     }
 }
@@ -47,49 +49,50 @@ fn walk_expr(expr: &Expr, byte: u32) -> Option<(NodeId, Span)> {
 
     // Recurse into children first; the smallest containing node wins.
     let child_hit = match expr {
-        Expr::Block { stmts, expr: tail, .. } => {
-            stmts.iter().find_map(|s| walk_stmt(s, byte))
-                .or_else(|| tail.as_deref().and_then(|e| walk_expr(e, byte)))
-        }
-        Expr::If { cond, then_branch, else_branch, .. } => {
-            walk_expr(cond, byte)
-                .or_else(|| walk_expr(then_branch, byte))
-                .or_else(|| else_branch.as_deref().and_then(|e| walk_expr(e, byte)))
-        }
-        Expr::While { cond, body, .. } => {
-            walk_expr(cond, byte).or_else(|| walk_expr(body, byte))
-        }
+        Expr::Block {
+            stmts, expr: tail, ..
+        } => stmts
+            .iter()
+            .find_map(|s| walk_stmt(s, byte))
+            .or_else(|| tail.as_deref().and_then(|e| walk_expr(e, byte))),
+        Expr::If {
+            cond,
+            then_branch,
+            else_branch,
+            ..
+        } => walk_expr(cond, byte)
+            .or_else(|| walk_expr(then_branch, byte))
+            .or_else(|| else_branch.as_deref().and_then(|e| walk_expr(e, byte))),
+        Expr::While { cond, body, .. } => walk_expr(cond, byte).or_else(|| walk_expr(body, byte)),
         Expr::Loop { body, .. } => walk_expr(body, byte),
         Expr::Binary { left, right, .. } => {
             walk_expr(left, byte).or_else(|| walk_expr(right, byte))
         }
         Expr::Unary { expr: inner, .. } => walk_expr(inner, byte),
-        Expr::Call { callee, args, .. } => {
-            args.iter().find_map(|a| walk_expr(&a.value, byte))
-                .or_else(|| walk_expr(callee, byte))
-        }
-        Expr::Return { expr: inner, .. } => {
-            inner.as_deref().and_then(|e| walk_expr(e, byte))
-        }
+        Expr::Call { callee, args, .. } => args
+            .iter()
+            .find_map(|a| walk_expr(&a.value, byte))
+            .or_else(|| walk_expr(callee, byte)),
+        Expr::Return { expr: inner, .. } => inner.as_deref().and_then(|e| walk_expr(e, byte)),
         Expr::Closure { body, .. } => walk_expr(body, byte),
         Expr::FieldAccess { expr: receiver, .. } => walk_expr(receiver, byte),
-        Expr::MethodCall { receiver, args, .. } => {
-            args.iter().find_map(|a| walk_expr(&a.value, byte))
-                .or_else(|| walk_expr(receiver, byte))
-        }
-        Expr::Match { scrutinee, arms, .. } => {
-            walk_expr(scrutinee, byte)
-                .or_else(|| arms.iter().find_map(|a| walk_expr(&a.body, byte)))
-        }
-        Expr::Tuple { elements, .. } | Expr::ArrayLit { elements, .. } | Expr::VariantCtor { args: elements, .. } => {
+        Expr::MethodCall { receiver, args, .. } => args
+            .iter()
+            .find_map(|a| walk_expr(&a.value, byte))
+            .or_else(|| walk_expr(receiver, byte)),
+        Expr::Match {
+            scrutinee, arms, ..
+        } => walk_expr(scrutinee, byte)
+            .or_else(|| arms.iter().find_map(|a| walk_expr(&a.body, byte))),
+        Expr::Tuple { elements, .. }
+        | Expr::ArrayLit { elements, .. }
+        | Expr::VariantCtor { args: elements, .. } => {
             elements.iter().find_map(|e| walk_expr(e, byte))
         }
         Expr::Index { array, index, .. } => {
             walk_expr(array, byte).or_else(|| walk_expr(index, byte))
         }
-        Expr::StructLit { fields, .. } => {
-            fields.iter().find_map(|(_, e)| walk_expr(e, byte))
-        }
+        Expr::StructLit { fields, .. } => fields.iter().find_map(|(_, e)| walk_expr(e, byte)),
         Expr::Cast(c) => walk_expr(&c.expr, byte),
         // Variants without sub-expressions: Literal, Variable, Break, Continue, Shell.
         // Shell parts may contain interpolated tokens, but those aren't AST
@@ -164,6 +167,10 @@ mod tests {
         let (_, span) = hit.expect("expected a Variable hit on body's `n`");
         // The matched span must cover exactly the identifier `n`, not the
         // surrounding block.
-        assert_eq!(span.end - span.start, 1, "expected width-1 span, got {span:?}");
+        assert_eq!(
+            span.end - span.start,
+            1,
+            "expected width-1 span, got {span:?}"
+        );
     }
 }

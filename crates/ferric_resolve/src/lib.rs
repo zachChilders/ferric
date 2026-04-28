@@ -6,12 +6,12 @@
 //!
 //! Public API: Only the `resolve()` function is exposed.
 
-use std::collections::HashMap;
 use ferric_common::{
-    DefInfo, ParseResult, ResolveResult, ResolveError, Item, ImplMethod, ModuleResult, Stmt, Expr,
-    NamedArg, Param, Pattern, ShellPart, Symbol, Span, NodeId, DefId, TypeAnnotation,
-    RequireStmt,
+    DefId, DefInfo, Expr, ImplMethod, Item, ModuleResult, NamedArg, NodeId, Param, ParseResult,
+    Pattern, RequireStmt, ResolveError, ResolveResult, ShellPart, Span, Stmt, Symbol,
+    TypeAnnotation,
 };
+use std::collections::HashMap;
 
 /// Public entry point for name resolution.
 ///
@@ -29,7 +29,10 @@ pub fn resolve(ast: &ParseResult) -> ResolveResult {
 ///
 /// `native_fns` is a slice of `(fn_name, param_names)` pairs — one entry per
 /// native function, providing the parameter names needed for named-arg validation.
-pub fn resolve_with_natives(ast: &ParseResult, native_fns: &[(Symbol, Vec<Symbol>)]) -> ResolveResult {
+pub fn resolve_with_natives(
+    ast: &ParseResult,
+    native_fns: &[(Symbol, Vec<Symbol>)],
+) -> ResolveResult {
     resolve_with_natives_and_builtins(ast, native_fns, &[])
 }
 
@@ -301,7 +304,12 @@ impl Resolver {
                 if existing.shadowable {
                     scope.bindings.insert(
                         name,
-                        Binding { def_id, mutable, span, shadowable: false },
+                        Binding {
+                            def_id,
+                            mutable,
+                            span,
+                            shadowable: false,
+                        },
                     );
                     return def_id;
                 }
@@ -313,12 +321,15 @@ impl Resolver {
                 });
             } else {
                 // Insert the new binding
-                scope.bindings.insert(name, Binding {
-                    def_id,
-                    mutable,
-                    span,
-                    shadowable: false,
-                });
+                scope.bindings.insert(
+                    name,
+                    Binding {
+                        def_id,
+                        mutable,
+                        span,
+                        shadowable: false,
+                    },
+                );
             }
         }
 
@@ -428,12 +439,15 @@ impl Resolver {
         // Add to global scope (first scope in the stack). Mark shadowable so
         // a user-defined `fn name(...)` overrides it silently.
         if let Some(scope) = self.scopes.first_mut() {
-            scope.bindings.insert(name, Binding {
-                def_id,
-                mutable: false,
-                span: Span::new(0, 0),
-                shadowable: true,
-            });
+            scope.bindings.insert(
+                name,
+                Binding {
+                    def_id,
+                    mutable: false,
+                    span: Span::new(0, 0),
+                    shadowable: true,
+                },
+            );
         }
 
         // Assign a function slot to the native function
@@ -442,12 +456,15 @@ impl Resolver {
         self.fn_slots.insert(def_id, fn_slot);
 
         // Store parameter info for named-arg validation at call sites
-        let params: Vec<Param> = param_names.into_iter().map(|pname| Param {
-            span: Span::new(0, 0),
-            name: pname,
-            ty: TypeAnnotation::Named(Symbol::new(0)), // unused by resolver
-            default: None,
-        }).collect();
+        let params: Vec<Param> = param_names
+            .into_iter()
+            .map(|pname| Param {
+                span: Span::new(0, 0),
+                name: pname,
+                ty: TypeAnnotation::Named(Symbol::new(0)), // unused by resolver
+                default: None,
+            })
+            .collect();
         self.fn_params.insert(name, params);
     }
 
@@ -472,15 +489,23 @@ impl Resolver {
                     // structurally identical to a sync fn. The lowering pass
                     // (M8 Task 4) rewraps it as Item::Fn before the compiler
                     // runs, but the resolver looks at the original AST.
-                    self.fn_params.insert(decl.item.name, decl.item.params.clone());
+                    self.fn_params
+                        .insert(decl.item.name, decl.item.params.clone());
                 }
-                Item::StructDef { name, fields, span, .. } => {
+                Item::StructDef {
+                    name, fields, span, ..
+                } => {
                     let def_id = self.def_id_gen.next();
                     self.record_def(def_id, *name, Some(*span));
                     self.type_defs.insert(*name, def_id);
                     self.struct_fields.insert(def_id, fields.clone());
                 }
-                Item::EnumDef { name, variants, span, .. } => {
+                Item::EnumDef {
+                    name,
+                    variants,
+                    span,
+                    ..
+                } => {
                     let def_id = self.def_id_gen.next();
                     self.record_def(def_id, *name, Some(*span));
                     self.type_defs.insert(*name, def_id);
@@ -507,8 +532,7 @@ impl Resolver {
                         let fn_slot = self.next_fn_slot;
                         self.next_fn_slot += 1;
                         self.fn_slots.insert(def_id, fn_slot);
-                        self.method_params
-                            .insert(m.id, m.params.clone());
+                        self.method_params.insert(m.id, m.params.clone());
                     }
                 }
                 Item::Script { .. } => {}
@@ -618,7 +642,13 @@ impl Resolver {
     /// Resolves a statement.
     fn resolve_stmt(&mut self, stmt: &Stmt) {
         match stmt {
-            Stmt::Let { name, mutable, init, span, .. } => {
+            Stmt::Let {
+                name,
+                mutable,
+                init,
+                span,
+                ..
+            } => {
                 // Resolve initializer first (before defining the variable)
                 self.resolve_expr(init);
 
@@ -630,12 +660,22 @@ impl Resolver {
                 self.next_slot += 1;
                 self.def_slots.insert(def_id, slot);
             }
-            Stmt::Assign { target, value, span, .. } => {
+            Stmt::Assign {
+                target,
+                value,
+                span,
+                ..
+            } => {
                 // Resolve the value first
                 self.resolve_expr(value);
 
                 // Check that the target is a variable
-                if let Expr::Variable { name, id, span: var_span } = target {
+                if let Expr::Variable {
+                    name,
+                    id,
+                    span: var_span,
+                } = target
+                {
                     // Look up the variable and extract needed info
                     let binding_info = self.lookup(*name).map(|b| (b.def_id, b.mutable));
 
@@ -669,7 +709,14 @@ impl Resolver {
             Stmt::Require(req) => {
                 self.resolve_require(req);
             }
-            Stmt::For { var, var_id, iter, body, span, .. } => {
+            Stmt::For {
+                var,
+                var_id,
+                iter,
+                body,
+                span,
+                ..
+            } => {
                 // Iterable is resolved in the outer scope.
                 self.resolve_expr(iter);
 
@@ -702,7 +749,8 @@ impl Resolver {
             // Check arity: set closure must have zero declared parameters
             if let Expr::Closure { params, span, .. } = set_fn.as_ref() {
                 if !params.is_empty() {
-                    self.errors.push(ResolveError::RequireSetArity { span: *span });
+                    self.errors
+                        .push(ResolveError::RequireSetArity { span: *span });
                 }
             }
             // Resolve the set_fn expression
@@ -740,7 +788,12 @@ impl Resolver {
             Expr::Unary { expr, .. } => {
                 self.resolve_expr(expr);
             }
-            Expr::Call { callee, args, id, span } => {
+            Expr::Call {
+                callee,
+                args,
+                id,
+                span,
+            } => {
                 self.resolve_expr(callee);
 
                 // Resolve all arg values first
@@ -784,7 +837,12 @@ impl Resolver {
                     }
                 }
             }
-            Expr::If { cond, then_branch, else_branch, .. } => {
+            Expr::If {
+                cond,
+                then_branch,
+                else_branch,
+                ..
+            } => {
                 self.resolve_expr(cond);
                 self.resolve_expr(then_branch);
                 if let Some(else_expr) = else_branch {
@@ -809,9 +867,8 @@ impl Resolver {
             Expr::Return { expr, span, .. } => {
                 // Check if we're inside a function
                 if self.fn_depth == 0 {
-                    self.errors.push(ResolveError::ReturnOutsideFn {
-                        span: *span,
-                    });
+                    self.errors
+                        .push(ResolveError::ReturnOutsideFn { span: *span });
                 }
                 if let Some(e) = expr {
                     self.resolve_expr(e);
@@ -834,20 +891,20 @@ impl Resolver {
             Expr::Break { span, .. } => {
                 // Check if we're inside a loop
                 if self.loop_depth == 0 {
-                    self.errors.push(ResolveError::BreakOutsideLoop {
-                        span: *span,
-                    });
+                    self.errors
+                        .push(ResolveError::BreakOutsideLoop { span: *span });
                 }
             }
             Expr::Continue { span, .. } => {
                 // Check if we're inside a loop
                 if self.loop_depth == 0 {
-                    self.errors.push(ResolveError::ContinueOutsideLoop {
-                        span: *span,
-                    });
+                    self.errors
+                        .push(ResolveError::ContinueOutsideLoop { span: *span });
                 }
             }
-            Expr::Closure { params, body, id, .. } => {
+            Expr::Closure {
+                params, body, id, ..
+            } => {
                 // Push a scope for the closure body. Anything resolved against
                 // a binding in scopes < scope_floor is a capture.
                 self.push_scope();
@@ -881,7 +938,9 @@ impl Resolver {
                     }
                 }
             }
-            Expr::StructLit { name, fields, span, .. } => {
+            Expr::StructLit {
+                name, fields, span, ..
+            } => {
                 let def_id = self.type_defs.get(name).copied();
                 if def_id.is_none() {
                     self.errors.push(ResolveError::UndefinedType {
@@ -921,7 +980,9 @@ impl Resolver {
                 // Field-existence checking is done in the type checker, where
                 // we know the type of `expr`.
             }
-            Expr::Match { scrutinee, arms, .. } => {
+            Expr::Match {
+                scrutinee, arms, ..
+            } => {
                 self.resolve_expr(scrutinee);
                 for arm in arms {
                     // Each arm gets its own scope for pattern bindings.
@@ -936,7 +997,13 @@ impl Resolver {
                     self.resolve_expr(e);
                 }
             }
-            Expr::VariantCtor { enum_name, variant, args, span, .. } => {
+            Expr::VariantCtor {
+                enum_name,
+                variant,
+                args,
+                span,
+                ..
+            } => {
                 self.resolve_variant_ref(*enum_name, *variant, *span, args.len());
                 for a in args {
                     self.resolve_expr(a);
@@ -1020,28 +1087,26 @@ impl Resolver {
                         span,
                     });
                 }
-                Some(variants) => {
-                    match variants.iter().find(|(v, _)| *v == variant) {
-                        None => {
-                            self.errors.push(ResolveError::UnknownVariant {
+                Some(variants) => match variants.iter().find(|(v, _)| *v == variant) {
+                    None => {
+                        self.errors.push(ResolveError::UnknownVariant {
+                            enum_name,
+                            variant,
+                            span,
+                        });
+                    }
+                    Some((_, payload)) => {
+                        if payload.len() != arity {
+                            self.errors.push(ResolveError::VariantArity {
                                 enum_name,
                                 variant,
+                                expected: payload.len(),
+                                found: arity,
                                 span,
                             });
                         }
-                        Some((_, payload)) => {
-                            if payload.len() != arity {
-                                self.errors.push(ResolveError::VariantArity {
-                                    enum_name,
-                                    variant,
-                                    expected: payload.len(),
-                                    found: arity,
-                                    span,
-                                });
-                            }
-                        }
                     }
-                }
+                },
             },
         }
     }
@@ -1086,7 +1151,12 @@ impl Resolver {
                     self.resolve_pattern(fpat);
                 }
             }
-            Pattern::Variant { enum_name, variant, patterns, span } => {
+            Pattern::Variant {
+                enum_name,
+                variant,
+                patterns,
+                span,
+            } => {
                 self.resolve_variant_ref(*enum_name, *variant, *span, patterns.len());
                 for p in patterns {
                     self.resolve_pattern(p);
@@ -1099,7 +1169,9 @@ impl Resolver {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ferric_common::{Span, Symbol, NodeId, FnItem, Item, Stmt, Expr, Literal, Param, TypeAnnotation};
+    use ferric_common::{
+        Expr, FnItem, Item, Literal, NodeId, Param, Span, Stmt, Symbol, TypeAnnotation,
+    };
 
     fn make_span() -> Span {
         Span::new(0, 0)
@@ -1156,28 +1228,31 @@ mod tests {
     }
 
     fn make_param(name: Symbol, ty: TypeAnnotation) -> Param {
-        Param { span: Span::new(0, 0), name, ty, default: None }
+        Param {
+            span: Span::new(0, 0),
+            name,
+            ty,
+            default: None,
+        }
     }
 
     #[test]
     fn test_function_parameter_resolution() {
         // fn foo(x: Int) { x }
         let ast = ParseResult::new(
-            vec![
-                Item::Fn(FnItem {
-                    id: make_node_id(0),
-                    name: make_sym(0), // foo
-                    type_params: vec![],
-                    params: vec![make_param(make_sym(1), TypeAnnotation::Named(make_sym(2)))],
-                    ret_ty: TypeAnnotation::Named(make_sym(2)), // Int
-                    body: Expr::Variable {
-                        name: make_sym(1), // x
-                        id: make_node_id(1),
-                        span: make_span(),
-                    },
+            vec![Item::Fn(FnItem {
+                id: make_node_id(0),
+                name: make_sym(0), // foo
+                type_params: vec![],
+                params: vec![make_param(make_sym(1), TypeAnnotation::Named(make_sym(2)))],
+                ret_ty: TypeAnnotation::Named(make_sym(2)), // Int
+                body: Expr::Variable {
+                    name: make_sym(1), // x
+                    id: make_node_id(1),
                     span: make_span(),
-                }),
-            ],
+                },
+                span: make_span(),
+            })],
             vec![],
         );
 
@@ -1211,20 +1286,18 @@ mod tests {
                 Item::Script {
                     stmt: Stmt::Expr {
                         expr: Expr::Block {
-                            stmts: vec![
-                                Stmt::Let {
-                                    name: make_sym(0), // x (shadows outer x)
-                                    mutable: false,
-                                    ty: None,
-                                    init: Expr::Literal {
-                                        value: Literal::Int(2),
-                                        id: make_node_id(3),
-                                        span: make_span(),
-                                    },
-                                    id: make_node_id(4),
+                            stmts: vec![Stmt::Let {
+                                name: make_sym(0), // x (shadows outer x)
+                                mutable: false,
+                                ty: None,
+                                init: Expr::Literal {
+                                    value: Literal::Int(2),
+                                    id: make_node_id(3),
                                     span: make_span(),
                                 },
-                            ],
+                                id: make_node_id(4),
+                                span: make_span(),
+                            }],
                             expr: Some(Box::new(Expr::Variable {
                                 name: make_sym(0), // x
                                 id: make_node_id(5),
@@ -1253,24 +1326,22 @@ mod tests {
     fn test_undefined_variable() {
         // let x = y (y is undefined)
         let ast = ParseResult::new(
-            vec![
-                Item::Script {
-                    stmt: Stmt::Let {
-                        name: make_sym(0), // x
-                        mutable: false,
-                        ty: None,
-                        init: Expr::Variable {
-                            name: make_sym(1), // y (undefined)
-                            id: make_node_id(0),
-                            span: make_span(),
-                        },
-                        id: make_node_id(1),
+            vec![Item::Script {
+                stmt: Stmt::Let {
+                    name: make_sym(0), // x
+                    mutable: false,
+                    ty: None,
+                    init: Expr::Variable {
+                        name: make_sym(1), // y (undefined)
+                        id: make_node_id(0),
                         span: make_span(),
                     },
-                    id: make_node_id(2),
+                    id: make_node_id(1),
                     span: make_span(),
                 },
-            ],
+                id: make_node_id(2),
+                span: make_span(),
+            }],
             vec![],
         );
 
@@ -1385,20 +1456,18 @@ mod tests {
                 Item::Script {
                     stmt: Stmt::Expr {
                         expr: Expr::Block {
-                            stmts: vec![
-                                Stmt::Let {
-                                    name: make_sym(0), // x
-                                    mutable: false,
-                                    ty: None,
-                                    init: Expr::Literal {
-                                        value: Literal::Int(1),
-                                        id: make_node_id(0),
-                                        span: make_span(),
-                                    },
-                                    id: make_node_id(1),
+                            stmts: vec![Stmt::Let {
+                                name: make_sym(0), // x
+                                mutable: false,
+                                ty: None,
+                                init: Expr::Literal {
+                                    value: Literal::Int(1),
+                                    id: make_node_id(0),
                                     span: make_span(),
                                 },
-                            ],
+                                id: make_node_id(1),
+                                span: make_span(),
+                            }],
                             expr: None,
                             id: make_node_id(2),
                             span: make_span(),
@@ -1434,39 +1503,35 @@ mod tests {
     fn test_function_creates_new_scope() {
         // fn foo(x: Int) { let y = x; y }
         let ast = ParseResult::new(
-            vec![
-                Item::Fn(FnItem {
-                    id: make_node_id(0),
-                    name: make_sym(0), // foo
-                    type_params: vec![],
-                    params: vec![make_param(make_sym(1), TypeAnnotation::Named(make_sym(2)))],
-                    ret_ty: TypeAnnotation::Named(make_sym(2)), // Int
-                    body: Expr::Block {
-                        stmts: vec![
-                            Stmt::Let {
-                                name: make_sym(3), // y
-                                mutable: false,
-                                ty: None,
-                                init: Expr::Variable {
-                                    name: make_sym(1), // x
-                                    id: make_node_id(1),
-                                    span: make_span(),
-                                },
-                                id: make_node_id(2),
-                                span: make_span(),
-                            },
-                        ],
-                        expr: Some(Box::new(Expr::Variable {
-                            name: make_sym(3), // y
-                            id: make_node_id(3),
+            vec![Item::Fn(FnItem {
+                id: make_node_id(0),
+                name: make_sym(0), // foo
+                type_params: vec![],
+                params: vec![make_param(make_sym(1), TypeAnnotation::Named(make_sym(2)))],
+                ret_ty: TypeAnnotation::Named(make_sym(2)), // Int
+                body: Expr::Block {
+                    stmts: vec![Stmt::Let {
+                        name: make_sym(3), // y
+                        mutable: false,
+                        ty: None,
+                        init: Expr::Variable {
+                            name: make_sym(1), // x
+                            id: make_node_id(1),
                             span: make_span(),
-                        })),
-                        id: make_node_id(4),
+                        },
+                        id: make_node_id(2),
                         span: make_span(),
-                    },
+                    }],
+                    expr: Some(Box::new(Expr::Variable {
+                        name: make_sym(3), // y
+                        id: make_node_id(3),
+                        span: make_span(),
+                    })),
+                    id: make_node_id(4),
                     span: make_span(),
-                }),
-            ],
+                },
+                span: make_span(),
+            })],
             vec![],
         );
 

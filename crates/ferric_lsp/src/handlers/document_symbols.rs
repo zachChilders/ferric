@@ -70,14 +70,23 @@ fn push_item_symbol(
                 li.range_of(*span),
             ));
         }
-        Item::ImplBlock { trait_name, type_name, span, .. } => {
+        Item::ImplBlock {
+            trait_name,
+            type_name,
+            span,
+            ..
+        } => {
             // No single "impl" name in LSP — render `impl Trait for Type`.
             let label = format!(
                 "impl {} for {}",
                 snapshot.interner.resolve(*trait_name),
                 snapshot.interner.resolve(*type_name),
             );
-            out.push(make_symbol(label, SymbolKind::NAMESPACE, li.range_of(*span)));
+            out.push(make_symbol(
+                label,
+                SymbolKind::NAMESPACE,
+                li.range_of(*span),
+            ));
         }
         Item::TypeAlias(decl) => {
             out.push(make_symbol(
@@ -86,8 +95,21 @@ fn push_item_symbol(
                 li.range_of(decl.span),
             ));
         }
-        Item::Script { stmt: Stmt::Let { name, mutable, span, .. }, .. } => {
-            let kind = if *mutable { SymbolKind::VARIABLE } else { SymbolKind::CONSTANT };
+        Item::Script {
+            stmt:
+                Stmt::Let {
+                    name,
+                    mutable,
+                    span,
+                    ..
+                },
+            ..
+        } => {
+            let kind = if *mutable {
+                SymbolKind::VARIABLE
+            } else {
+                SymbolKind::CONSTANT
+            };
             out.push(make_symbol(
                 snapshot.interner.resolve(*name).to_string(),
                 kind,
@@ -116,13 +138,13 @@ fn make_symbol(
     #[allow(deprecated)] // `deprecated` field on DocumentSymbol is itself deprecated.
     DocumentSymbol {
         name,
-        detail:          None,
+        detail: None,
         kind,
-        tags:            None,
-        deprecated:      None,
+        tags: None,
+        deprecated: None,
         range,
         selection_range: range, // No name_span on AST items — fall back to full span.
-        children:        None,
+        children: None,
     }
 }
 
@@ -175,8 +197,14 @@ mod tests {
     fn structs_and_enums_appear() {
         let src = "struct Point { x: Int, y: Int } enum Color { Red, Green, Blue }";
         let s = syms(src);
-        assert!(s.iter().any(|d| d.name == "Point" && d.kind == SymbolKind::STRUCT));
-        assert!(s.iter().any(|d| d.name == "Color" && d.kind == SymbolKind::ENUM));
+        assert!(
+            s.iter()
+                .any(|d| d.name == "Point" && d.kind == SymbolKind::STRUCT)
+        );
+        assert!(
+            s.iter()
+                .any(|d| d.name == "Color" && d.kind == SymbolKind::ENUM)
+        );
     }
 
     #[test]

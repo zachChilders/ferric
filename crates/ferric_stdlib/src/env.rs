@@ -212,9 +212,7 @@ fn builtin_env_home_dir(args: &[NativeValue]) -> Result<NativeValue, String> {
     check_arg_count(args, 0)?;
     let var = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
     match std::env::var_os(var) {
-        Some(s) if !s.is_empty() => Ok(some(NativeValue::Str(
-            s.to_string_lossy().into_owned(),
-        ))),
+        Some(s) if !s.is_empty() => Ok(some(NativeValue::Str(s.to_string_lossy().into_owned()))),
         _ => Ok(none()),
     }
 }
@@ -256,17 +254,17 @@ fn builtin_env_exit(args: &[NativeValue]) -> Result<NativeValue, String> {
 pub fn register(registry: &mut NativeRegistry, interner: &mut Interner) {
     #[allow(clippy::type_complexity)]
     let entries: &[(&str, fn(&[NativeValue]) -> Result<NativeValue, String>)] = &[
-        ("env_get",       builtin_env_get),
-        ("env_get_or",    builtin_env_get_or),
-        ("env_require",   builtin_env_require),
-        ("env_set",       builtin_env_set),
-        ("env_remove",    builtin_env_remove),
-        ("env_all",       builtin_env_all),
-        ("env_args",      builtin_env_args),
-        ("env_cwd",       builtin_env_cwd),
-        ("env_home_dir",  builtin_env_home_dir),
-        ("env_temp_dir",  builtin_env_temp_dir),
-        ("env_exit",      builtin_env_exit),
+        ("env_get", builtin_env_get),
+        ("env_get_or", builtin_env_get_or),
+        ("env_require", builtin_env_require),
+        ("env_set", builtin_env_set),
+        ("env_remove", builtin_env_remove),
+        ("env_all", builtin_env_all),
+        ("env_args", builtin_env_args),
+        ("env_cwd", builtin_env_cwd),
+        ("env_home_dir", builtin_env_home_dir),
+        ("env_temp_dir", builtin_env_temp_dir),
+        ("env_exit", builtin_env_exit),
     ];
     for (name, f) in entries {
         let sym: Symbol = interner.intern(name);
@@ -313,9 +311,10 @@ mod tests {
         }
     }
 
-    fn call(f: fn(&[NativeValue]) -> Result<NativeValue, String>, args: Vec<NativeValue>)
-        -> Result<NativeValue, String>
-    {
+    fn call(
+        f: fn(&[NativeValue]) -> Result<NativeValue, String>,
+        args: Vec<NativeValue>,
+    ) -> Result<NativeValue, String> {
         f(&args)
     }
 
@@ -326,10 +325,14 @@ mod tests {
         let name = unique_var("GETSET");
         let _g = EnvGuard(name.clone());
 
-        let _ = call(builtin_env_set, vec![
-            NativeValue::Str(name.clone()),
-            NativeValue::Str("value".to_string()),
-        ]).unwrap();
+        let _ = call(
+            builtin_env_set,
+            vec![
+                NativeValue::Str(name.clone()),
+                NativeValue::Str("value".to_string()),
+            ],
+        )
+        .unwrap();
 
         let got = call(builtin_env_get, vec![NativeValue::Str(name.clone())]).unwrap();
         assert_eq!(got, some(NativeValue::Str("value".to_string())));
@@ -340,7 +343,9 @@ mod tests {
         let name = unique_var("UNSET");
         // Make sure it is not set.
         #[allow(unused_unsafe)]
-        unsafe { std::env::remove_var(&name); }
+        unsafe {
+            std::env::remove_var(&name);
+        }
 
         let got = call(builtin_env_get, vec![NativeValue::Str(name)]).unwrap();
         assert_eq!(got, none());
@@ -351,10 +356,14 @@ mod tests {
         let name = unique_var("REMOVE");
         let _g = EnvGuard(name.clone());
 
-        let _ = call(builtin_env_set, vec![
-            NativeValue::Str(name.clone()),
-            NativeValue::Str("x".to_string()),
-        ]).unwrap();
+        let _ = call(
+            builtin_env_set,
+            vec![
+                NativeValue::Str(name.clone()),
+                NativeValue::Str("x".to_string()),
+            ],
+        )
+        .unwrap();
         // Sanity: it's set.
         assert_eq!(
             call(builtin_env_get, vec![NativeValue::Str(name.clone())]).unwrap(),
@@ -373,12 +382,18 @@ mod tests {
     fn get_or_returns_default_when_missing() {
         let name = unique_var("GETOR_MISS");
         #[allow(unused_unsafe)]
-        unsafe { std::env::remove_var(&name); }
+        unsafe {
+            std::env::remove_var(&name);
+        }
 
-        let got = call(builtin_env_get_or, vec![
-            NativeValue::Str(name),
-            NativeValue::Str("default".to_string()),
-        ]).unwrap();
+        let got = call(
+            builtin_env_get_or,
+            vec![
+                NativeValue::Str(name),
+                NativeValue::Str("default".to_string()),
+            ],
+        )
+        .unwrap();
         assert_eq!(got, NativeValue::Str("default".to_string()));
     }
 
@@ -387,15 +402,23 @@ mod tests {
         let name = unique_var("GETOR_HIT");
         let _g = EnvGuard(name.clone());
 
-        let _ = call(builtin_env_set, vec![
-            NativeValue::Str(name.clone()),
-            NativeValue::Str("real".to_string()),
-        ]).unwrap();
+        let _ = call(
+            builtin_env_set,
+            vec![
+                NativeValue::Str(name.clone()),
+                NativeValue::Str("real".to_string()),
+            ],
+        )
+        .unwrap();
 
-        let got = call(builtin_env_get_or, vec![
-            NativeValue::Str(name),
-            NativeValue::Str("default".to_string()),
-        ]).unwrap();
+        let got = call(
+            builtin_env_get_or,
+            vec![
+                NativeValue::Str(name),
+                NativeValue::Str("default".to_string()),
+            ],
+        )
+        .unwrap();
         assert_eq!(got, NativeValue::Str("real".to_string()));
     }
 
@@ -406,10 +429,14 @@ mod tests {
         let name = unique_var("REQ_OK");
         let _g = EnvGuard(name.clone());
 
-        let _ = call(builtin_env_set, vec![
-            NativeValue::Str(name.clone()),
-            NativeValue::Str("v".to_string()),
-        ]).unwrap();
+        let _ = call(
+            builtin_env_set,
+            vec![
+                NativeValue::Str(name.clone()),
+                NativeValue::Str("v".to_string()),
+            ],
+        )
+        .unwrap();
 
         let got = call(builtin_env_require, vec![NativeValue::Str(name)]).unwrap();
         assert_eq!(got, ok(NativeValue::Str("v".to_string())));
@@ -419,7 +446,9 @@ mod tests {
     fn require_unset_returns_err() {
         let name = unique_var("REQ_ERR");
         #[allow(unused_unsafe)]
-        unsafe { std::env::remove_var(&name); }
+        unsafe {
+            std::env::remove_var(&name);
+        }
 
         let got = call(builtin_env_require, vec![NativeValue::Str(name.clone())]).unwrap();
         match got {
@@ -438,10 +467,14 @@ mod tests {
         let name = unique_var("ALL");
         let _g = EnvGuard(name.clone());
 
-        let _ = call(builtin_env_set, vec![
-            NativeValue::Str(name.clone()),
-            NativeValue::Str("present".to_string()),
-        ]).unwrap();
+        let _ = call(
+            builtin_env_set,
+            vec![
+                NativeValue::Str(name.clone()),
+                NativeValue::Str("present".to_string()),
+            ],
+        )
+        .unwrap();
 
         let all = call(builtin_env_all, vec![]).unwrap();
         match all {
@@ -517,7 +550,9 @@ mod tests {
         let original = std::env::var_os(key);
 
         #[allow(unused_unsafe)]
-        unsafe { std::env::set_var(key, "/some/home"); }
+        unsafe {
+            std::env::set_var(key, "/some/home");
+        }
 
         let got = call(builtin_env_home_dir, vec![]).unwrap();
         // Restore BEFORE asserting so an assertion failure doesn't leak.
@@ -539,7 +574,9 @@ mod tests {
         let original = std::env::var_os(key);
 
         #[allow(unused_unsafe)]
-        unsafe { std::env::remove_var(key); }
+        unsafe {
+            std::env::remove_var(key);
+        }
 
         let got = call(builtin_env_home_dir, vec![]).unwrap();
 
@@ -570,7 +607,12 @@ mod tests {
             .env("FERRIC_ENV_EXIT_CODE", "7")
             .output()
             .expect("spawn child");
-        assert_eq!(output.status.code(), Some(7), "stderr: {}", String::from_utf8_lossy(&output.stderr));
+        assert_eq!(
+            output.status.code(),
+            Some(7),
+            "stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 
     /// Helper invoked only by the parent test above (recognised by the

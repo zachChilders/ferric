@@ -1,7 +1,7 @@
 //! Token types for the lexer.
 
-use serde::{Deserialize, Serialize};
 use crate::{Span, Symbol};
+use serde::{Deserialize, Serialize};
 
 /// A token with its kind and source location.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

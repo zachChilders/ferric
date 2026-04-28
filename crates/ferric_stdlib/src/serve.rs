@@ -44,9 +44,8 @@ pub type HandlerFn = Arc<dyn Fn(Rc<RequestRepr>) -> Rc<RefCell<ResponseRepr>> + 
 /// The continuation invokes the rest of the chain (more middleware, then
 /// the handler). Middleware registered with a prefix only fires for paths
 /// starting with that prefix.
-pub type MiddlewareFn = Arc<
-    dyn Fn(Rc<RequestRepr>, NextFn) -> Rc<RefCell<ResponseRepr>> + Send + Sync,
->;
+pub type MiddlewareFn =
+    Arc<dyn Fn(Rc<RequestRepr>, NextFn) -> Rc<RefCell<ResponseRepr>> + Send + Sync>;
 
 /// Boxed continuation passed to middleware. Calling it invokes the rest of
 /// the chain and returns a response.
@@ -279,7 +278,12 @@ fn flatten(
     let mut out = Vec::new();
     for r in &server.routes {
         let full = join_paths(base, &r.path);
-        out.push((r.methods.clone(), full, r.handler.clone(), combined_mw.clone()));
+        out.push((
+            r.methods.clone(),
+            full,
+            r.handler.clone(),
+            combined_mw.clone(),
+        ));
     }
     for (prefix, sub) in &server.mounts {
         let new_base = join_paths(base, prefix);
@@ -291,10 +295,7 @@ fn flatten(
 
 /// Dispatches a synthesized request against a server. Used by tests and by
 /// the live `listen` loop.
-pub fn dispatch(
-    server: &ServerRepr,
-    req: RequestRepr,
-) -> Rc<RefCell<ResponseRepr>> {
+pub fn dispatch(server: &ServerRepr, req: RequestRepr) -> Rc<RefCell<ResponseRepr>> {
     let routes = flatten(server, "", &[]);
     for (methods, pattern, handler, mws) in &routes {
         let method_ok = methods.is_empty() || methods.iter().any(|m| m == &req.method);
@@ -430,10 +431,10 @@ fn builtin_serve_use(args: &[NativeValue]) -> Result<NativeValue, String> {
     let server = expect_server(&args[0])?;
     // args[1] is the middleware closure; install a pass-through stub.
     let mw: MiddlewareFn = Arc::new(|req, next| next(req));
-    server.borrow_mut().middleware.push(MiddlewareSpec {
-        prefix: None,
-        mw,
-    });
+    server
+        .borrow_mut()
+        .middleware
+        .push(MiddlewareSpec { prefix: None, mw });
     Ok(NativeValue::ServeServer(server))
 }
 
@@ -675,7 +676,11 @@ fn builtin_serve_with_headers(args: &[NativeValue]) -> Result<NativeValue, Strin
                 };
                 let val = match v {
                     NativeValue::Str(s) => s.clone(),
-                    other => return Err(format!("with_headers: header value must be Str, got {other:?}")),
+                    other => {
+                        return Err(format!(
+                            "with_headers: header value must be Str, got {other:?}"
+                        ));
+                    }
                 };
                 r.borrow_mut().headers.insert(key, val);
             }
@@ -723,11 +728,7 @@ pub fn register_middleware(
 // for HTTP/1.1 keep-alive, chunked encoding, etc.)
 // ===========================================================================
 
-fn listen_on(
-    server: Rc<RefCell<ServerRepr>>,
-    addr: &str,
-    port: u16,
-) -> Result<(), String> {
+fn listen_on(server: Rc<RefCell<ServerRepr>>, addr: &str, port: u16) -> Result<(), String> {
     let socket_addr = format!("{addr}:{port}");
     let listener = TcpListener::bind(
         socket_addr
@@ -762,9 +763,7 @@ pub fn handle_connection(
     let mut tmp = [0u8; 4096];
     let header_end;
     loop {
-        let n = stream
-            .read(&mut tmp)
-            .map_err(|e| format!("read: {e}"))?;
+        let n = stream.read(&mut tmp).map_err(|e| format!("read: {e}"))?;
         if n == 0 {
             return Err("client closed before sending request".to_string());
         }
@@ -824,9 +823,7 @@ fn find_header_end(buf: &[u8]) -> Option<usize> {
 
 fn parse_request_head(head: &str) -> Result<RequestRepr, String> {
     let mut lines = head.split("\r\n");
-    let request_line = lines
-        .next()
-        .ok_or_else(|| "empty request".to_string())?;
+    let request_line = lines.next().ok_or_else(|| "empty request".to_string())?;
     let mut parts = request_line.split_whitespace();
     let method = parts
         .next()
@@ -947,45 +944,81 @@ fn status_reason(code: u16) -> &'static str {
 pub fn register(registry: &mut NativeRegistry, interner: &mut Interner) {
     type Entry = (&'static str, &'static [&'static str], crate::NativeFn);
     let entries: &[Entry] = &[
-        ("serve_new",            &[],                          builtin_serve_new),
+        ("serve_new", &[], builtin_serve_new),
         // Routes
-        ("serve_get",            &["s", "path", "handler"],    builtin_serve_get),
-        ("serve_post",           &["s", "path", "handler"],    builtin_serve_post),
-        ("serve_put",            &["s", "path", "handler"],    builtin_serve_put),
-        ("serve_patch",          &["s", "path", "handler"],    builtin_serve_patch),
-        ("serve_delete",         &["s", "path", "handler"],    builtin_serve_delete),
-        ("serve_any",            &["s", "path", "handler"],    builtin_serve_any),
+        ("serve_get", &["s", "path", "handler"], builtin_serve_get),
+        ("serve_post", &["s", "path", "handler"], builtin_serve_post),
+        ("serve_put", &["s", "path", "handler"], builtin_serve_put),
+        (
+            "serve_patch",
+            &["s", "path", "handler"],
+            builtin_serve_patch,
+        ),
+        (
+            "serve_delete",
+            &["s", "path", "handler"],
+            builtin_serve_delete,
+        ),
+        ("serve_any", &["s", "path", "handler"], builtin_serve_any),
         // Middleware
-        ("serve_use",            &["s", "m"],                  builtin_serve_use),
-        ("serve_use_prefix",     &["s", "prefix", "m"],        builtin_serve_use_prefix),
+        ("serve_use", &["s", "m"], builtin_serve_use),
+        (
+            "serve_use_prefix",
+            &["s", "prefix", "m"],
+            builtin_serve_use_prefix,
+        ),
         // Mount
-        ("serve_mount",          &["s", "prefix", "sub"],      builtin_serve_mount),
+        ("serve_mount", &["s", "prefix", "sub"], builtin_serve_mount),
         // Lifecycle
-        ("serve_listen",         &["s", "port"],               builtin_serve_listen),
-        ("serve_listen_addr",    &["s", "addr", "port"],       builtin_serve_listen_addr),
+        ("serve_listen", &["s", "port"], builtin_serve_listen),
+        (
+            "serve_listen_addr",
+            &["s", "addr", "port"],
+            builtin_serve_listen_addr,
+        ),
         // Request introspection
-        ("serve_method",         &["r"],                       builtin_serve_method),
-        ("serve_path",           &["r"],                       builtin_serve_path),
-        ("serve_query",          &["r"],                       builtin_serve_query),
-        ("serve_param",          &["r", "name"],               builtin_serve_param),
-        ("serve_header_get",     &["r", "name"],               builtin_serve_header_get),
-        ("serve_body_bytes",     &["r"],                       builtin_serve_body_bytes),
-        ("serve_body_str",       &["r"],                       builtin_serve_body_str),
-        ("serve_body_json",      &["r"],                       builtin_serve_body_json),
+        ("serve_method", &["r"], builtin_serve_method),
+        ("serve_path", &["r"], builtin_serve_path),
+        ("serve_query", &["r"], builtin_serve_query),
+        ("serve_param", &["r", "name"], builtin_serve_param),
+        ("serve_header_get", &["r", "name"], builtin_serve_header_get),
+        ("serve_body_bytes", &["r"], builtin_serve_body_bytes),
+        ("serve_body_str", &["r"], builtin_serve_body_str),
+        ("serve_body_json", &["r"], builtin_serve_body_json),
         // Response builders
-        ("serve_response",       &["status", "body"],          builtin_serve_response),
-        ("serve_ok",             &["body"],                    builtin_serve_ok),
-        ("serve_ok_str",         &["body"],                    builtin_serve_ok_str),
-        ("serve_ok_json",        &["body"],                    builtin_serve_ok_json),
-        ("serve_created",        &["body"],                    builtin_serve_created),
-        ("serve_no_content",     &[],                          builtin_serve_no_content),
-        ("serve_bad_request",    &["message"],                 builtin_serve_bad_request),
-        ("serve_unauthorized",   &["message"],                 builtin_serve_unauthorized),
-        ("serve_forbidden",      &["message"],                 builtin_serve_forbidden),
-        ("serve_not_found",      &["message"],                 builtin_serve_not_found),
-        ("serve_internal_error", &["message"],                 builtin_serve_internal_error),
-        ("serve_with_header",    &["r", "name", "val"],        builtin_serve_with_header),
-        ("serve_with_headers",   &["r", "h"],                  builtin_serve_with_headers),
+        (
+            "serve_response",
+            &["status", "body"],
+            builtin_serve_response,
+        ),
+        ("serve_ok", &["body"], builtin_serve_ok),
+        ("serve_ok_str", &["body"], builtin_serve_ok_str),
+        ("serve_ok_json", &["body"], builtin_serve_ok_json),
+        ("serve_created", &["body"], builtin_serve_created),
+        ("serve_no_content", &[], builtin_serve_no_content),
+        ("serve_bad_request", &["message"], builtin_serve_bad_request),
+        (
+            "serve_unauthorized",
+            &["message"],
+            builtin_serve_unauthorized,
+        ),
+        ("serve_forbidden", &["message"], builtin_serve_forbidden),
+        ("serve_not_found", &["message"], builtin_serve_not_found),
+        (
+            "serve_internal_error",
+            &["message"],
+            builtin_serve_internal_error,
+        ),
+        (
+            "serve_with_header",
+            &["r", "name", "val"],
+            builtin_serve_with_header,
+        ),
+        (
+            "serve_with_headers",
+            &["r", "h"],
+            builtin_serve_with_headers,
+        ),
     ];
     for (name, params, f) in entries {
         registry.register_named(interner, name, params, *f);
@@ -1000,8 +1033,8 @@ pub fn register(registry: &mut NativeRegistry, interner: &mut Interner) {
 mod tests {
     use super::*;
     use std::net::TcpStream as StdTcpStream;
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc as StdArc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::thread;
     use std::time::Duration;
 
@@ -1051,12 +1084,7 @@ mod tests {
     fn route_methods_are_correct_per_verb() {
         let make = |f: fn(&[NativeValue]) -> Result<NativeValue, String>| {
             let s = builtin_serve_new(&[]).unwrap();
-            f(&[
-                s.clone(),
-                NativeValue::Str("/".into()),
-                NativeValue::Unit,
-            ])
-            .unwrap();
+            f(&[s.clone(), NativeValue::Str("/".into()), NativeValue::Unit]).unwrap();
             let srv = expect_server(&s).unwrap();
             srv.borrow().routes[0].methods.clone()
         };
@@ -1218,9 +1246,8 @@ mod tests {
     #[test]
     fn middleware_can_short_circuit() {
         let s = Rc::new(RefCell::new(ServerRepr::new()));
-        let mw: MiddlewareFn = Arc::new(|_req, _next| {
-            Rc::new(RefCell::new(ResponseRepr::new(401, b"nope".to_vec())))
-        });
+        let mw: MiddlewareFn =
+            Arc::new(|_req, _next| Rc::new(RefCell::new(ResponseRepr::new(401, b"nope".to_vec()))));
         register_middleware(&s, None, mw);
         register_route(&s, vec!["GET"], "/x", ok_str_handler("hi"));
         let resp = dispatch(&s.borrow(), RequestRepr::empty("GET", "/x"));
@@ -1329,10 +1356,7 @@ mod tests {
 
     #[test]
     fn response_rejects_out_of_range_status() {
-        let v = builtin_serve_response(&[
-            NativeValue::Int(99),
-            NativeValue::Bytes(b"x".to_vec()),
-        ]);
+        let v = builtin_serve_response(&[NativeValue::Int(99), NativeValue::Bytes(b"x".to_vec())]);
         assert!(v.is_err());
     }
 
@@ -1440,10 +1464,7 @@ mod tests {
             "serve_with_headers",
         ] {
             let sym = interner.intern(name);
-            assert!(
-                reg.get(sym).is_some(),
-                "expected `{name}` to be registered"
-            );
+            assert!(reg.get(sym).is_some(), "expected `{name}` to be registered");
         }
     }
 

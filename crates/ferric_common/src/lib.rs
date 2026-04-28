@@ -7,29 +7,29 @@
 //! replacement without cascading changes.
 
 // Re-export all modules
-pub use span::*;
-pub use identifiers::*;
-pub use interner::*;
-pub use tokens::*;
-pub use types::*;
-pub use errors::*;
-pub use results::*;
 pub use ast::*;
 pub use bytecode::*;
-pub use traits::*;
+pub use errors::*;
+pub use identifiers::*;
+pub use interner::*;
 pub use module::*;
+pub use results::*;
+pub use span::*;
+pub use tokens::*;
+pub use traits::*;
+pub use types::*;
 
-mod span;
-mod identifiers;
-mod interner;
-mod tokens;
-mod types;
-mod errors;
-mod results;
 mod ast;
 mod bytecode;
-mod traits;
+mod errors;
+mod identifiers;
+mod interner;
 mod module;
+mod results;
+mod span;
+mod tokens;
+mod traits;
+mod types;
 
 // Namespaced (no glob re-export): consumers reach these constants via
 // `ferric_common::keywords::KEYWORDS`. The lexer and `ferric_lsp/build.rs`

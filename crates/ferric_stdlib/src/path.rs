@@ -10,7 +10,7 @@
 // REQUIRED DEPS:
 //   none — std::path is sufficient.
 
-use std::path::{Component, Path, PathBuf, MAIN_SEPARATOR};
+use std::path::{Component, MAIN_SEPARATOR, Path, PathBuf};
 
 use ferric_common::Interner;
 
@@ -22,7 +22,11 @@ use crate::{NativeRegistry, NativeValue};
 
 fn check_arg_count(args: &[NativeValue], expected: usize) -> Result<(), String> {
     if args.len() != expected {
-        Err(format!("expected {} argument(s), got {}", expected, args.len()))
+        Err(format!(
+            "expected {} argument(s), got {}",
+            expected,
+            args.len()
+        ))
     } else {
         Ok(())
     }
@@ -231,9 +235,9 @@ fn builtin_path_components(args: &[NativeValue]) -> Result<NativeValue, String> 
             Component::CurDir => out.push(NativeValue::Str(".".to_string())),
             Component::ParentDir => out.push(NativeValue::Str("..".to_string())),
             Component::RootDir => out.push(NativeValue::Str(MAIN_SEPARATOR.to_string())),
-            Component::Prefix(p) => {
-                out.push(NativeValue::Str(p.as_os_str().to_string_lossy().into_owned()))
-            }
+            Component::Prefix(p) => out.push(NativeValue::Str(
+                p.as_os_str().to_string_lossy().into_owned(),
+            )),
         }
     }
     Ok(NativeValue::Array(out))
@@ -247,17 +251,21 @@ fn builtin_path_components(args: &[NativeValue]) -> Result<NativeValue, String> 
 pub fn register(registry: &mut NativeRegistry, interner: &mut Interner) {
     type Entry = (&'static str, &'static [&'static str], crate::NativeFn);
     let entries: &[Entry] = &[
-        ("path_join",           &["base", "parts"],  builtin_path_join),
-        ("path_parent",         &["p"],              builtin_path_parent),
-        ("path_filename",       &["p"],              builtin_path_filename),
-        ("path_stem",           &["p"],              builtin_path_stem),
-        ("path_extension",      &["p"],              builtin_path_extension),
-        ("path_with_extension", &["p", "ext"],       builtin_path_with_extension),
-        ("path_is_absolute",    &["p"],              builtin_path_is_absolute),
-        ("path_is_relative",    &["p"],              builtin_path_is_relative),
-        ("path_normalize",      &["p"],              builtin_path_normalize),
-        ("path_relative_to",    &["p", "base"],      builtin_path_relative_to),
-        ("path_components",     &["p"],              builtin_path_components),
+        ("path_join", &["base", "parts"], builtin_path_join),
+        ("path_parent", &["p"], builtin_path_parent),
+        ("path_filename", &["p"], builtin_path_filename),
+        ("path_stem", &["p"], builtin_path_stem),
+        ("path_extension", &["p"], builtin_path_extension),
+        (
+            "path_with_extension",
+            &["p", "ext"],
+            builtin_path_with_extension,
+        ),
+        ("path_is_absolute", &["p"], builtin_path_is_absolute),
+        ("path_is_relative", &["p"], builtin_path_is_relative),
+        ("path_normalize", &["p"], builtin_path_normalize),
+        ("path_relative_to", &["p", "base"], builtin_path_relative_to),
+        ("path_components", &["p"], builtin_path_components),
     ];
     for (name, params, f) in entries {
         registry.register_named(interner, name, params, *f);

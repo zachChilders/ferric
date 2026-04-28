@@ -26,9 +26,9 @@
 use std::collections::HashMap;
 
 use ferric_common::{
-    BinOp, Chunk, Constant, DefId, Expr, ImplMethod, Interner, Item, Literal, MatchArm,
-    NamedArg, NodeId, Op, ParseResult, Param, Pattern, Program, RequireMode, RequireStmt,
-    ResolveResult, ShellPart, Stmt, Symbol, Ty, TypeResult, UnOp,
+    BinOp, Chunk, Constant, DefId, Expr, ImplMethod, Interner, Item, Literal, MatchArm, NamedArg,
+    NodeId, Op, Param, ParseResult, Pattern, Program, RequireMode, RequireStmt, ResolveResult,
+    ShellPart, Stmt, Symbol, Ty, TypeResult, UnOp,
 };
 
 use ferric_common::SHELL_EXEC_NATIVE;
@@ -187,8 +187,8 @@ impl<'a> Compiler<'a> {
                     let f = &decl.item;
                     let ctor_idx = self.fn_chunks[&f.name] as usize;
                     let body_idx = self.async_body_chunks[&f.name];
-                    let n_params = u8::try_from(f.params.len())
-                        .expect("async fn has too many params for u8");
+                    let n_params =
+                        u8::try_from(f.params.len()).expect("async fn has too many params for u8");
 
                     // Body chunk: compile body with params bound as locals,
                     // then Return. This chunk is what the VM runs when the
@@ -376,7 +376,9 @@ impl<'a> Compiler<'a> {
                 self.emit(Op::Pop);
             }
             Stmt::Require(req) => self.compile_require(req),
-            Stmt::For { var, iter, body, .. } => self.compile_for(*var, iter, body),
+            Stmt::For {
+                var, iter, body, ..
+            } => self.compile_for(*var, iter, body),
         }
     }
 
@@ -528,7 +530,13 @@ impl<'a> Compiler<'a> {
                 let idx = self.add_constant(Constant::NativeFn(*name));
                 self.emit(Op::LoadConst(idx));
             }
-            Expr::Binary { op, left, right, id, .. } => {
+            Expr::Binary {
+                op,
+                left,
+                right,
+                id,
+                ..
+            } => {
                 self.compile_expr(left);
                 self.compile_expr(right);
                 self.emit_binop(*op, left.id(), *id);
@@ -537,8 +545,15 @@ impl<'a> Compiler<'a> {
                 self.compile_expr(expr);
                 self.emit_unop(*op, *id);
             }
-            Expr::Call { callee, args, id, .. } => self.compile_call(callee, args, *id),
-            Expr::If { cond, then_branch, else_branch, .. } => {
+            Expr::Call {
+                callee, args, id, ..
+            } => self.compile_call(callee, args, *id),
+            Expr::If {
+                cond,
+                then_branch,
+                else_branch,
+                ..
+            } => {
                 self.compile_expr(cond);
                 let else_jump = self.emit_jump(Op::JumpIfFalse(0));
                 self.compile_expr(then_branch);
@@ -614,7 +629,9 @@ impl<'a> Compiler<'a> {
                 let target = self.loop_stack.last().map(|c| c.start_offset).unwrap_or(0);
                 self.emit_backward_jump(target);
             }
-            Expr::Closure { params, body, id, .. } => {
+            Expr::Closure {
+                params, body, id, ..
+            } => {
                 self.compile_closure_expr(*id, params, body);
             }
             Expr::Shell { parts, span, .. } => self.compile_shell(parts, *span),
@@ -652,7 +669,12 @@ impl<'a> Compiler<'a> {
                 let n = u8::try_from(elements.len()).expect("too many tuple elements");
                 self.emit(Op::MakeTuple(n));
             }
-            Expr::VariantCtor { enum_name, variant, args, .. } => {
+            Expr::VariantCtor {
+                enum_name,
+                variant,
+                args,
+                ..
+            } => {
                 for a in args {
                     self.compile_expr(a);
                 }
@@ -660,10 +682,18 @@ impl<'a> Compiler<'a> {
                 let n = u8::try_from(args.len()).expect("too many variant fields");
                 self.emit(Op::MakeVariant(idx, n));
             }
-            Expr::Match { scrutinee, arms, .. } => {
+            Expr::Match {
+                scrutinee, arms, ..
+            } => {
                 self.compile_match(scrutinee, arms);
             }
-            Expr::MethodCall { receiver, args, id, span, .. } => {
+            Expr::MethodCall {
+                receiver,
+                args,
+                id,
+                span,
+                ..
+            } => {
                 self.compile_method_call(receiver, args, *id, *span);
             }
             Expr::ArrayLit { elements, .. } => {
@@ -705,12 +735,7 @@ impl<'a> Compiler<'a> {
     /// a fresh chunk; its leading slots hold the captured values, followed
     /// by the parameter slots. The caller emits `LoadSlot` for each capture
     /// (in capture-list order) followed by `MakeClosure(fn_idx, n)`.
-    fn compile_closure_expr(
-        &mut self,
-        closure_id: NodeId,
-        params: &[Param],
-        body: &Expr,
-    ) {
+    fn compile_closure_expr(&mut self, closure_id: NodeId, params: &[Param], body: &Expr) {
         // Look up the captures the resolver recorded for this closure. Empty
         // for the synthetic require-set closure (which compile_require inlines
         // directly and never reaches this path).
@@ -850,8 +875,7 @@ impl<'a> Compiler<'a> {
             Some(chunk_idx) => {
                 let cidx = self.add_constant(Constant::Fn(chunk_idx));
                 self.emit(Op::LoadConst(cidx));
-                let argc =
-                    u8::try_from(args.len() + 1).expect("method call argc exceeds u8");
+                let argc = u8::try_from(args.len() + 1).expect("method call argc exceeds u8");
                 self.emit(Op::Call(argc));
             }
             None => {
@@ -982,9 +1006,8 @@ impl<'a> Compiler<'a> {
             Pattern::Tuple { patterns, .. } => {
                 // Tuples have a fixed shape, so no test is needed — just
                 // destructure into per-element slots and recurse.
-                let elem_slots: Vec<u8> = (0..patterns.len())
-                    .map(|_| self.bind_anon_slot())
-                    .collect();
+                let elem_slots: Vec<u8> =
+                    (0..patterns.len()).map(|_| self.bind_anon_slot()).collect();
                 for (i, &es) in elem_slots.iter().enumerate() {
                     self.emit(Op::LoadSlot(slot));
                     let idx = u8::try_from(i).expect("tuple element index out of range");
@@ -1025,9 +1048,8 @@ impl<'a> Compiler<'a> {
                     // Allocate one slot per payload field, then unpack
                     // (rightmost ends up on top of the stack, so store
                     // backwards).
-                    let payload_slots: Vec<u8> = (0..patterns.len())
-                        .map(|_| self.bind_anon_slot())
-                        .collect();
+                    let payload_slots: Vec<u8> =
+                        (0..patterns.len()).map(|_| self.bind_anon_slot()).collect();
                     self.emit(Op::LoadSlot(slot));
                     self.emit(Op::UnpackVariant);
                     for &s in payload_slots.iter().rev() {
@@ -1242,10 +1264,10 @@ impl<'a> Compiler<'a> {
 mod tests {
     use super::*;
     use ferric_common::Interner;
+    use ferric_infer::typecheck;
     use ferric_lexer::lex;
     use ferric_parser::parse;
     use ferric_resolve::resolve_with_natives;
-    use ferric_infer::typecheck;
 
     /// Drives the full pipeline (lex→parse→resolve→typecheck→compile) and
     /// returns the compiled `Program`.
@@ -1254,25 +1276,47 @@ mod tests {
         // Intern every native the compiler may need to reference (shell
         // lowering uses `int_to_str` and `__shell_exec`).
         let native_fns: Vec<(Symbol, Vec<Symbol>)> = vec![
-            (interner.intern("println"),       vec![interner.intern("s")]),
-            (interner.intern("print"),         vec![interner.intern("s")]),
-            (interner.intern("int_to_str"),    vec![interner.intern("n")]),
-            (interner.intern("float_to_str"),  vec![interner.intern("n")]),
-            (interner.intern("bool_to_str"),   vec![interner.intern("b")]),
-            (interner.intern("int_to_float"),  vec![interner.intern("n")]),
-            (interner.intern("shell_stdout"),  vec![interner.intern("output")]),
-            (interner.intern("shell_exit_code"), vec![interner.intern("output")]),
+            (interner.intern("println"), vec![interner.intern("s")]),
+            (interner.intern("print"), vec![interner.intern("s")]),
+            (interner.intern("int_to_str"), vec![interner.intern("n")]),
+            (interner.intern("float_to_str"), vec![interner.intern("n")]),
+            (interner.intern("bool_to_str"), vec![interner.intern("b")]),
+            (interner.intern("int_to_float"), vec![interner.intern("n")]),
+            (
+                interner.intern("shell_stdout"),
+                vec![interner.intern("output")],
+            ),
+            (
+                interner.intern("shell_exit_code"),
+                vec![interner.intern("output")],
+            ),
         ];
         interner.intern("__shell_exec");
         let lex_result = lex(src, &mut interner);
-        assert!(lex_result.errors.is_empty(), "lex errors: {:?}", lex_result.errors);
+        assert!(
+            lex_result.errors.is_empty(),
+            "lex errors: {:?}",
+            lex_result.errors
+        );
         let parse_result = parse(&lex_result);
-        assert!(parse_result.errors.is_empty(), "parse errors: {:?}", parse_result.errors);
+        assert!(
+            parse_result.errors.is_empty(),
+            "parse errors: {:?}",
+            parse_result.errors
+        );
         let resolve_result = resolve_with_natives(&parse_result, &native_fns);
-        assert!(resolve_result.errors.is_empty(), "resolve errors: {:?}", resolve_result.errors);
+        assert!(
+            resolve_result.errors.is_empty(),
+            "resolve errors: {:?}",
+            resolve_result.errors
+        );
         let registry = ferric_common::TraitRegistry::new();
         let type_result = typecheck(&parse_result, &resolve_result, &interner, &registry);
-        assert!(type_result.errors.is_empty(), "type errors: {:?}", type_result.errors);
+        assert!(
+            type_result.errors.is_empty(),
+            "type errors: {:?}",
+            type_result.errors
+        );
         let program = compile(&parse_result, &resolve_result, &type_result, &interner);
         (program, interner)
     }
@@ -1286,7 +1330,10 @@ mod tests {
         let (program, _) = compile_source("1 + 2");
         let code = entry_code(&program);
         assert!(code.contains(&Op::AddInt), "expected AddInt: {code:?}");
-        assert!(!code.contains(&Op::AddFloat), "should not pick float: {code:?}");
+        assert!(
+            !code.contains(&Op::AddFloat),
+            "should not pick float: {code:?}"
+        );
     }
 
     #[test]
@@ -1308,8 +1355,20 @@ mod tests {
     fn let_then_use_emits_store_then_load_same_slot() {
         let (program, _) = compile_source("let x: Int = 5\nx");
         let code = entry_code(&program);
-        let store = code.iter().find_map(|op| if let Op::StoreSlot(s) = op { Some(*s) } else { None });
-        let load = code.iter().find_map(|op| if let Op::LoadSlot(s) = op { Some(*s) } else { None });
+        let store = code.iter().find_map(|op| {
+            if let Op::StoreSlot(s) = op {
+                Some(*s)
+            } else {
+                None
+            }
+        });
+        let load = code.iter().find_map(|op| {
+            if let Op::LoadSlot(s) = op {
+                Some(*s)
+            } else {
+                None
+            }
+        });
         assert_eq!(store, Some(0), "expected StoreSlot(0): {code:?}");
         assert_eq!(load, Some(0), "expected LoadSlot(0): {code:?}");
     }
@@ -1340,10 +1399,14 @@ mod tests {
         let (program, _) = compile_source("loop { break }");
         let code = entry_code(&program);
         // The break must be a Jump with non-negative offset (forward).
-        let break_jumps: Vec<i16> = code.iter().filter_map(|op| {
-            if let Op::Jump(o) = op { Some(*o) } else { None }
-        }).collect();
-        assert!(break_jumps.iter().any(|o| *o >= 0), "expected forward Jump for break: {code:?}");
+        let break_jumps: Vec<i16> = code
+            .iter()
+            .filter_map(|op| if let Op::Jump(o) = op { Some(*o) } else { None })
+            .collect();
+        assert!(
+            break_jumps.iter().any(|o| *o >= 0),
+            "expected forward Jump for break: {code:?}"
+        );
     }
 
     #[test]
@@ -1351,10 +1414,22 @@ mod tests {
         let src = "fn add(a: Int, b: Int) -> Int { a + b }\nadd(a: 1, b: 2)";
         let (program, _) = compile_source(src);
         // Entry chunk + the function chunk.
-        assert!(program.chunks.len() >= 2, "expected ≥2 chunks: {}", program.chunks.len());
+        assert!(
+            program.chunks.len() >= 2,
+            "expected ≥2 chunks: {}",
+            program.chunks.len()
+        );
         let fn_chunk = &program.chunks[1];
-        assert!(fn_chunk.code.contains(&Op::AddInt), "fn body should AddInt: {:?}", fn_chunk.code);
-        assert!(fn_chunk.code.contains(&Op::Return), "fn body should Return: {:?}", fn_chunk.code);
+        assert!(
+            fn_chunk.code.contains(&Op::AddInt),
+            "fn body should AddInt: {:?}",
+            fn_chunk.code
+        );
+        assert!(
+            fn_chunk.code.contains(&Op::Return),
+            "fn body should Return: {:?}",
+            fn_chunk.code
+        );
     }
 
     #[test]
@@ -1374,8 +1449,15 @@ mod tests {
         let src = r#"println(s: "hi")"#;
         let (program, _) = compile_source(src);
         let entry = &program.chunks[program.entry as usize];
-        let has_native = entry.constants.iter().any(|c| matches!(c, Constant::NativeFn(_)));
-        assert!(has_native, "expected Constant::NativeFn: {:?}", entry.constants);
+        let has_native = entry
+            .constants
+            .iter()
+            .any(|c| matches!(c, Constant::NativeFn(_)));
+        assert!(
+            has_native,
+            "expected Constant::NativeFn: {:?}",
+            entry.constants
+        );
         let has_call = entry.code.iter().any(|op| matches!(op, Op::Call(1)));
         assert!(has_call, "expected Call(1): {:?}", entry.code);
     }
@@ -1384,8 +1466,16 @@ mod tests {
     fn constants_are_deduplicated() {
         let (program, _) = compile_source("1 + 1");
         let entry = &program.chunks[program.entry as usize];
-        let int_ones = entry.constants.iter().filter(|c| matches!(c, Constant::Int(1))).count();
-        assert_eq!(int_ones, 1, "expected 1 Constant::Int(1): {:?}", entry.constants);
+        let int_ones = entry
+            .constants
+            .iter()
+            .filter(|c| matches!(c, Constant::Int(1)))
+            .count();
+        assert_eq!(
+            int_ones, 1,
+            "expected 1 Constant::Int(1): {:?}",
+            entry.constants
+        );
     }
 
     #[test]
@@ -1393,8 +1483,16 @@ mod tests {
         // Use blocks so the unary minus isn't slurped into the let initializer.
         let (p_int, _) = compile_source("{ let x: Int = 5; -x }");
         let (p_float, _) = compile_source("{ let x: Float = 5.0; -x }");
-        assert!(entry_code(&p_int).contains(&Op::NegInt), "{:?}", entry_code(&p_int));
-        assert!(entry_code(&p_float).contains(&Op::NegFloat), "{:?}", entry_code(&p_float));
+        assert!(
+            entry_code(&p_int).contains(&Op::NegInt),
+            "{:?}",
+            entry_code(&p_int)
+        );
+        assert!(
+            entry_code(&p_float).contains(&Op::NegFloat),
+            "{:?}",
+            entry_code(&p_float)
+        );
     }
 
     #[test]

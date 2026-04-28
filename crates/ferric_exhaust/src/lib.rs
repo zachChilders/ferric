@@ -94,7 +94,12 @@ impl<'a> Checker<'a> {
                     self.check_expr(&a.value);
                 }
             }
-            Expr::If { cond, then_branch, else_branch, .. } => {
+            Expr::If {
+                cond,
+                then_branch,
+                else_branch,
+                ..
+            } => {
                 self.check_expr(cond);
                 self.check_expr(then_branch);
                 if let Some(e) = else_branch {
@@ -143,7 +148,12 @@ impl<'a> Checker<'a> {
                     self.check_expr(a);
                 }
             }
-            Expr::Match { scrutinee, arms, span, .. } => {
+            Expr::Match {
+                scrutinee,
+                arms,
+                span,
+                ..
+            } => {
                 self.check_expr(scrutinee);
                 for arm in arms {
                     self.check_expr(&arm.body);
@@ -187,9 +197,8 @@ impl<'a> Checker<'a> {
         let mut covers_all = false;
         for arm in arms {
             if covers_all {
-                self.errors.push(ExhaustivenessError::UnreachableArm {
-                    span: arm.span,
-                });
+                self.errors
+                    .push(ExhaustivenessError::UnreachableArm { span: arm.span });
                 continue;
             }
             if pattern_is_irrefutable(&arm.pattern) {
@@ -213,8 +222,7 @@ impl<'a> Checker<'a> {
                 }
             }
             if !wildcarded {
-                let missing: Vec<Symbol> =
-                    all.difference(&covered).copied().collect();
+                let missing: Vec<Symbol> = all.difference(&covered).copied().collect();
                 if !missing.is_empty() {
                     self.errors.push(ExhaustivenessError::NonExhaustive {
                         missing,
@@ -234,9 +242,7 @@ fn pattern_is_irrefutable(pat: &Pattern) -> bool {
     match pat {
         Pattern::Wildcard { .. } | Pattern::Variable { .. } => true,
         Pattern::Tuple { patterns, .. } => patterns.iter().all(pattern_is_irrefutable),
-        Pattern::Struct { fields, .. } => {
-            fields.iter().all(|(_, p)| pattern_is_irrefutable(p))
-        }
+        Pattern::Struct { fields, .. } => fields.iter().all(|(_, p)| pattern_is_irrefutable(p)),
         Pattern::Literal { .. } | Pattern::Variant { .. } => false,
     }
 }

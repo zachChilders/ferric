@@ -22,7 +22,11 @@ use ferric_common::Interner;
 
 fn check_arg_count(args: &[NativeValue], expected: usize) -> Result<(), String> {
     if args.len() != expected {
-        Err(format!("expected {} argument(s), got {}", expected, args.len()))
+        Err(format!(
+            "expected {} argument(s), got {}",
+            expected,
+            args.len()
+        ))
     } else {
         Ok(())
     }
@@ -78,7 +82,10 @@ fn lang_ok(v: NativeValue) -> NativeValue {
 }
 
 fn lang_err(msg: String) -> NativeValue {
-    NativeValue::Array(vec![NativeValue::Str("Err".to_string()), NativeValue::Str(msg)])
+    NativeValue::Array(vec![
+        NativeValue::Str("Err".to_string()),
+        NativeValue::Str(msg),
+    ])
 }
 
 fn lang_some(v: NativeValue) -> NativeValue {
@@ -237,20 +244,14 @@ fn builtin_str_lines(args: &[NativeValue]) -> Result<NativeValue, String> {
     let s = expect_str(&args[0])?;
     // `str::lines` splits on \n and strips a trailing \r — this is the same
     // semantics described by the spec.
-    let parts: Vec<NativeValue> = s
-        .lines()
-        .map(|l| NativeValue::Str(l.to_string()))
-        .collect();
+    let parts: Vec<NativeValue> = s.lines().map(|l| NativeValue::Str(l.to_string())).collect();
     Ok(NativeValue::Array(parts))
 }
 
 fn builtin_str_chars(args: &[NativeValue]) -> Result<NativeValue, String> {
     check_arg_count(args, 1)?;
     let s = expect_str(&args[0])?;
-    let parts: Vec<NativeValue> = s
-        .chars()
-        .map(|c| NativeValue::Str(c.to_string()))
-        .collect();
+    let parts: Vec<NativeValue> = s.chars().map(|c| NativeValue::Str(c.to_string())).collect();
     Ok(NativeValue::Array(parts))
 }
 
@@ -356,7 +357,12 @@ fn builtin_str_pad_start(args: &[NativeValue]) -> Result<NativeValue, String> {
     if to < 0 {
         return Ok(NativeValue::Str(s.clone()));
     }
-    Ok(NativeValue::Str(pad_with_repeat(s, to as usize, with, true)))
+    Ok(NativeValue::Str(pad_with_repeat(
+        s,
+        to as usize,
+        with,
+        true,
+    )))
 }
 
 fn builtin_str_pad_end(args: &[NativeValue]) -> Result<NativeValue, String> {
@@ -367,7 +373,12 @@ fn builtin_str_pad_end(args: &[NativeValue]) -> Result<NativeValue, String> {
     if to < 0 {
         return Ok(NativeValue::Str(s.clone()));
     }
-    Ok(NativeValue::Str(pad_with_repeat(s, to as usize, with, false)))
+    Ok(NativeValue::Str(pad_with_repeat(
+        s,
+        to as usize,
+        with,
+        false,
+    )))
 }
 
 fn builtin_str_center(args: &[NativeValue]) -> Result<NativeValue, String> {
@@ -434,9 +445,11 @@ fn builtin_str_replace_n(args: &[NativeValue]) -> Result<NativeValue, String> {
     if from.is_empty() || n <= 0 {
         return Ok(NativeValue::Str(s.clone()));
     }
-    Ok(NativeValue::Str(
-        s.replacen(from.as_str(), to.as_str(), n as usize),
-    ))
+    Ok(NativeValue::Str(s.replacen(
+        from.as_str(),
+        to.as_str(),
+        n as usize,
+    )))
 }
 
 // ---------------------------------------------------------------------------
@@ -572,49 +585,61 @@ fn builtin_str_is_numeric(args: &[NativeValue]) -> Result<NativeValue, String> {
 pub fn register(registry: &mut NativeRegistry, interner: &mut Interner) {
     type Entry = (&'static str, &'static [&'static str], crate::NativeFn);
     let entries: &[Entry] = &[
-        ("str_len",              &["s"],                  builtin_str_len),
-        ("str_slice",            &["s", "from", "to"],    builtin_str_slice),
+        ("str_len", &["s"], builtin_str_len),
+        ("str_slice", &["s", "from", "to"], builtin_str_slice),
         // `str_contains` and `str_split` use the legacy `sub` / `sep` param
         // names instead of the spec's `needle` / `on`. The legacy names
         // predate the spec and are what existing user code calls.
-        ("str_contains",         &["s", "sub"],           crate::builtin_str_contains),
-        ("str_starts_with",      &["s", "prefix"],        builtin_str_starts_with),
-        ("str_ends_with",        &["s", "suffix"],        builtin_str_ends_with),
-        ("str_find",             &["s", "needle"],        builtin_str_find),
-        ("str_find_all",         &["s", "needle"],        builtin_str_find_all),
-        ("str_split",            &["s", "sep"],           crate::builtin_str_split),
-        ("str_split_once",       &["s", "on"],            builtin_str_split_once),
-        ("str_lines",            &["s"],                  builtin_str_lines),
-        ("str_chars",            &["s"],                  builtin_str_chars),
-        ("str_trim",             &["s"],                  builtin_str_trim),
-        ("str_trim_start",       &["s"],                  builtin_str_trim_start),
-        ("str_trim_end",         &["s"],                  builtin_str_trim_end),
-        ("str_trim_chars",       &["s", "chars"],         builtin_str_trim_chars),
-        ("str_to_upper",         &["s"],                  builtin_str_to_upper),
-        ("str_to_lower",         &["s"],                  builtin_str_to_lower),
-        ("str_to_title",         &["s"],                  builtin_str_to_title),
-        ("str_pad_start",        &["s", "to", "with"],    builtin_str_pad_start),
-        ("str_pad_end",          &["s", "to", "with"],    builtin_str_pad_end),
-        ("str_center",           &["s", "to", "with"],    builtin_str_center),
-        ("str_replace",          &["s", "from", "to"],    builtin_str_replace),
-        ("str_replace_first",    &["s", "from", "to"],    builtin_str_replace_first),
-        ("str_replace_n",        &["s", "from", "to", "n"], builtin_str_replace_n),
-        ("str_join",             &["parts", "sep"],       builtin_str_join),
-        ("str_repeat",           &["s", "n"],             builtin_str_repeat),
+        ("str_contains", &["s", "sub"], crate::builtin_str_contains),
+        ("str_starts_with", &["s", "prefix"], builtin_str_starts_with),
+        ("str_ends_with", &["s", "suffix"], builtin_str_ends_with),
+        ("str_find", &["s", "needle"], builtin_str_find),
+        ("str_find_all", &["s", "needle"], builtin_str_find_all),
+        ("str_split", &["s", "sep"], crate::builtin_str_split),
+        ("str_split_once", &["s", "on"], builtin_str_split_once),
+        ("str_lines", &["s"], builtin_str_lines),
+        ("str_chars", &["s"], builtin_str_chars),
+        ("str_trim", &["s"], builtin_str_trim),
+        ("str_trim_start", &["s"], builtin_str_trim_start),
+        ("str_trim_end", &["s"], builtin_str_trim_end),
+        ("str_trim_chars", &["s", "chars"], builtin_str_trim_chars),
+        ("str_to_upper", &["s"], builtin_str_to_upper),
+        ("str_to_lower", &["s"], builtin_str_to_lower),
+        ("str_to_title", &["s"], builtin_str_to_title),
+        ("str_pad_start", &["s", "to", "with"], builtin_str_pad_start),
+        ("str_pad_end", &["s", "to", "with"], builtin_str_pad_end),
+        ("str_center", &["s", "to", "with"], builtin_str_center),
+        ("str_replace", &["s", "from", "to"], builtin_str_replace),
+        (
+            "str_replace_first",
+            &["s", "from", "to"],
+            builtin_str_replace_first,
+        ),
+        (
+            "str_replace_n",
+            &["s", "from", "to", "n"],
+            builtin_str_replace_n,
+        ),
+        ("str_join", &["parts", "sep"], builtin_str_join),
+        ("str_repeat", &["s", "n"], builtin_str_repeat),
         // `str_parse_int` uses the legacy ABI: returns `Int` directly (with
         // a runtime error on bad input), not the spec's `Result<Int, StrError>`.
         // This matches existing example fixtures and how user code threads
         // results today.
-        ("str_parse_int",        &["s"],                  crate::builtin_str_parse_int),
-        ("str_parse_float",      &["s"],                  builtin_str_parse_float),
-        ("str_parse_bool",       &["s"],                  builtin_str_parse_bool),
-        ("str_eq_ignore_case",   &["a", "b"],             builtin_str_eq_ignore_case),
-        ("str_to_bytes",         &["s"],                  builtin_str_to_bytes),
-        ("str_from_bytes",       &["b"],                  builtin_str_from_bytes),
-        ("str_from_bytes_lossy", &["b"],                  builtin_str_from_bytes_lossy),
-        ("str_is_empty",         &["s"],                  builtin_str_is_empty),
-        ("str_is_ascii",         &["s"],                  builtin_str_is_ascii),
-        ("str_is_numeric",       &["s"],                  builtin_str_is_numeric),
+        ("str_parse_int", &["s"], crate::builtin_str_parse_int),
+        ("str_parse_float", &["s"], builtin_str_parse_float),
+        ("str_parse_bool", &["s"], builtin_str_parse_bool),
+        (
+            "str_eq_ignore_case",
+            &["a", "b"],
+            builtin_str_eq_ignore_case,
+        ),
+        ("str_to_bytes", &["s"], builtin_str_to_bytes),
+        ("str_from_bytes", &["b"], builtin_str_from_bytes),
+        ("str_from_bytes_lossy", &["b"], builtin_str_from_bytes_lossy),
+        ("str_is_empty", &["s"], builtin_str_is_empty),
+        ("str_is_ascii", &["s"], builtin_str_is_ascii),
+        ("str_is_numeric", &["s"], builtin_str_is_numeric),
     ];
     for (name, params, f) in entries {
         registry.register_named(interner, name, params, *f);

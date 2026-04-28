@@ -26,7 +26,11 @@ use ferric_common::Interner;
 
 fn check_arg_count(args: &[NativeValue], expected: usize) -> Result<(), String> {
     if args.len() != expected {
-        Err(format!("expected {} argument(s), got {}", expected, args.len()))
+        Err(format!(
+            "expected {} argument(s), got {}",
+            expected,
+            args.len()
+        ))
     } else {
         Ok(())
     }
@@ -75,7 +79,10 @@ fn lang_ok(v: NativeValue) -> NativeValue {
 }
 
 fn lang_err(msg: String) -> NativeValue {
-    NativeValue::Array(vec![NativeValue::Str("Err".to_string()), NativeValue::Str(msg)])
+    NativeValue::Array(vec![
+        NativeValue::Str("Err".to_string()),
+        NativeValue::Str(msg),
+    ])
 }
 
 fn lang_some(v: NativeValue) -> NativeValue {
@@ -154,8 +161,7 @@ fn hex_decode(s: &str) -> Option<Vec<u8>> {
 // ---------------------------------------------------------------------------
 
 fn b64_encode(bytes: &[u8]) -> String {
-    const ALPHA: &[u8; 64] =
-        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    const ALPHA: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
     let mut i = 0;
     while i + 3 <= bytes.len() {
@@ -211,12 +217,17 @@ fn b64_decode(s: &str) -> Option<Vec<u8>> {
         let c3 = bytes[i + 3];
         let v0 = val(c0)?;
         let v1 = val(c1)?;
-        let (v2, has2) = if c2 == b'=' { (0u8, false) } else { (val(c2)?, true) };
-        let (v3, has3) = if c3 == b'=' { (0u8, false) } else { (val(c3)?, true) };
-        let combined = ((v0 as u32) << 18)
-            | ((v1 as u32) << 12)
-            | ((v2 as u32) << 6)
-            | (v3 as u32);
+        let (v2, has2) = if c2 == b'=' {
+            (0u8, false)
+        } else {
+            (val(c2)?, true)
+        };
+        let (v3, has3) = if c3 == b'=' {
+            (0u8, false)
+        } else {
+            (val(c3)?, true)
+        };
+        let combined = ((v0 as u32) << 18) | ((v1 as u32) << 12) | ((v2 as u32) << 6) | (v3 as u32);
         out.push(((combined >> 16) & 0xff) as u8);
         if has2 {
             out.push(((combined >> 8) & 0xff) as u8);
@@ -394,7 +405,10 @@ fn builtin_bytes_to_str(args: &[NativeValue]) -> Result<NativeValue, String> {
 fn builtin_bytes_to_list(args: &[NativeValue]) -> Result<NativeValue, String> {
     check_arg_count(args, 1)?;
     let b = expect_bytes(&args[0])?;
-    let elems: Vec<NativeValue> = b.iter().map(|byte| NativeValue::Int(*byte as i64)).collect();
+    let elems: Vec<NativeValue> = b
+        .iter()
+        .map(|byte| NativeValue::Int(*byte as i64))
+        .collect();
     Ok(NativeValue::Array(elems))
 }
 
@@ -518,33 +532,69 @@ fn builtin_bytes_build(args: &[NativeValue]) -> Result<NativeValue, String> {
 pub fn register(registry: &mut NativeRegistry, interner: &mut Interner) {
     type Entry = (&'static str, &'static [&'static str], crate::NativeFn);
     let entries: &[Entry] = &[
-        ("bytes_new",          &[],                  builtin_bytes_new),
-        ("bytes_from_hex",     &["s"],               builtin_bytes_from_hex),
-        ("bytes_from_base64",  &["s"],               builtin_bytes_from_base64),
-        ("bytes_repeat",       &["b", "n"],          builtin_bytes_repeat),
-        ("bytes_len",          &["b"],               builtin_bytes_len),
-        ("bytes_is_empty",     &["b"],               builtin_bytes_is_empty),
-        ("bytes_get",          &["b", "index"],      builtin_bytes_get),
-        ("bytes_slice",        &["b", "from", "to"], builtin_bytes_slice),
-        ("bytes_contains",     &["haystack", "needle"], builtin_bytes_contains),
-        ("bytes_find",         &["haystack", "needle"], builtin_bytes_find),
-        ("bytes_concat",       &["a", "b"],          builtin_bytes_concat),
-        ("bytes_to_hex",       &["b"],               builtin_bytes_to_hex),
-        ("bytes_to_base64",    &["b"],               builtin_bytes_to_base64),
-        ("bytes_to_str",       &["b"],               builtin_bytes_to_str),
-        ("bytes_to_list",      &["b"],               builtin_bytes_to_list),
-        ("bytes_from_list",    &["ints"],            builtin_bytes_from_list),
-        ("bytes_builder",      &[],                  builtin_bytes_builder),
-        ("bytes_write_byte",   &["buf", "byte"],     builtin_bytes_write_byte),
-        ("bytes_write_bytes",  &["buf", "b"],        builtin_bytes_write_bytes),
-        ("bytes_write_str",    &["buf", "s"],        builtin_bytes_write_str),
-        ("bytes_write_u16_le", &["buf", "n"],        builtin_bytes_write_u16_le),
-        ("bytes_write_u16_be", &["buf", "n"],        builtin_bytes_write_u16_be),
-        ("bytes_write_u32_le", &["buf", "n"],        builtin_bytes_write_u32_le),
-        ("bytes_write_u32_be", &["buf", "n"],        builtin_bytes_write_u32_be),
-        ("bytes_write_i64_le", &["buf", "n"],        builtin_bytes_write_i64_le),
-        ("bytes_write_i64_be", &["buf", "n"],        builtin_bytes_write_i64_be),
-        ("bytes_build",        &["buf"],             builtin_bytes_build),
+        ("bytes_new", &[], builtin_bytes_new),
+        ("bytes_from_hex", &["s"], builtin_bytes_from_hex),
+        ("bytes_from_base64", &["s"], builtin_bytes_from_base64),
+        ("bytes_repeat", &["b", "n"], builtin_bytes_repeat),
+        ("bytes_len", &["b"], builtin_bytes_len),
+        ("bytes_is_empty", &["b"], builtin_bytes_is_empty),
+        ("bytes_get", &["b", "index"], builtin_bytes_get),
+        ("bytes_slice", &["b", "from", "to"], builtin_bytes_slice),
+        (
+            "bytes_contains",
+            &["haystack", "needle"],
+            builtin_bytes_contains,
+        ),
+        ("bytes_find", &["haystack", "needle"], builtin_bytes_find),
+        ("bytes_concat", &["a", "b"], builtin_bytes_concat),
+        ("bytes_to_hex", &["b"], builtin_bytes_to_hex),
+        ("bytes_to_base64", &["b"], builtin_bytes_to_base64),
+        ("bytes_to_str", &["b"], builtin_bytes_to_str),
+        ("bytes_to_list", &["b"], builtin_bytes_to_list),
+        ("bytes_from_list", &["ints"], builtin_bytes_from_list),
+        ("bytes_builder", &[], builtin_bytes_builder),
+        (
+            "bytes_write_byte",
+            &["buf", "byte"],
+            builtin_bytes_write_byte,
+        ),
+        (
+            "bytes_write_bytes",
+            &["buf", "b"],
+            builtin_bytes_write_bytes,
+        ),
+        ("bytes_write_str", &["buf", "s"], builtin_bytes_write_str),
+        (
+            "bytes_write_u16_le",
+            &["buf", "n"],
+            builtin_bytes_write_u16_le,
+        ),
+        (
+            "bytes_write_u16_be",
+            &["buf", "n"],
+            builtin_bytes_write_u16_be,
+        ),
+        (
+            "bytes_write_u32_le",
+            &["buf", "n"],
+            builtin_bytes_write_u32_le,
+        ),
+        (
+            "bytes_write_u32_be",
+            &["buf", "n"],
+            builtin_bytes_write_u32_be,
+        ),
+        (
+            "bytes_write_i64_le",
+            &["buf", "n"],
+            builtin_bytes_write_i64_le,
+        ),
+        (
+            "bytes_write_i64_be",
+            &["buf", "n"],
+            builtin_bytes_write_i64_be,
+        ),
+        ("bytes_build", &["buf"], builtin_bytes_build),
     ];
     for (name, params, f) in entries {
         registry.register_named(interner, name, params, *f);
@@ -706,7 +756,10 @@ mod tests {
 
     #[test]
     fn len_and_is_empty() {
-        assert_eq!(builtin_bytes_len(&[b(b"abc")]).unwrap(), NativeValue::Int(3));
+        assert_eq!(
+            builtin_bytes_len(&[b(b"abc")]).unwrap(),
+            NativeValue::Int(3)
+        );
         assert_eq!(
             builtin_bytes_is_empty(&[b(b"")]).unwrap(),
             NativeValue::Bool(true)
@@ -888,9 +941,6 @@ mod tests {
         builtin_bytes_write_i64_le(&[buf.clone(), i(1)]).unwrap();
         builtin_bytes_write_i64_be(&[buf.clone(), i(1)]).unwrap();
         let out = unwrap_bytes(builtin_bytes_build(&[buf]).unwrap());
-        assert_eq!(
-            out,
-            vec![1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]
-        );
+        assert_eq!(out, vec![1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]);
     }
 }

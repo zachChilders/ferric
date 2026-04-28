@@ -220,9 +220,7 @@ fn send(prompt: &str, schema: Option<&JsonRepr>) -> Result<String, String> {
         .map_err(|e| format!("LlmError::InvalidResponse: read body: {e}"))?;
 
     if !(200..300).contains(&status) {
-        return Err(format!(
-            "LlmError::ApiError: status {status}: {body_text}"
-        ));
+        return Err(format!("LlmError::ApiError: status {status}: {body_text}"));
     }
 
     let parsed = crate::json::parse(&body_text)
@@ -324,14 +322,12 @@ mod tests {
     fn missing_api_key_yields_typed_error() {
         let mut g = EnvGuard::new();
         g.clear("OPENROUTER_API_KEY");
-        let r =
-            builtin_llm_prompt(&[NativeValue::Str("hi".into())]).unwrap();
+        let r = builtin_llm_prompt(&[NativeValue::Str("hi".into())]).unwrap();
         match r {
             NativeValue::Result(b) => match *b {
-                Err(NativeValue::Str(s)) => assert!(
-                    s.contains("LlmError::MissingApiKey"),
-                    "got: {s}"
-                ),
+                Err(NativeValue::Str(s)) => {
+                    assert!(s.contains("LlmError::MissingApiKey"), "got: {s}")
+                }
                 _ => panic!(),
             },
             _ => panic!(),
@@ -349,10 +345,7 @@ mod tests {
 
     #[test]
     fn build_request_body_with_schema() {
-        let schema = JsonRepr::Object(vec![(
-            "type".to_string(),
-            JsonRepr::Str("object".into()),
-        )]);
+        let schema = JsonRepr::Object(vec![("type".to_string(), JsonRepr::Str("object".into()))]);
         let body = build_request_body("hi", "m", Some(&schema));
         assert!(body.contains("response_format"));
         assert!(body.contains("\"json_schema\""));
@@ -411,7 +404,12 @@ mod tests {
                 let auth = req
                     .headers()
                     .iter()
-                    .find(|h| h.field.as_str().as_str().eq_ignore_ascii_case("Authorization"))
+                    .find(|h| {
+                        h.field
+                            .as_str()
+                            .as_str()
+                            .eq_ignore_ascii_case("Authorization")
+                    })
                     .map(|h| h.value.as_str().to_string())
                     .unwrap_or_default();
                 *ca.lock().unwrap() = auth;
@@ -435,8 +433,7 @@ mod tests {
         g.set("OPENROUTER_BASE_URL", &base);
         g.set("OPENROUTER_MODEL", "test-model");
 
-        let r =
-            builtin_llm_prompt(&[NativeValue::Str("ping".into())]).unwrap();
+        let r = builtin_llm_prompt(&[NativeValue::Str("ping".into())]).unwrap();
         match r {
             NativeValue::Result(b) => match *b {
                 Ok(NativeValue::Str(s)) => assert_eq!(s, "hi from mock"),
@@ -489,11 +486,8 @@ mod tests {
             "type".to_string(),
             JsonRepr::Str("object".into()),
         )])));
-        let r = builtin_llm_prompt_schema(&[
-            NativeValue::Str("structured plz".into()),
-            schema,
-        ])
-        .unwrap();
+        let r = builtin_llm_prompt_schema(&[NativeValue::Str("structured plz".into()), schema])
+            .unwrap();
         match r {
             NativeValue::Result(b) => match *b {
                 Ok(NativeValue::Json(j)) => {
@@ -536,8 +530,7 @@ mod tests {
         g.set("OPENROUTER_API_KEY", "k");
         g.set("OPENROUTER_BASE_URL", &base);
 
-        let r =
-            builtin_llm_prompt(&[NativeValue::Str("hi".into())]).unwrap();
+        let r = builtin_llm_prompt(&[NativeValue::Str("hi".into())]).unwrap();
         match r {
             NativeValue::Result(b) => match *b {
                 Err(NativeValue::Str(s)) => {

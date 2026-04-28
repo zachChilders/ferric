@@ -33,7 +33,10 @@ fn examples() {
         })
         .collect();
     names.sort();
-    assert!(!names.is_empty(), "no example fixtures found under examples/");
+    assert!(
+        !names.is_empty(),
+        "no example fixtures found under examples/"
+    );
     println!("running {} example fixture(s) from examples/", names.len());
 
     let mut failures = Vec::new();
@@ -81,8 +84,8 @@ fn run_example(root: &Path, name: &str) -> Result<(), String> {
         .stderr(Stdio::from(f_dup))
         .status()
         .map_err(|e| format!("spawn ferric: {e}"))?;
-    let actual = fs::read_to_string(&combined_path)
-        .map_err(|e| format!("read combined output: {e}"))?;
+    let actual =
+        fs::read_to_string(&combined_path).map_err(|e| format!("read combined output: {e}"))?;
     let _ = fs::remove_file(&combined_path);
 
     let actual_exit = status.code().unwrap_or(-1);

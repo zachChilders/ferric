@@ -78,10 +78,7 @@ pub fn parse_content(content: &str) -> Result<BTreeMap<String, String>, String> 
         if key.is_empty() {
             return Err(format!("line {line_num}: empty key"));
         }
-        if !key
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '_')
-        {
+        if !key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
             return Err(format!(
                 "line {line_num}: invalid key '{key}' (must match [A-Za-z0-9_]+)"
             ));
@@ -380,8 +377,14 @@ mod tests {
         };
         match inner {
             NativeValue::Map(m) => {
-                assert_eq!(m.get(&MapKey::Str("FOO".into())), Some(&NativeValue::Str("bar".into())));
-                assert_eq!(m.get(&MapKey::Str("BAZ".into())), Some(&NativeValue::Str("qux".into())));
+                assert_eq!(
+                    m.get(&MapKey::Str("FOO".into())),
+                    Some(&NativeValue::Str("bar".into()))
+                );
+                assert_eq!(
+                    m.get(&MapKey::Str("BAZ".into())),
+                    Some(&NativeValue::Str("qux".into()))
+                );
             }
             other => panic!("expected Map, got {other:?}"),
         }
@@ -401,10 +404,9 @@ mod tests {
 
     #[test]
     fn dotenv_load_path_missing_file() {
-        let r = builtin_dotenv_load_path(&[NativeValue::Str(
-            "/definitely/does/not/exist/.env".into(),
-        )])
-        .unwrap();
+        let r =
+            builtin_dotenv_load_path(&[NativeValue::Str("/definitely/does/not/exist/.env".into())])
+                .unwrap();
         match r {
             NativeValue::Result(b) => match *b {
                 Err(NativeValue::Str(s)) => assert!(s.contains("DotenvError::NotFound")),
@@ -428,10 +430,8 @@ mod tests {
         let path = dir.join(".env");
         std::fs::write(&path, "ALPHA=one\nBETA=two\n").unwrap();
 
-        let r = builtin_dotenv_load_path(&[NativeValue::Str(
-            path.to_string_lossy().into_owned(),
-        )])
-        .unwrap();
+        let r = builtin_dotenv_load_path(&[NativeValue::Str(path.to_string_lossy().into_owned())])
+            .unwrap();
         match r {
             NativeValue::Result(b) => match *b {
                 Ok(NativeValue::Map(m)) => {
@@ -466,11 +466,7 @@ mod tests {
         let path = dir.join(".env");
         let key_new = format!("FERRIC_DOTENV_TEST_NEW_{}", std::process::id());
         let key_set = format!("FERRIC_DOTENV_TEST_SET_{}", std::process::id());
-        std::fs::write(
-            &path,
-            format!("{key_new}=newval\n{key_set}=fromenv\n"),
-        )
-        .unwrap();
+        std::fs::write(&path, format!("{key_new}=newval\n{key_set}=fromenv\n")).unwrap();
 
         // Pre-set one key in the process environment.
         unsafe {
@@ -484,7 +480,9 @@ mod tests {
         .unwrap();
         match r {
             NativeValue::Result(b) => match *b {
-                Ok(NativeValue::Int(n)) => assert_eq!(n, 1, "should have loaded only the unset key"),
+                Ok(NativeValue::Int(n)) => {
+                    assert_eq!(n, 1, "should have loaded only the unset key")
+                }
                 _ => panic!("expected Ok(Int)"),
             },
             _ => panic!(),

@@ -141,7 +141,11 @@ impl std::fmt::Debug for OnceRepr {
 
 fn check_arg_count(args: &[NativeValue], expected: usize) -> Result<(), String> {
     if args.len() != expected {
-        Err(format!("expected {} argument(s), got {}", expected, args.len()))
+        Err(format!(
+            "expected {} argument(s), got {}",
+            expected,
+            args.len()
+        ))
     } else {
         Ok(())
     }
@@ -209,10 +213,7 @@ fn some(val: NativeValue) -> NativeValue {
 
 /// Wraps in `Option::None`. `Tuple2(Int(1), Unit)`.
 fn none() -> NativeValue {
-    NativeValue::Tuple2(
-        Box::new(NativeValue::Int(1)),
-        Box::new(NativeValue::Unit),
-    )
+    NativeValue::Tuple2(Box::new(NativeValue::Int(1)), Box::new(NativeValue::Unit))
 }
 
 // ============================================================================
@@ -230,16 +231,10 @@ fn builtin_sync_channel(args: &[NativeValue]) -> Result<NativeValue, String> {
     }
     let (sender, receiver) = if cap == 0 {
         let (tx, rx) = std::sync::mpsc::channel::<NativeValue>();
-        (
-            SenderRepr::Unbounded(Mutex::new(Some(tx))),
-            rx,
-        )
+        (SenderRepr::Unbounded(Mutex::new(Some(tx))), rx)
     } else {
         let (tx, rx) = std::sync::mpsc::sync_channel::<NativeValue>(cap as usize);
-        (
-            SenderRepr::Bounded(Mutex::new(Some(tx))),
-            rx,
-        )
+        (SenderRepr::Bounded(Mutex::new(Some(tx))), rx)
     };
     let s = NativeValue::SyncSender(Rc::new(sender));
     let r = NativeValue::SyncReceiver(Rc::new(ReceiverRepr {
@@ -380,14 +375,14 @@ pub fn get_with(o: &OnceRepr, init: impl FnOnce() -> NativeValue) -> NativeValue
 pub fn register(registry: &mut NativeRegistry, interner: &mut Interner) {
     type Entry = (&'static str, &'static [&'static str], crate::NativeFn);
     let entries: &[Entry] = &[
-        ("sync_channel",  &["capacity"],     builtin_sync_channel),
-        ("sync_send",     &["s", "val"],     builtin_sync_send),
-        ("sync_recv",     &["r"],            builtin_sync_recv),
-        ("sync_try_recv", &["r"],            builtin_sync_try_recv),
-        ("sync_mutex",    &["val"],          builtin_sync_mutex),
-        ("sync_lock",     &["m", "f"],       builtin_sync_lock),
-        ("sync_once",     &["init"],         builtin_sync_once),
-        ("sync_get",      &["o"],            builtin_sync_get),
+        ("sync_channel", &["capacity"], builtin_sync_channel),
+        ("sync_send", &["s", "val"], builtin_sync_send),
+        ("sync_recv", &["r"], builtin_sync_recv),
+        ("sync_try_recv", &["r"], builtin_sync_try_recv),
+        ("sync_mutex", &["val"], builtin_sync_mutex),
+        ("sync_lock", &["m", "f"], builtin_sync_lock),
+        ("sync_once", &["init"], builtin_sync_once),
+        ("sync_get", &["o"], builtin_sync_get),
     ];
     for (name, params, f) in entries {
         registry.register_named(interner, name, params, *f);
@@ -401,8 +396,8 @@ pub fn register(registry: &mut NativeRegistry, interner: &mut Interner) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
     use std::thread;
     use std::time::Duration;
 
@@ -443,8 +438,7 @@ mod tests {
 
     #[test]
     fn unbounded_channel_send_recv() {
-        let pair =
-            builtin_sync_channel(&[NativeValue::Int(0)]).expect("channel(0) should succeed");
+        let pair = builtin_sync_channel(&[NativeValue::Int(0)]).expect("channel(0) should succeed");
         let (s, r) = unpack_channel(pair);
 
         let s_val = NativeValue::SyncSender(s);
@@ -469,15 +463,12 @@ mod tests {
         // type when async lands. Until then we verify the blocking
         // semantic against a plain `SyncSender<i64>`, and verify the
         // NativeValue-typed channel works synchronously on a single thread.
-        let pair =
-            builtin_sync_channel(&[NativeValue::Int(2)]).expect("channel(2) should succeed");
+        let pair = builtin_sync_channel(&[NativeValue::Int(2)]).expect("channel(2) should succeed");
         let (s, r) = unpack_channel(pair);
 
         // Same-thread fill / drain works for a NativeValue channel.
-        builtin_sync_send(&[NativeValue::SyncSender(Rc::clone(&s)), NativeValue::Int(1)])
-            .unwrap();
-        builtin_sync_send(&[NativeValue::SyncSender(Rc::clone(&s)), NativeValue::Int(2)])
-            .unwrap();
+        builtin_sync_send(&[NativeValue::SyncSender(Rc::clone(&s)), NativeValue::Int(1)]).unwrap();
+        builtin_sync_send(&[NativeValue::SyncSender(Rc::clone(&s)), NativeValue::Int(2)]).unwrap();
         let recv = builtin_sync_recv(&[NativeValue::SyncReceiver(Rc::clone(&r))]).unwrap();
         assert_eq!(unwrap_ok(recv), NativeValue::Int(1));
 
@@ -728,10 +719,7 @@ mod tests {
             "sync_get",
         ] {
             let sym = interner.intern(name);
-            assert!(
-                registry.get(sym).is_some(),
-                "{name} should be registered"
-            );
+            assert!(registry.get(sym).is_some(), "{name} should be registered");
         }
     }
 }

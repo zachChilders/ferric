@@ -334,10 +334,7 @@ impl<'a> Parser<'a> {
                 self.bump();
                 Ok(())
             }
-            Some(c) => Err(self.err(format!(
-                "expected '{}', found '{}'",
-                b as char, c as char
-            ))),
+            Some(c) => Err(self.err(format!("expected '{}', found '{}'", b as char, c as char))),
             None => Err(self.err(format!("expected '{}', found end of input", b as char))),
         }
     }
@@ -397,8 +394,7 @@ impl<'a> Parser<'a> {
                             if !(0xDC00..=0xDFFF).contains(&low) {
                                 return Err(self.err("invalid low surrogate"));
                             }
-                            let combined =
-                                0x10000 + (((cp - 0xD800) << 10) | (low - 0xDC00));
+                            let combined = 0x10000 + (((cp - 0xD800) << 10) | (low - 0xDC00));
                             if let Some(c) = char::from_u32(combined) {
                                 out.push(c);
                             } else {
@@ -796,27 +792,27 @@ pub fn register(registry: &mut NativeRegistry, interner: &mut Interner) {
     type Entry = (&'static str, &'static [&'static str], crate::NativeFn);
     let entries: &[Entry] = &[
         // Serialise / parse
-        ("json_to_str",        &["v"],            builtin_json_to_str),
-        ("json_to_str_pretty", &["v"],            builtin_json_to_str_pretty),
-        ("json_parse",         &["s"],            builtin_json_parse),
+        ("json_to_str", &["v"], builtin_json_to_str),
+        ("json_to_str_pretty", &["v"], builtin_json_to_str_pretty),
+        ("json_parse", &["s"], builtin_json_parse),
         // Accessors
-        ("json_as_bool",       &["v"],            builtin_json_as_bool),
-        ("json_as_int",        &["v"],            builtin_json_as_int),
-        ("json_as_float",      &["v"],            builtin_json_as_float),
-        ("json_as_str",        &["v"],            builtin_json_as_str),
-        ("json_as_array",      &["v"],            builtin_json_as_array),
-        ("json_as_object",     &["v"],            builtin_json_as_object),
-        ("json_is_null",       &["v"],            builtin_json_is_null),
-        ("json_get",           &["v", "key"],     builtin_json_get),
-        ("json_get_path",      &["v", "path"],    builtin_json_get_path),
+        ("json_as_bool", &["v"], builtin_json_as_bool),
+        ("json_as_int", &["v"], builtin_json_as_int),
+        ("json_as_float", &["v"], builtin_json_as_float),
+        ("json_as_str", &["v"], builtin_json_as_str),
+        ("json_as_array", &["v"], builtin_json_as_array),
+        ("json_as_object", &["v"], builtin_json_as_object),
+        ("json_is_null", &["v"], builtin_json_is_null),
+        ("json_get", &["v", "key"], builtin_json_get),
+        ("json_get_path", &["v", "path"], builtin_json_get_path),
         // Construction
-        ("json_null",          &[],               builtin_json_null),
-        ("json_bool",          &["b"],            builtin_json_bool),
-        ("json_int",           &["n"],            builtin_json_int),
-        ("json_float",         &["n"],            builtin_json_float),
-        ("json_str",           &["s"],            builtin_json_str),
-        ("json_array",         &["items"],        builtin_json_array),
-        ("json_object",        &["fields"],       builtin_json_object),
+        ("json_null", &[], builtin_json_null),
+        ("json_bool", &["b"], builtin_json_bool),
+        ("json_int", &["n"], builtin_json_int),
+        ("json_float", &["n"], builtin_json_float),
+        ("json_str", &["s"], builtin_json_str),
+        ("json_array", &["items"], builtin_json_array),
+        ("json_object", &["fields"], builtin_json_object),
     ];
     for (name, params, f) in entries {
         registry.register_named(interner, name, params, *f);
@@ -1011,11 +1007,7 @@ mod tests {
     #[test]
     fn json_get_basic() {
         let obj = JsonRepr::Object(vec![("a".to_string(), JsonRepr::Int(1))]);
-        let r = builtin_json_get(&[
-            json_value(obj),
-            NativeValue::Str("a".to_string()),
-        ])
-        .unwrap();
+        let r = builtin_json_get(&[json_value(obj), NativeValue::Str("a".to_string())]).unwrap();
         assert_eq!(r, some_json(JsonRepr::Int(1)));
     }
 
@@ -1060,10 +1052,7 @@ mod tests {
 
     #[test]
     fn ctor_helpers_produce_expected_variants() {
-        assert_eq!(
-            builtin_json_null(&[]).unwrap(),
-            json_value(JsonRepr::Null)
-        );
+        assert_eq!(builtin_json_null(&[]).unwrap(), json_value(JsonRepr::Null));
         assert_eq!(
             builtin_json_bool(&[NativeValue::Bool(true)]).unwrap(),
             json_value(JsonRepr::Bool(true))

@@ -606,9 +606,9 @@ fn cmp_ord_supported(a: &NativeValue, b: &NativeValue) -> Result<std::cmp::Order
     use std::cmp::Ordering;
     match (a, b) {
         (NativeValue::Int(x), NativeValue::Int(y)) => Ok(x.cmp(y)),
-        (NativeValue::Float(x), NativeValue::Float(y)) => {
-            x.partial_cmp(y).ok_or_else(|| "list: NaN comparison".to_string())
-        }
+        (NativeValue::Float(x), NativeValue::Float(y)) => x
+            .partial_cmp(y)
+            .ok_or_else(|| "list: NaN comparison".to_string()),
         (NativeValue::Str(x), NativeValue::Str(y)) => Ok(x.cmp(y)),
         _ => Err(format!(
             "list: min/max only support uniform Int / Float / Str (got {a:?} vs {b:?})"
@@ -859,69 +859,73 @@ pub fn register(registry: &mut NativeRegistry, interner: &mut Interner) {
     type Entry = (&'static str, &'static [&'static str], crate::NativeFn);
     let entries: &[Entry] = &[
         // Construction
-        ("list_new",             &[],                     builtin_list_new),
-        ("list_of",              &["items"],              builtin_list_of),
-        ("list_repeat",          &["item", "n"],          builtin_list_repeat),
-        ("list_range",           &["from", "to"],         builtin_list_range),
-        ("list_range_inclusive", &["from", "to"],         builtin_list_range_inclusive),
+        ("list_new", &[], builtin_list_new),
+        ("list_of", &["items"], builtin_list_of),
+        ("list_repeat", &["item", "n"], builtin_list_repeat),
+        ("list_range", &["from", "to"], builtin_list_range),
+        (
+            "list_range_inclusive",
+            &["from", "to"],
+            builtin_list_range_inclusive,
+        ),
         // Access
-        ("list_len",       &["l"],                  builtin_list_len),
-        ("list_is_empty",  &["l"],                  builtin_list_is_empty),
-        ("list_get",       &["l", "index"],         builtin_list_get),
-        ("list_first",     &["l"],                  builtin_list_first),
-        ("list_last",      &["l"],                  builtin_list_last),
-        ("list_slice",     &["l", "from", "to"],    builtin_list_slice),
+        ("list_len", &["l"], builtin_list_len),
+        ("list_is_empty", &["l"], builtin_list_is_empty),
+        ("list_get", &["l", "index"], builtin_list_get),
+        ("list_first", &["l"], builtin_list_first),
+        ("list_last", &["l"], builtin_list_last),
+        ("list_slice", &["l", "from", "to"], builtin_list_slice),
         // Search
-        ("list_contains",   &["l", "item"],         builtin_list_contains),
-        ("list_find",       &["l", "f"],            builtin_list_find),
-        ("list_find_index", &["l", "f"],            builtin_list_find_index),
-        ("list_index_of",   &["l", "item"],         builtin_list_index_of),
+        ("list_contains", &["l", "item"], builtin_list_contains),
+        ("list_find", &["l", "f"], builtin_list_find),
+        ("list_find_index", &["l", "f"], builtin_list_find_index),
+        ("list_index_of", &["l", "item"], builtin_list_index_of),
         // Transform
-        ("list_map",         &["l", "f"],           builtin_list_map),
-        ("list_flat_map",    &["l", "f"],           builtin_list_flat_map),
-        ("list_filter",      &["l", "f"],           builtin_list_filter),
-        ("list_filter_map",  &["l", "f"],           builtin_list_filter_map),
-        ("list_reduce",      &["l", "f"],           builtin_list_reduce),
-        ("list_fold",        &["l", "init", "f"],   builtin_list_fold),
-        ("list_scan",        &["l", "init", "f"],   builtin_list_scan),
-        ("list_zip",         &["a", "b"],           builtin_list_zip),
-        ("list_zip_with",    &["a", "b", "f"],      builtin_list_zip_with),
-        ("list_enumerate",   &["l"],                builtin_list_enumerate),
-        ("list_flatten",     &["l"],                builtin_list_flatten),
-        ("list_chunk",       &["l", "size"],        builtin_list_chunk),
-        ("list_window",      &["l", "size"],        builtin_list_window),
-        ("list_take",        &["l", "n"],           builtin_list_take),
-        ("list_drop",        &["l", "n"],           builtin_list_drop),
-        ("list_take_while",  &["l", "f"],           builtin_list_take_while),
-        ("list_drop_while",  &["l", "f"],           builtin_list_drop_while),
-        ("list_partition",   &["l", "f"],           builtin_list_partition),
-        ("list_unzip",       &["l"],                builtin_list_unzip),
+        ("list_map", &["l", "f"], builtin_list_map),
+        ("list_flat_map", &["l", "f"], builtin_list_flat_map),
+        ("list_filter", &["l", "f"], builtin_list_filter),
+        ("list_filter_map", &["l", "f"], builtin_list_filter_map),
+        ("list_reduce", &["l", "f"], builtin_list_reduce),
+        ("list_fold", &["l", "init", "f"], builtin_list_fold),
+        ("list_scan", &["l", "init", "f"], builtin_list_scan),
+        ("list_zip", &["a", "b"], builtin_list_zip),
+        ("list_zip_with", &["a", "b", "f"], builtin_list_zip_with),
+        ("list_enumerate", &["l"], builtin_list_enumerate),
+        ("list_flatten", &["l"], builtin_list_flatten),
+        ("list_chunk", &["l", "size"], builtin_list_chunk),
+        ("list_window", &["l", "size"], builtin_list_window),
+        ("list_take", &["l", "n"], builtin_list_take),
+        ("list_drop", &["l", "n"], builtin_list_drop),
+        ("list_take_while", &["l", "f"], builtin_list_take_while),
+        ("list_drop_while", &["l", "f"], builtin_list_drop_while),
+        ("list_partition", &["l", "f"], builtin_list_partition),
+        ("list_unzip", &["l"], builtin_list_unzip),
         // Aggregation
-        ("list_any",       &["l", "f"],             builtin_list_any),
-        ("list_all",       &["l", "f"],             builtin_list_all),
-        ("list_count",     &["l", "f"],             builtin_list_count),
-        ("list_sum",       &["l"],                  builtin_list_sum),
-        ("list_sum_float", &["l"],                  builtin_list_sum_float),
-        ("list_min",       &["l"],                  builtin_list_min),
-        ("list_max",       &["l"],                  builtin_list_max),
+        ("list_any", &["l", "f"], builtin_list_any),
+        ("list_all", &["l", "f"], builtin_list_all),
+        ("list_count", &["l", "f"], builtin_list_count),
+        ("list_sum", &["l"], builtin_list_sum),
+        ("list_sum_float", &["l"], builtin_list_sum_float),
+        ("list_min", &["l"], builtin_list_min),
+        ("list_max", &["l"], builtin_list_max),
         // Structural
-        ("list_concat",      &["a", "b"],           builtin_list_concat),
-        ("list_prepend",     &["item", "l"],        builtin_list_prepend),
-        ("list_append",      &["l", "item"],        builtin_list_append),
-        ("list_insert",      &["l", "at", "item"],  builtin_list_insert),
-        ("list_remove",      &["l", "at"],          builtin_list_remove),
-        ("list_reverse",     &["l"],                builtin_list_reverse),
-        ("list_unique",      &["l"],                builtin_list_unique),
-        ("list_intersperse", &["l", "sep"],         builtin_list_intersperse),
-        ("list_join_str",    &["l", "sep"],         builtin_list_join_str),
+        ("list_concat", &["a", "b"], builtin_list_concat),
+        ("list_prepend", &["item", "l"], builtin_list_prepend),
+        ("list_append", &["l", "item"], builtin_list_append),
+        ("list_insert", &["l", "at", "item"], builtin_list_insert),
+        ("list_remove", &["l", "at"], builtin_list_remove),
+        ("list_reverse", &["l"], builtin_list_reverse),
+        ("list_unique", &["l"], builtin_list_unique),
+        ("list_intersperse", &["l", "sep"], builtin_list_intersperse),
+        ("list_join_str", &["l", "sep"], builtin_list_join_str),
         // Builder
-        ("list_builder", &[],                       builtin_list_builder),
-        ("list_push",    &["buf", "item"],          builtin_list_push),
-        ("list_pop",     &["buf"],                  builtin_list_pop),
-        ("list_build",   &["buf"],                  builtin_list_build),
+        ("list_builder", &[], builtin_list_builder),
+        ("list_push", &["buf", "item"], builtin_list_push),
+        ("list_pop", &["buf"], builtin_list_pop),
+        ("list_build", &["buf"], builtin_list_build),
         // Unprefixed alias — the M6-era `array_len` name. Same behaviour as
         // `list_len`, just registered under the historical short form.
-        ("array_len",    &["arr"],                  builtin_list_len),
+        ("array_len", &["arr"], builtin_list_len),
     ];
     for (name, params, f) in entries {
         registry.register_named(interner, name, params, *f);
@@ -942,11 +946,7 @@ mod tests {
     }
 
     fn strs(xs: &[&str]) -> NativeValue {
-        NativeValue::Array(
-            xs.iter()
-                .map(|s| NativeValue::Str(s.to_string()))
-                .collect(),
-        )
+        NativeValue::Array(xs.iter().map(|s| NativeValue::Str(s.to_string())).collect())
     }
 
     /// Build a `NativeValue::Closure` from a Rust closure for testing
@@ -1141,7 +1141,9 @@ mod tests {
     #[test]
     fn fold_sums() {
         let add = closure(|args| {
-            Ok(NativeValue::Int(unwrap_int(&args[0]) + unwrap_int(&args[1])))
+            Ok(NativeValue::Int(
+                unwrap_int(&args[0]) + unwrap_int(&args[1]),
+            ))
         });
         let r = builtin_list_fold(&[ints(&[1, 2, 3]), NativeValue::Int(0), add]).unwrap();
         assert_eq!(r, NativeValue::Int(6));
@@ -1150,13 +1152,17 @@ mod tests {
     #[test]
     fn reduce_handles_empty_and_nonempty() {
         let add = closure(|args| {
-            Ok(NativeValue::Int(unwrap_int(&args[0]) + unwrap_int(&args[1])))
+            Ok(NativeValue::Int(
+                unwrap_int(&args[0]) + unwrap_int(&args[1]),
+            ))
         });
         let r = builtin_list_reduce(&[ints(&[1, 2, 3]), add]).unwrap();
         assert_eq!(r, option_some(NativeValue::Int(6)));
 
         let add2 = closure(|args| {
-            Ok(NativeValue::Int(unwrap_int(&args[0]) + unwrap_int(&args[1])))
+            Ok(NativeValue::Int(
+                unwrap_int(&args[0]) + unwrap_int(&args[1]),
+            ))
         });
         let r = builtin_list_reduce(&[ints(&[]), add2]).unwrap();
         assert_eq!(r, option_none());
@@ -1190,7 +1196,9 @@ mod tests {
     #[test]
     fn scan_collects_intermediate_states() {
         let add = closure(|args| {
-            Ok(NativeValue::Int(unwrap_int(&args[0]) + unwrap_int(&args[1])))
+            Ok(NativeValue::Int(
+                unwrap_int(&args[0]) + unwrap_int(&args[1]),
+            ))
         });
         let r = builtin_list_scan(&[ints(&[1, 2, 3]), NativeValue::Int(0), add]).unwrap();
         // scan includes the initial accumulator: [0, 0+1, 1+2, 3+3].
@@ -1229,16 +1237,14 @@ mod tests {
 
     #[test]
     fn flatten_concatenates_lists() {
-        let nested =
-            NativeValue::Array(vec![ints(&[1, 2]), ints(&[3]), ints(&[]), ints(&[4, 5])]);
+        let nested = NativeValue::Array(vec![ints(&[1, 2]), ints(&[3]), ints(&[]), ints(&[4, 5])]);
         let r = builtin_list_flatten(&[nested]).unwrap();
         assert_eq!(r, ints(&[1, 2, 3, 4, 5]));
     }
 
     #[test]
     fn chunk_partitions_with_remainder() {
-        let r =
-            builtin_list_chunk(&[ints(&[1, 2, 3, 4, 5]), NativeValue::Int(2)]).unwrap();
+        let r = builtin_list_chunk(&[ints(&[1, 2, 3, 4, 5]), NativeValue::Int(2)]).unwrap();
         assert_eq!(
             r,
             NativeValue::Array(vec![ints(&[1, 2]), ints(&[3, 4]), ints(&[5])])
@@ -1253,8 +1259,7 @@ mod tests {
 
     #[test]
     fn window_slides_by_one() {
-        let r =
-            builtin_list_window(&[ints(&[1, 2, 3, 4]), NativeValue::Int(2)]).unwrap();
+        let r = builtin_list_window(&[ints(&[1, 2, 3, 4]), NativeValue::Int(2)]).unwrap();
         assert_eq!(
             r,
             NativeValue::Array(vec![ints(&[1, 2]), ints(&[2, 3]), ints(&[3, 4])])
@@ -1439,22 +1444,14 @@ mod tests {
 
     #[test]
     fn insert_in_middle() {
-        let r = builtin_list_insert(&[
-            ints(&[1, 3]),
-            NativeValue::Int(1),
-            NativeValue::Int(2),
-        ])
-        .unwrap();
+        let r = builtin_list_insert(&[ints(&[1, 3]), NativeValue::Int(1), NativeValue::Int(2)])
+            .unwrap();
         assert_eq!(r, ints(&[1, 2, 3]));
     }
 
     #[test]
     fn insert_out_of_bounds_is_error() {
-        let r = builtin_list_insert(&[
-            ints(&[1, 2]),
-            NativeValue::Int(99),
-            NativeValue::Int(5),
-        ]);
+        let r = builtin_list_insert(&[ints(&[1, 2]), NativeValue::Int(99), NativeValue::Int(5)]);
         assert!(r.is_err());
     }
 
@@ -1481,10 +1478,7 @@ mod tests {
     #[test]
     fn unique_preserves_first_occurrence() {
         let l = ints(&[1, 2, 1, 3, 2, 4]);
-        assert_eq!(
-            builtin_list_unique(&[l]).unwrap(),
-            ints(&[1, 2, 3, 4])
-        );
+        assert_eq!(builtin_list_unique(&[l]).unwrap(), ints(&[1, 2, 3, 4]));
     }
 
     #[test]
@@ -1500,11 +1494,8 @@ mod tests {
 
     #[test]
     fn join_str_concatenates_with_sep() {
-        let r = builtin_list_join_str(&[
-            strs(&["a", "b", "c"]),
-            NativeValue::Str(",".into()),
-        ])
-        .unwrap();
+        let r =
+            builtin_list_join_str(&[strs(&["a", "b", "c"]), NativeValue::Str(",".into())]).unwrap();
         assert_eq!(r, NativeValue::Str("a,b,c".into()));
     }
 
@@ -1541,18 +1532,60 @@ mod tests {
         register(&mut registry, &mut interner);
 
         for name in [
-            "list_new", "list_of", "list_repeat", "list_range", "list_range_inclusive",
-            "list_len", "list_is_empty", "list_get", "list_first", "list_last", "list_slice",
-            "list_contains", "list_find", "list_find_index", "list_index_of",
-            "list_map", "list_flat_map", "list_filter", "list_filter_map", "list_reduce",
-            "list_fold", "list_scan", "list_zip", "list_zip_with", "list_enumerate",
-            "list_flatten", "list_chunk", "list_window", "list_take", "list_drop",
-            "list_take_while", "list_drop_while", "list_partition", "list_unzip",
-            "list_any", "list_all", "list_count", "list_sum", "list_sum_float",
-            "list_min", "list_max",
-            "list_concat", "list_prepend", "list_append", "list_insert", "list_remove",
-            "list_reverse", "list_unique", "list_intersperse", "list_join_str",
-            "list_builder", "list_push", "list_pop", "list_build",
+            "list_new",
+            "list_of",
+            "list_repeat",
+            "list_range",
+            "list_range_inclusive",
+            "list_len",
+            "list_is_empty",
+            "list_get",
+            "list_first",
+            "list_last",
+            "list_slice",
+            "list_contains",
+            "list_find",
+            "list_find_index",
+            "list_index_of",
+            "list_map",
+            "list_flat_map",
+            "list_filter",
+            "list_filter_map",
+            "list_reduce",
+            "list_fold",
+            "list_scan",
+            "list_zip",
+            "list_zip_with",
+            "list_enumerate",
+            "list_flatten",
+            "list_chunk",
+            "list_window",
+            "list_take",
+            "list_drop",
+            "list_take_while",
+            "list_drop_while",
+            "list_partition",
+            "list_unzip",
+            "list_any",
+            "list_all",
+            "list_count",
+            "list_sum",
+            "list_sum_float",
+            "list_min",
+            "list_max",
+            "list_concat",
+            "list_prepend",
+            "list_append",
+            "list_insert",
+            "list_remove",
+            "list_reverse",
+            "list_unique",
+            "list_intersperse",
+            "list_join_str",
+            "list_builder",
+            "list_push",
+            "list_pop",
+            "list_build",
         ] {
             let sym = interner.intern(name);
             assert!(

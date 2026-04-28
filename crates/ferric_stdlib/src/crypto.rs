@@ -36,14 +36,14 @@ use ferric_common::Interner;
 
 use aes_gcm::aead::{Aead, KeyInit as AesKeyInit};
 use aes_gcm::{Aes256Gcm, Key as AesKey, Nonce as AesNonce};
-use argon2::password_hash::{
-    rand_core::OsRng as ArgonOsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString,
-};
 use argon2::Argon2;
+use argon2::password_hash::{
+    PasswordHash, PasswordHasher, PasswordVerifier, SaltString, rand_core::OsRng as ArgonOsRng,
+};
 use chacha20poly1305::{ChaCha20Poly1305, Key as ChaKey, Nonce as ChaNonce};
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use hmac::{Hmac, Mac};
-use rand::{rngs::OsRng, RngCore};
+use rand::{RngCore, rngs::OsRng};
 use sha2::{Digest, Sha256, Sha384, Sha512};
 use subtle::ConstantTimeEq;
 
@@ -353,8 +353,7 @@ fn builtin_crypto_verify_password(args: &[NativeValue]) -> Result<NativeValue, S
     check_arg_count(args, 2)?;
     let password = expect_str(&args[0])?;
     let hash_str = expect_str(&args[1])?;
-    let parsed =
-        PasswordHash::new(hash_str).map_err(|_| "InvalidHashFormat".to_string())?;
+    let parsed = PasswordHash::new(hash_str).map_err(|_| "InvalidHashFormat".to_string())?;
     match Argon2::default().verify_password(password.as_bytes(), &parsed) {
         Ok(()) => Ok(NativeValue::Bool(true)),
         Err(argon2::password_hash::Error::Password) => Ok(NativeValue::Bool(false)),
@@ -424,8 +423,8 @@ fn builtin_crypto_ed25519_verify(args: &[NativeValue]) -> Result<NativeValue, St
     let sig_arr: [u8; ED25519_SIG_LEN] = sig_bytes
         .try_into()
         .map_err(|_| "InternalError: ed25519 sig length".to_string())?;
-    let verifying = VerifyingKey::from_bytes(&pk_arr)
-        .map_err(|e| format!("InternalError: ed25519 pk: {e}"))?;
+    let verifying =
+        VerifyingKey::from_bytes(&pk_arr).map_err(|e| format!("InternalError: ed25519 pk: {e}"))?;
     let sig = Signature::from_bytes(&sig_arr);
     Ok(NativeValue::Bool(verifying.verify(message, &sig).is_ok()))
 }
@@ -486,36 +485,88 @@ pub fn register(registry: &mut NativeRegistry, interner: &mut Interner) {
     type Entry = (&'static str, &'static [&'static str], crate::NativeFn);
     let entries: &[Entry] = &[
         // Hashing
-        ("crypto_sha256",          &["data"],                       builtin_crypto_sha256),
-        ("crypto_sha384",          &["data"],                       builtin_crypto_sha384),
-        ("crypto_sha512",          &["data"],                       builtin_crypto_sha512),
-        ("crypto_blake3",          &["data"],                       builtin_crypto_blake3),
-        ("crypto_sha256_str",      &["s"],                          builtin_crypto_sha256_str),
-        ("crypto_sha512_str",      &["s"],                          builtin_crypto_sha512_str),
-        ("crypto_blake3_str",      &["s"],                          builtin_crypto_blake3_str),
+        ("crypto_sha256", &["data"], builtin_crypto_sha256),
+        ("crypto_sha384", &["data"], builtin_crypto_sha384),
+        ("crypto_sha512", &["data"], builtin_crypto_sha512),
+        ("crypto_blake3", &["data"], builtin_crypto_blake3),
+        ("crypto_sha256_str", &["s"], builtin_crypto_sha256_str),
+        ("crypto_sha512_str", &["s"], builtin_crypto_sha512_str),
+        ("crypto_blake3_str", &["s"], builtin_crypto_blake3_str),
         // HMAC
-        ("crypto_hmac_sha256",     &["key", "data"],                builtin_crypto_hmac_sha256),
-        ("crypto_hmac_sha512",     &["key", "data"],                builtin_crypto_hmac_sha512),
+        (
+            "crypto_hmac_sha256",
+            &["key", "data"],
+            builtin_crypto_hmac_sha256,
+        ),
+        (
+            "crypto_hmac_sha512",
+            &["key", "data"],
+            builtin_crypto_hmac_sha512,
+        ),
         // Constant-time eq
-        ("crypto_eq_constant",     &["a", "b"],                     builtin_crypto_eq_constant),
+        (
+            "crypto_eq_constant",
+            &["a", "b"],
+            builtin_crypto_eq_constant,
+        ),
         // ChaCha20-Poly1305
-        ("crypto_chacha_encrypt",  &["key", "nonce", "plaintext"],  builtin_crypto_chacha_encrypt),
-        ("crypto_chacha_decrypt",  &["key", "nonce", "ciphertext"], builtin_crypto_chacha_decrypt),
-        ("crypto_chacha_key",      &[],                             builtin_crypto_chacha_key),
-        ("crypto_chacha_nonce",    &[],                             builtin_crypto_chacha_nonce),
+        (
+            "crypto_chacha_encrypt",
+            &["key", "nonce", "plaintext"],
+            builtin_crypto_chacha_encrypt,
+        ),
+        (
+            "crypto_chacha_decrypt",
+            &["key", "nonce", "ciphertext"],
+            builtin_crypto_chacha_decrypt,
+        ),
+        ("crypto_chacha_key", &[], builtin_crypto_chacha_key),
+        ("crypto_chacha_nonce", &[], builtin_crypto_chacha_nonce),
         // AES-GCM
-        ("crypto_aes_gcm_encrypt", &["key", "nonce", "plaintext"],  builtin_crypto_aes_gcm_encrypt),
-        ("crypto_aes_gcm_decrypt", &["key", "nonce", "ciphertext"], builtin_crypto_aes_gcm_decrypt),
+        (
+            "crypto_aes_gcm_encrypt",
+            &["key", "nonce", "plaintext"],
+            builtin_crypto_aes_gcm_encrypt,
+        ),
+        (
+            "crypto_aes_gcm_decrypt",
+            &["key", "nonce", "ciphertext"],
+            builtin_crypto_aes_gcm_decrypt,
+        ),
         // Password hashing
-        ("crypto_hash_password",   &["password"],                   builtin_crypto_hash_password),
-        ("crypto_verify_password", &["password", "hash"],           builtin_crypto_verify_password),
+        (
+            "crypto_hash_password",
+            &["password"],
+            builtin_crypto_hash_password,
+        ),
+        (
+            "crypto_verify_password",
+            &["password", "hash"],
+            builtin_crypto_verify_password,
+        ),
         // Ed25519
-        ("crypto_ed25519_keypair", &[],                             builtin_crypto_ed25519_keypair),
-        ("crypto_ed25519_sign",    &["private_key", "message"],     builtin_crypto_ed25519_sign),
-        ("crypto_ed25519_verify",  &["public_key", "message", "sig"], builtin_crypto_ed25519_verify),
+        (
+            "crypto_ed25519_keypair",
+            &[],
+            builtin_crypto_ed25519_keypair,
+        ),
+        (
+            "crypto_ed25519_sign",
+            &["private_key", "message"],
+            builtin_crypto_ed25519_sign,
+        ),
+        (
+            "crypto_ed25519_verify",
+            &["public_key", "message", "sig"],
+            builtin_crypto_ed25519_verify,
+        ),
         // Random
-        ("crypto_random_bytes",    &["n"],                          builtin_crypto_random_bytes),
-        ("crypto_random_int",      &["low", "high"],                builtin_crypto_random_int),
+        ("crypto_random_bytes", &["n"], builtin_crypto_random_bytes),
+        (
+            "crypto_random_int",
+            &["low", "high"],
+            builtin_crypto_random_int,
+        ),
     ];
     for (name, params, f) in entries {
         registry.register_named(interner, name, params, *f);
@@ -586,8 +637,7 @@ mod tests {
     fn sha256_abc_matches_nist_vector() {
         // FIPS 180-2 vector for "abc"
         let out = unwrap_bytes(builtin_crypto_sha256(&[b(b"abc")]).unwrap());
-        let expected =
-            from_hex("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+        let expected = from_hex("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
         assert_eq!(out, expected);
     }
 
@@ -621,8 +671,7 @@ mod tests {
     fn blake3_empty_matches_known_vector() {
         // From the BLAKE3 reference test vectors.
         let out = unwrap_bytes(builtin_crypto_blake3(&[b(b"")]).unwrap());
-        let expected =
-            from_hex("af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262");
+        let expected = from_hex("af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262");
         assert_eq!(out, expected);
     }
 
@@ -649,16 +698,13 @@ mod tests {
         let key = b(b"key");
         let data = b(b"The quick brown fox jumps over the lazy dog");
         let out = unwrap_bytes(builtin_crypto_hmac_sha256(&[key, data]).unwrap());
-        let expected =
-            from_hex("f7bc83f430538424b13298e6aa6fb143ef4d59a14946175997479dbc2d1a3cd8");
+        let expected = from_hex("f7bc83f430538424b13298e6aa6fb143ef4d59a14946175997479dbc2d1a3cd8");
         assert_eq!(out, expected);
     }
 
     #[test]
     fn hmac_sha512_has_correct_length() {
-        let out = unwrap_bytes(
-            builtin_crypto_hmac_sha512(&[b(b"key"), b(b"data")]).unwrap(),
-        );
+        let out = unwrap_bytes(builtin_crypto_hmac_sha512(&[b(b"key"), b(b"data")]).unwrap());
         assert_eq!(out.len(), 64);
     }
 
@@ -693,8 +739,8 @@ mod tests {
         let key = builtin_crypto_chacha_key(&[]).unwrap();
         let nonce = builtin_crypto_chacha_nonce(&[]).unwrap();
         let plain = b(b"plain");
-        let ct = builtin_crypto_chacha_encrypt(&[key.clone(), nonce.clone(), plain.clone()])
-            .unwrap();
+        let ct =
+            builtin_crypto_chacha_encrypt(&[key.clone(), nonce.clone(), plain.clone()]).unwrap();
         let dec = builtin_crypto_chacha_decrypt(&[key, nonce, ct]).unwrap();
         assert_eq!(unwrap_bytes(dec), b"plain".to_vec());
     }
@@ -768,8 +814,8 @@ mod tests {
     fn aes_gcm_roundtrip() {
         let key = aes_key();
         let nonce = aes_nonce();
-        let ct = builtin_crypto_aes_gcm_encrypt(&[key.clone(), nonce.clone(), b(b"secret")])
-            .unwrap();
+        let ct =
+            builtin_crypto_aes_gcm_encrypt(&[key.clone(), nonce.clone(), b(b"secret")]).unwrap();
         let dec = builtin_crypto_aes_gcm_decrypt(&[key, nonce, ct]).unwrap();
         assert_eq!(unwrap_bytes(dec), b"secret".to_vec());
     }
@@ -779,8 +825,7 @@ mod tests {
         let key = aes_key();
         let nonce = aes_nonce();
         let ct =
-            builtin_crypto_aes_gcm_encrypt(&[key.clone(), nonce.clone(), b(b"sensitive")])
-                .unwrap();
+            builtin_crypto_aes_gcm_encrypt(&[key.clone(), nonce.clone(), b(b"sensitive")]).unwrap();
         let mut tampered = unwrap_bytes(ct);
         // Flip a bit in the middle to avoid hitting the auth-tag-only region.
         let mid = tampered.len() / 2;
@@ -814,17 +859,14 @@ mod tests {
     #[test]
     fn verify_password_correct() {
         let h = unwrap_str(builtin_crypto_hash_password(&[s("hunter2")]).unwrap());
-        let ok =
-            unwrap_bool(builtin_crypto_verify_password(&[s("hunter2"), s(&h)]).unwrap());
+        let ok = unwrap_bool(builtin_crypto_verify_password(&[s("hunter2"), s(&h)]).unwrap());
         assert!(ok);
     }
 
     #[test]
     fn verify_password_wrong() {
         let h = unwrap_str(builtin_crypto_hash_password(&[s("hunter2")]).unwrap());
-        let ok = unwrap_bool(
-            builtin_crypto_verify_password(&[s("wrong"), s(&h)]).unwrap(),
-        );
+        let ok = unwrap_bool(builtin_crypto_verify_password(&[s("wrong"), s(&h)]).unwrap());
         assert!(!ok);
     }
 
@@ -856,9 +898,7 @@ mod tests {
         let (sk, pk) = keypair();
         let msg = b(b"msg");
         let sig = builtin_crypto_ed25519_sign(&[sk, msg.clone()]).unwrap();
-        let ok = unwrap_bool(
-            builtin_crypto_ed25519_verify(&[pk, msg, sig]).unwrap(),
-        );
+        let ok = unwrap_bool(builtin_crypto_ed25519_verify(&[pk, msg, sig]).unwrap());
         assert!(ok);
     }
 
@@ -866,9 +906,7 @@ mod tests {
     fn ed25519_verify_rejects_tampered_message() {
         let (sk, pk) = keypair();
         let sig = builtin_crypto_ed25519_sign(&[sk, b(b"msg")]).unwrap();
-        let ok = unwrap_bool(
-            builtin_crypto_ed25519_verify(&[pk, b(b"tampered"), sig]).unwrap(),
-        );
+        let ok = unwrap_bool(builtin_crypto_ed25519_verify(&[pk, b(b"tampered"), sig]).unwrap());
         assert!(!ok);
     }
 
@@ -943,10 +981,7 @@ mod tests {
         ];
         for name in names {
             let sym = interner.intern(name);
-            assert!(
-                registry.get(sym).is_some(),
-                "{name} not registered"
-            );
+            assert!(registry.get(sym).is_some(), "{name} not registered");
         }
     }
 }

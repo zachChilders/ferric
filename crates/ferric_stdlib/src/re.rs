@@ -364,25 +364,33 @@ pub fn register(registry: &mut NativeRegistry, interner: &mut Interner) {
     type Entry = (&'static str, &'static [&'static str], crate::NativeFn);
     let entries: &[Entry] = &[
         // Compilation
-        ("re_compile",        &["pattern"],            builtin_re_compile),
-        ("re_compile_flags",  &["pattern", "flags"],   builtin_re_compile_flags),
+        ("re_compile", &["pattern"], builtin_re_compile),
+        (
+            "re_compile_flags",
+            &["pattern", "flags"],
+            builtin_re_compile_flags,
+        ),
         // Matching
-        ("re_is_match",       &["r", "s"],             builtin_re_is_match),
-        ("re_find",           &["r", "s"],             builtin_re_find),
-        ("re_find_all",       &["r", "s"],             builtin_re_find_all),
+        ("re_is_match", &["r", "s"], builtin_re_is_match),
+        ("re_find", &["r", "s"], builtin_re_find),
+        ("re_find_all", &["r", "s"], builtin_re_find_all),
         // Match inspection
-        ("re_match_str",      &["m"],                  builtin_re_match_str),
-        ("re_match_start",    &["m"],                  builtin_re_match_start),
-        ("re_match_end",      &["m"],                  builtin_re_match_end),
-        ("re_capture",        &["m", "index"],         builtin_re_capture),
-        ("re_capture_name",   &["m", "name"],          builtin_re_capture_name),
+        ("re_match_str", &["m"], builtin_re_match_str),
+        ("re_match_start", &["m"], builtin_re_match_start),
+        ("re_match_end", &["m"], builtin_re_match_end),
+        ("re_capture", &["m", "index"], builtin_re_capture),
+        ("re_capture_name", &["m", "name"], builtin_re_capture_name),
         // Replace
-        ("re_replace",        &["r", "s", "with"],     builtin_re_replace),
-        ("re_replace_all",    &["r", "s", "with"],     builtin_re_replace_all),
-        ("re_replace_fn",     &["r", "s", "f"],        builtin_re_replace_fn),
+        ("re_replace", &["r", "s", "with"], builtin_re_replace),
+        (
+            "re_replace_all",
+            &["r", "s", "with"],
+            builtin_re_replace_all,
+        ),
+        ("re_replace_fn", &["r", "s", "f"], builtin_re_replace_fn),
         // Split
-        ("re_split",          &["r", "s"],             builtin_re_split),
-        ("re_split_n",        &["r", "s", "n"],        builtin_re_split_n),
+        ("re_split", &["r", "s"], builtin_re_split),
+        ("re_split_n", &["r", "s", "n"], builtin_re_split_n),
     ];
     for (name, params, f) in entries {
         registry.register_named(interner, name, params, *f);
@@ -587,11 +595,9 @@ mod tests {
     fn replace_fn_doubles_each_digit_run() {
         // re::replace_fn(re("\\d+"), "1 2 3", |m| str::repeat(re::match_str(m), 2))
         // → "11 22 33"
-        let double_match = NativeValue::Closure(crate::NativeClosure::new(|args| {
-            match &args[0] {
-                NativeValue::Match(m) => Ok(NativeValue::Str(m.text.repeat(2))),
-                other => Err(format!("expected Match, got {other:?}")),
-            }
+        let double_match = NativeValue::Closure(crate::NativeClosure::new(|args| match &args[0] {
+            NativeValue::Match(m) => Ok(NativeValue::Str(m.text.repeat(2))),
+            other => Err(format!("expected Match, got {other:?}")),
         }));
         let r = builtin_re_replace_fn(&[re(r"\d+"), s("1 2 3"), double_match]).unwrap();
         assert_eq!(r, s("11 22 33"));
@@ -602,10 +608,7 @@ mod tests {
     #[test]
     fn split_basic() {
         let r = builtin_re_split(&[re(r",\s*"), s("a, b,c")]).expect("ok");
-        assert_eq!(
-            r,
-            NativeValue::Array(vec![s("a"), s("b"), s("c")])
-        );
+        assert_eq!(r, NativeValue::Array(vec![s("a"), s("b"), s("c")]));
     }
 
     #[test]
@@ -645,7 +648,10 @@ mod tests {
         match m {
             NativeValue::Match(mr) => {
                 assert_eq!(mr.text, "dog");
-                assert_eq!(mr.captures.get(1).cloned().flatten(), Some("dog".to_string()));
+                assert_eq!(
+                    mr.captures.get(1).cloned().flatten(),
+                    Some("dog".to_string())
+                );
             }
             other => panic!("expected Match, got {other:?}"),
         }

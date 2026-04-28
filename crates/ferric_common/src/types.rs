@@ -1,7 +1,7 @@
 //! Type system types.
 
-use serde::{Deserialize, Serialize};
 use crate::{DefId, Symbol};
+use serde::{Deserialize, Serialize};
 
 /// A type variable used during Hindley-Milner inference.
 ///
@@ -69,10 +69,7 @@ pub enum Ty {
     /// with different `def_id`s are never equal even when their `inner` types
     /// match — that distinction is what makes `type Url = Str` safer than a
     /// transparent alias. At runtime, opaque types erase to `inner`.
-    Opaque {
-        def_id: DefId,
-        inner: Box<Ty>,
-    },
+    Opaque { def_id: DefId, inner: Box<Ty> },
     /// `Async<T>` — the type of an `async fn` value (i.e. the result of calling
     /// `async fn foo() -> T` without `.await`) and of `async { ... }` blocks.
     Async(Box<Ty>),
@@ -168,15 +165,17 @@ impl Ty {
 impl std::fmt::Display for Ty {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Ty::Int   => write!(f, "Int"),
+            Ty::Int => write!(f, "Int"),
             Ty::Float => write!(f, "Float"),
-            Ty::Bool  => write!(f, "Bool"),
-            Ty::Str   => write!(f, "Str"),
-            Ty::Unit  => write!(f, "Unit"),
+            Ty::Bool => write!(f, "Bool"),
+            Ty::Str => write!(f, "Str"),
+            Ty::Unit => write!(f, "Unit"),
             Ty::Fn { params, ret } => {
                 write!(f, "fn(")?;
                 for (i, p) in params.iter().enumerate() {
-                    if i > 0 { write!(f, ", ")?; }
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
                     write!(f, "{p}")?;
                 }
                 write!(f, ") -> {ret}")
@@ -185,22 +184,26 @@ impl std::fmt::Display for Ty {
             Ty::Tuple(elems) => {
                 write!(f, "(")?;
                 for (i, e) in elems.iter().enumerate() {
-                    if i > 0 { write!(f, ", ")?; }
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
                     write!(f, "{e}")?;
                 }
-                if elems.len() == 1 { write!(f, ",")?; }
+                if elems.len() == 1 {
+                    write!(f, ",")?;
+                }
                 write!(f, ")")
             }
             Ty::Struct { def_id, .. } => write!(f, "<struct#{}>", def_id.0),
-            Ty::Enum   { def_id, .. } => write!(f, "<enum#{}>",   def_id.0),
-            Ty::Var(v)            => write!(f, "?T{}", v.0),
-            Ty::Array(elem)       => write!(f, "[{elem}]"),
-            Ty::Option(inner)     => write!(f, "Option<{inner}>"),
-            Ty::Result(ok, err)   => write!(f, "Result<{ok}, {err}>"),
+            Ty::Enum { def_id, .. } => write!(f, "<enum#{}>", def_id.0),
+            Ty::Var(v) => write!(f, "?T{}", v.0),
+            Ty::Array(elem) => write!(f, "[{elem}]"),
+            Ty::Option(inner) => write!(f, "Option<{inner}>"),
+            Ty::Result(ok, err) => write!(f, "Result<{ok}, {err}>"),
             Ty::Opaque { inner, .. } => write!(f, "{inner}"),
-            Ty::Async(inner)  => write!(f, "Async<{inner}>"),
+            Ty::Async(inner) => write!(f, "Async<{inner}>"),
             Ty::Handle(inner) => write!(f, "Handle<{inner}>"),
-            Ty::Poll(inner)   => write!(f, "Poll<{inner}>"),
+            Ty::Poll(inner) => write!(f, "Poll<{inner}>"),
         }
     }
 }
@@ -211,31 +214,34 @@ mod display_tests {
 
     #[test]
     fn primitives_use_title_case() {
-        assert_eq!(format!("{}", Ty::Int),   "Int");
+        assert_eq!(format!("{}", Ty::Int), "Int");
         assert_eq!(format!("{}", Ty::Float), "Float");
-        assert_eq!(format!("{}", Ty::Bool),  "Bool");
-        assert_eq!(format!("{}", Ty::Str),   "Str");
-        assert_eq!(format!("{}", Ty::Unit),  "Unit");
+        assert_eq!(format!("{}", Ty::Bool), "Bool");
+        assert_eq!(format!("{}", Ty::Str), "Str");
+        assert_eq!(format!("{}", Ty::Unit), "Unit");
     }
 
     #[test]
     fn function_type_round_trips() {
         let ty = Ty::Fn {
             params: vec![Ty::Int, Ty::Bool],
-            ret:    Box::new(Ty::Str),
+            ret: Box::new(Ty::Str),
         };
         assert_eq!(format!("{ty}"), "fn(Int, Bool) -> Str");
     }
 
     #[test]
     fn nullary_function() {
-        let ty = Ty::Fn { params: vec![], ret: Box::new(Ty::Unit) };
+        let ty = Ty::Fn {
+            params: vec![],
+            ret: Box::new(Ty::Unit),
+        };
         assert_eq!(format!("{ty}"), "fn() -> Unit");
     }
 
     #[test]
     fn collections_and_options() {
-        assert_eq!(format!("{}", Ty::Array(Box::new(Ty::Int))),  "[Int]");
+        assert_eq!(format!("{}", Ty::Array(Box::new(Ty::Int))), "[Int]");
         assert_eq!(format!("{}", Ty::Option(Box::new(Ty::Str))), "Option<Str>");
         assert_eq!(
             format!("{}", Ty::Result(Box::new(Ty::Int), Box::new(Ty::Str))),
@@ -245,7 +251,10 @@ mod display_tests {
 
     #[test]
     fn tuple_disambiguates_singleton() {
-        assert_eq!(format!("{}", Ty::Tuple(vec![Ty::Int, Ty::Bool])), "(Int, Bool)");
+        assert_eq!(
+            format!("{}", Ty::Tuple(vec![Ty::Int, Ty::Bool])),
+            "(Int, Bool)"
+        );
         // Singleton tuples get a trailing comma so they are distinct from
         // parenthesised types.
         assert_eq!(format!("{}", Ty::Tuple(vec![Ty::Int])), "(Int,)");
@@ -259,7 +268,10 @@ mod display_tests {
 
     #[test]
     fn opaque_erases_to_inner() {
-        let ty = Ty::Opaque { def_id: DefId::new(3), inner: Box::new(Ty::Str) };
+        let ty = Ty::Opaque {
+            def_id: DefId::new(3),
+            inner: Box::new(Ty::Str),
+        };
         assert_eq!(format!("{ty}"), "Str");
     }
 }
@@ -279,6 +291,9 @@ pub struct TypeScheme {
 impl TypeScheme {
     /// A monomorphic scheme — no quantified variables.
     pub fn monomorphic(ty: Ty) -> Self {
-        Self { forall: Vec::new(), ty }
+        Self {
+            forall: Vec::new(),
+            ty,
+        }
     }
 }

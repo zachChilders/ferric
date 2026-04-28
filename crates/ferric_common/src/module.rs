@@ -5,9 +5,9 @@
 //! Both are read by downstream stages through `ferric_common` only — neither
 //! crate's internals are visible across the pipeline.
 
-use std::collections::HashMap;
-use serde::{Deserialize, Serialize};
 use crate::{DefId, ImportPath, Span, Symbol};
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 /// Result of the `ferric_manifest` stage.
 ///
@@ -17,7 +17,7 @@ use crate::{DefId, ImportPath, Span, Symbol};
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ManifestResult {
     pub manifest: Option<Manifest>,
-    pub errors:   Vec<ManifestError>,
+    pub errors: Vec<ManifestError>,
 }
 
 impl ManifestResult {
@@ -35,9 +35,9 @@ impl ManifestResult {
 /// Parsed `Ferric.toml`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Manifest {
-    pub name:         String,
-    pub version:      String,
-    pub submodules:   Vec<String>,
+    pub name: String,
+    pub version: String,
+    pub submodules: Vec<String>,
     pub dependencies: HashMap<String, String>,
 }
 
@@ -45,16 +45,10 @@ pub struct Manifest {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ManifestError {
     /// Failed to parse `Ferric.toml` as TOML.
-    ParseError {
-        message: String,
-        span:    Span,
-    },
+    ParseError { message: String, span: Span },
     /// A submodule path contains its own `Ferric.toml`, which would shadow
     /// the workspace manifest.
-    ConflictingManifest {
-        path: String,
-        span: Span,
-    },
+    ConflictingManifest { path: String, span: Span },
 }
 
 impl ManifestError {
@@ -93,7 +87,7 @@ pub struct ModuleResult {
     /// (vs. the generic "not exported" `UnknownExport`).
     pub private_imports: Vec<PrivateImportInfo>,
     /// Any errors encountered during module resolution.
-    pub errors:  Vec<ModuleError>,
+    pub errors: Vec<ModuleError>,
 }
 
 /// One named import that resolved to a private (non-exported) item in the
@@ -111,7 +105,7 @@ impl ModuleResult {
     pub fn new(
         exports: HashMap<Symbol, DefId>,
         imports: Vec<ResolvedImport>,
-        errors:  Vec<ModuleError>,
+        errors: Vec<ModuleError>,
     ) -> Self {
         Self {
             exports,
@@ -137,8 +131,8 @@ impl ModuleResult {
 /// applying any `as` alias) to the source file's `DefId` for that item.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ResolvedImport {
-    pub span:     Span,
-    pub path:     ImportPath,
+    pub span: Span,
+    pub path: ImportPath,
     pub bindings: Vec<(Symbol, DefId)>,
 }
 
@@ -147,10 +141,7 @@ pub struct ResolvedImport {
 pub enum ModuleError {
     /// A cycle exists in the import graph. `cycle` lists every file in the
     /// cycle in order; `span` points at the import that closes it.
-    CircularImport {
-        cycle: Vec<String>,
-        span:  Span,
-    },
+    CircularImport { cycle: Vec<String>, span: Span },
     /// A named import references an item that does not appear in the target
     /// file's exports.
     UnknownExport {
@@ -159,21 +150,13 @@ pub enum ModuleError {
         span: Span,
     },
     /// A `@/` or cache-name import was used without a `Ferric.toml`.
-    NoManifest {
-        path: String,
-        span: Span,
-    },
+    NoManifest { path: String, span: Span },
     /// A cache import named a package that is declared in the manifest but
     /// not present in `.ferric/cache/`.
-    CacheMiss {
-        name: String,
-        span: Span,
-    },
+    CacheMiss { name: String, span: Span },
     /// `import X from "..."` (no braces, no `*`) — Ferric does not support
     /// default imports.
-    DefaultImport {
-        span: Span,
-    },
+    DefaultImport { span: Span },
 }
 
 impl ModuleError {

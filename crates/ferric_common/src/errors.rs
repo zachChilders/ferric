@@ -3,8 +3,8 @@
 //! CRITICAL: Every error type MUST carry a Span field (Rule 5).
 //! This enables precise error reporting and future renderer replacement.
 
-use serde::{Deserialize, Serialize};
 use crate::{Span, Symbol, TokenKind, Ty, TyVar};
+use serde::{Deserialize, Serialize};
 
 /// Errors that can occur during lexing.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -22,13 +22,9 @@ pub enum LexError {
         span: Span,
     },
     /// A shell interpolation `@{...}` contained another `@{` inside it.
-    NestedShellInterp {
-        span: Span,
-    },
+    NestedShellInterp { span: Span },
     /// A shell interpolation `@{...}` had no closing `}` before end-of-line.
-    UnclosedShellInterp {
-        span: Span,
-    },
+    UnclosedShellInterp { span: Span },
 }
 
 impl LexError {
@@ -48,9 +44,7 @@ impl LexError {
             LexError::UnexpectedChar { ch, .. } => {
                 format!("unexpected character '{ch}'")
             }
-            LexError::UnterminatedString { .. } => {
-                "unterminated string literal".to_string()
-            }
+            LexError::UnterminatedString { .. } => "unterminated string literal".to_string(),
             LexError::NestedShellInterp { .. } => {
                 "nested shell interpolation `@{` is not allowed".to_string()
             }
@@ -98,46 +92,30 @@ pub enum ParseError {
         span: Span,
     },
     /// An `import` declaration appeared after a non-import top-level item.
-    LateImport {
-        span: Span,
-    },
+    LateImport { span: Span },
     /// A default-style import: `import X from "..."` (no braces, no `*`).
-    DefaultImport {
-        span: Span,
-    },
+    DefaultImport { span: Span },
     /// An import path string did not match any of the three supported shapes.
-    InvalidImportPath {
-        span: Span,
-    },
+    InvalidImportPath { span: Span },
     /// An `export` modifier appeared somewhere it is not legal (for example,
     /// inside a function body).
-    InvalidExportPosition {
-        span: Span,
-    },
+    InvalidExportPosition { span: Span },
     /// Two `as` casts chained without parentheses: `x as A as B`.
-    ChainedCast {
-        span: Span,
-    },
+    ChainedCast { span: Span },
     /// A `|` appeared in expression position not followed by closure-parameter
     /// syntax. The lexer cannot reject `|` directly because `|x|` introduces a
     /// closure, so the rejection lives here as a single clear diagnostic
     /// instead of cascading through the closure-param parser.
-    StrayPipe {
-        span: Span,
-    },
+    StrayPipe { span: Span },
     /// `await` appeared inside a non-`async` function — caught at parse time
     /// as a fast path. The type checker also catches this (with richer typing
     /// information), but emitting it here gives a clearer diagnostic and lets
     /// downstream stages skip the malformed body.
-    AwaitOutsideAsync {
-        span: Span,
-    },
+    AwaitOutsideAsync { span: Span },
     /// `async` was used as a prefix on something other than `fn` or `{`. The
     /// token after `async` was something like `let`, `struct`, or any other
     /// non-function form.
-    AsyncOnNonFn {
-        span: Span,
-    },
+    AsyncOnNonFn { span: Span },
 }
 
 impl ParseError {
@@ -163,7 +141,9 @@ impl ParseError {
     /// Returns a human-readable description of this error.
     pub fn description(&self) -> String {
         match self {
-            ParseError::UnexpectedToken { expected, found, .. } => {
+            ParseError::UnexpectedToken {
+                expected, found, ..
+            } => {
                 format!("expected {}, found {}", expected, found.description())
             }
             ParseError::ExpectedExpression { found, .. } => {
@@ -173,7 +153,8 @@ impl ParseError {
                 format!("expected statement, found {}", found.description())
             }
             ParseError::PositionalArg { .. } => {
-                "positional arguments are not allowed; use named arguments (name: value)".to_string()
+                "positional arguments are not allowed; use named arguments (name: value)"
+                    .to_string()
             }
             ParseError::InvalidRequireMode { .. } => {
                 "invalid require mode; expected 'warn'".to_string()
@@ -269,10 +250,7 @@ pub enum ResolveError {
         span: Span,
     },
     /// A reference to an undefined struct or enum.
-    UndefinedType {
-        name: Symbol,
-        span: Span,
-    },
+    UndefinedType { name: Symbol, span: Span },
     /// A struct literal mentioned a field name that doesn't belong to the struct.
     UnknownField {
         struct_name: Symbol,
@@ -333,30 +311,16 @@ impl ResolveError {
     /// Returns a human-readable description of this error.
     pub fn description(&self) -> String {
         match self {
-            ResolveError::UndefinedVariable { .. } => {
-                "undefined variable".to_string()
-            }
-            ResolveError::DuplicateDefinition { .. } => {
-                "duplicate definition".to_string()
-            }
+            ResolveError::UndefinedVariable { .. } => "undefined variable".to_string(),
+            ResolveError::DuplicateDefinition { .. } => "duplicate definition".to_string(),
             ResolveError::AssignToImmutable { .. } => {
                 "assignment to immutable variable".to_string()
             }
-            ResolveError::BreakOutsideLoop { .. } => {
-                "break outside of loop".to_string()
-            }
-            ResolveError::ContinueOutsideLoop { .. } => {
-                "continue outside of loop".to_string()
-            }
-            ResolveError::ReturnOutsideFn { .. } => {
-                "return outside of function".to_string()
-            }
-            ResolveError::MissingArg { .. } => {
-                "missing required argument".to_string()
-            }
-            ResolveError::UnknownArg { .. } => {
-                "unknown argument name".to_string()
-            }
+            ResolveError::BreakOutsideLoop { .. } => "break outside of loop".to_string(),
+            ResolveError::ContinueOutsideLoop { .. } => "continue outside of loop".to_string(),
+            ResolveError::ReturnOutsideFn { .. } => "return outside of function".to_string(),
+            ResolveError::MissingArg { .. } => "missing required argument".to_string(),
+            ResolveError::UnknownArg { .. } => "unknown argument name".to_string(),
             ResolveError::RequireSetArity { .. } => {
                 "require set closure must take zero arguments".to_string()
             }
@@ -398,25 +362,13 @@ pub enum TypeError {
         span: Span,
     },
     /// The require condition expression is not Bool
-    RequireNonBool {
-        found: Ty,
-        span: Span,
-    },
+    RequireNonBool { found: Ty, span: Span },
     /// The require message expression is not Str
-    RequireMessageNonStr {
-        found: Ty,
-        span: Span,
-    },
+    RequireMessageNonStr { found: Ty, span: Span },
     /// The require set closure is not Fn() -> Unit
-    RequireSetType {
-        found: Ty,
-        span: Span,
-    },
+    RequireSetType { found: Ty, span: Span },
     /// A shell interpolation `@{expr}` has a type other than Str or Int.
-    ShellInterpType {
-        found: Ty,
-        span: Span,
-    },
+    ShellInterpType { found: Ty, span: Span },
     /// Unification produced an infinite type (failed occurs check).
     InfiniteType {
         /// The variable that would recursively contain itself.
@@ -449,16 +401,9 @@ pub enum TypeError {
         span: Span,
     },
     /// A field-access expression was applied to a non-struct value.
-    NotAStruct {
-        ty: Ty,
-        span: Span,
-    },
+    NotAStruct { ty: Ty, span: Span },
     /// A struct value did not have the named field.
-    NoSuchField {
-        ty: Ty,
-        field: Symbol,
-        span: Span,
-    },
+    NoSuchField { ty: Ty, field: Symbol, span: Span },
     /// A field type didn't match its declared type in a struct literal.
     FieldTypeMismatch {
         struct_name: Symbol,
@@ -469,11 +414,7 @@ pub enum TypeError {
     },
     /// A method was called on a type that doesn't implement any trait
     /// providing it.
-    NoSuchMethod {
-        ty: Ty,
-        method: Symbol,
-        span: Span,
-    },
+    NoSuchMethod { ty: Ty, method: Symbol, span: Span },
     /// A trait bound on a generic call site was not satisfied: the type
     /// substituted for `type_param` doesn't implement `bound`.
     TraitBoundNotSatisfied {
@@ -483,15 +424,9 @@ pub enum TypeError {
         span: Span,
     },
     /// A trait was used as a bound but no such trait is defined.
-    UnknownTrait {
-        name: Symbol,
-        span: Span,
-    },
+    UnknownTrait { name: Symbol, span: Span },
     /// An impl block referred to a trait that doesn't exist.
-    ImplOfUnknownTrait {
-        trait_name: Symbol,
-        span: Span,
-    },
+    ImplOfUnknownTrait { trait_name: Symbol, span: Span },
     /// An impl block declared a method whose signature doesn't match the
     /// trait's declared signature.
     ImplMethodSignatureMismatch {
@@ -501,53 +436,28 @@ pub enum TypeError {
     },
     /// An opaque-typed value was used where its inner type (or a different
     /// opaque type) was expected — `as` was missing.
-    OpaqueTypeMismatch {
-        expected: Ty,
-        found:    Ty,
-        span:     Span,
-    },
+    OpaqueTypeMismatch { expected: Ty, found: Ty, span: Span },
     /// A cast expression `expr as TypeExpr` was neither a wrap nor an unwrap
     /// of an opaque type alias.
-    InvalidCast {
-        from: Ty,
-        to:   Ty,
-        span: Span,
-    },
+    InvalidCast { from: Ty, to: Ty, span: Span },
     /// `await` was used outside of an `async fn` or `async { ... }` block.
     /// The type checker catches this independently of the parser fast-path so
     /// that lowering can rely on the await-context invariant.
-    AwaitOutsideAsync {
-        span: Span,
-    },
+    AwaitOutsideAsync { span: Span },
     /// `await` was applied to a value whose type is not `Async<T>`.
-    AwaitOnNonAsync {
-        found: Ty,
-        span:  Span,
-    },
+    AwaitOnNonAsync { found: Ty, span: Span },
     /// An `async { ... }` block appeared in a position where its `Async<T>`
     /// result type cannot be used (e.g. a sync function that returns `Unit`
     /// and discards the value).
-    AsyncBlockInSync {
-        span: Span,
-    },
+    AsyncBlockInSync { span: Span },
     /// `spawn(task: ...)` was called with an argument that is not `Async<T>`.
-    SpawnNonAsync {
-        found: Ty,
-        span:  Span,
-    },
+    SpawnNonAsync { found: Ty, span: Span },
     /// An expression of type `Async<T>` was used where the inner `T` was
     /// expected — the user almost always forgot to write `await`. Friendly
     /// alternative to a plain `Mismatch` for this very common case.
-    AsyncNotAwaited {
-        found:    Ty,
-        expected: Ty,
-        span:     Span,
-    },
+    AsyncNotAwaited { found: Ty, expected: Ty, span: Span },
     /// `join(...)` received an argument whose type is not `Handle<T>`.
-    JoinNonHandle {
-        found: Ty,
-        span:  Span,
-    },
+    JoinNonHandle { found: Ty, span: Span },
 }
 
 impl TypeError {
@@ -586,14 +496,21 @@ impl TypeError {
     /// Returns a human-readable description of this error.
     pub fn description(&self) -> String {
         match self {
-            TypeError::Mismatch { expected, found, .. } => {
+            TypeError::Mismatch {
+                expected, found, ..
+            } => {
                 format!(
                     "type mismatch: expected {}, found {}",
                     expected.description(),
                     found.description()
                 )
             }
-            TypeError::IncompatibleTypes { operation, left, right, .. } => {
+            TypeError::IncompatibleTypes {
+                operation,
+                left,
+                right,
+                ..
+            } => {
                 format!(
                     "incompatible types for {}: {} and {}",
                     operation,
@@ -602,16 +519,25 @@ impl TypeError {
                 )
             }
             TypeError::RequireNonBool { found, .. } => {
-                format!("require condition must be Bool, found {}", found.description())
+                format!(
+                    "require condition must be Bool, found {}",
+                    found.description()
+                )
             }
             TypeError::RequireMessageNonStr { found, .. } => {
                 format!("require message must be Str, found {}", found.description())
             }
             TypeError::RequireSetType { found, .. } => {
-                format!("require set closure must be Fn() -> Unit, found {}", found.description())
+                format!(
+                    "require set closure must be Fn() -> Unit, found {}",
+                    found.description()
+                )
             }
             TypeError::ShellInterpType { found, .. } => {
-                format!("shell interpolation must be Str or Int, found {}", found.description())
+                format!(
+                    "shell interpolation must be Str or Int, found {}",
+                    found.description()
+                )
             }
             TypeError::InfiniteType { var, ty, .. } => {
                 format!(
@@ -623,7 +549,9 @@ impl TypeError {
             TypeError::CannotInfer { .. } => {
                 "cannot infer a concrete type for this expression".to_string()
             }
-            TypeError::WrongArgumentCount { expected, found, .. } => {
+            TypeError::WrongArgumentCount {
+                expected, found, ..
+            } => {
                 format!("expected {expected} argument(s), found {found}")
             }
             TypeError::NotCallable { ty, .. } => {
@@ -635,7 +563,9 @@ impl TypeError {
             TypeError::NoSuchField { ty, .. } => {
                 format!("type {} has no such field", ty.description())
             }
-            TypeError::FieldTypeMismatch { expected, found, .. } => {
+            TypeError::FieldTypeMismatch {
+                expected, found, ..
+            } => {
                 format!(
                     "field type mismatch: expected {}, found {}",
                     expected.description(),
@@ -646,10 +576,7 @@ impl TypeError {
                 format!("no method found for type {}", ty.description())
             }
             TypeError::TraitBoundNotSatisfied { ty, .. } => {
-                format!(
-                    "trait bound not satisfied for type {}",
-                    ty.description()
-                )
+                format!("trait bound not satisfied for type {}", ty.description())
             }
             TypeError::UnknownTrait { .. } => "unknown trait".to_string(),
             TypeError::ImplOfUnknownTrait { .. } => {
@@ -658,7 +585,9 @@ impl TypeError {
             TypeError::ImplMethodSignatureMismatch { .. } => {
                 "impl method signature does not match trait declaration".to_string()
             }
-            TypeError::OpaqueTypeMismatch { expected, found, .. } => {
+            TypeError::OpaqueTypeMismatch {
+                expected, found, ..
+            } => {
                 format!(
                     "opaque type mismatch: expected {}, found {}",
                     expected.description(),
@@ -666,11 +595,7 @@ impl TypeError {
                 )
             }
             TypeError::InvalidCast { from, to, .. } => {
-                format!(
-                    "cannot cast {} to {}",
-                    from.description(),
-                    to.description()
-                )
+                format!("cannot cast {} to {}", from.description(), to.description())
             }
             TypeError::AwaitOutsideAsync { .. } => {
                 "`await` is only valid inside an `async fn` or `async { ... }` block".to_string()
@@ -691,7 +616,9 @@ impl TypeError {
                     found.description()
                 )
             }
-            TypeError::AsyncNotAwaited { found, expected, .. } => {
+            TypeError::AsyncNotAwaited {
+                found, expected, ..
+            } => {
                 format!(
                     "this expression is {} but {} is expected — did you forget `await`?",
                     found.description(),
@@ -727,10 +654,7 @@ pub enum AsyncLowerError {
     /// An `async fn` calls itself unconditionally, with no awaitable suspension
     /// point along the way — the resulting state machine would loop without
     /// ever yielding to the scheduler.
-    InfiniteAsyncRecursion {
-        fn_name: Symbol,
-        span: Span,
-    },
+    InfiniteAsyncRecursion { fn_name: Symbol, span: Span },
 }
 
 impl AsyncLowerError {
@@ -795,15 +719,10 @@ impl AsyncWarning {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ExhaustivenessError {
     /// A `match` expression failed to cover every variant of an enum.
-    NonExhaustive {
-        missing: Vec<Symbol>,
-        span: Span,
-    },
+    NonExhaustive { missing: Vec<Symbol>, span: Span },
     /// A `match` arm can never be reached because earlier arms already
     /// match every value the scrutinee could take.
-    UnreachableArm {
-        span: Span,
-    },
+    UnreachableArm { span: Span },
 }
 
 impl ExhaustivenessError {
@@ -816,13 +735,8 @@ impl ExhaustivenessError {
 
     pub fn description(&self) -> String {
         match self {
-            ExhaustivenessError::NonExhaustive { .. } => {
-                "non-exhaustive match".to_string()
-            }
-            ExhaustivenessError::UnreachableArm { .. } => {
-                "unreachable match arm".to_string()
-            }
+            ExhaustivenessError::NonExhaustive { .. } => "non-exhaustive match".to_string(),
+            ExhaustivenessError::UnreachableArm { .. } => "unreachable match arm".to_string(),
         }
     }
 }
-

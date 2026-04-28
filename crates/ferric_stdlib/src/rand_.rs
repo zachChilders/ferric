@@ -109,9 +109,7 @@ fn tuple2(a: NativeValue, b: NativeValue) -> NativeValue {
 /// Sample an integer uniformly from `[low, high]` (inclusive on both ends).
 fn gen_int_inclusive<R: RngCore>(rng: &mut R, low: i64, high: i64) -> Result<i64, String> {
     if low > high {
-        return Err(format!(
-            "rand::int: low ({low}) must be <= high ({high})"
-        ));
+        return Err(format!("rand::int: low ({low}) must be <= high ({high})"));
     }
     // `gen_range(low..=high)` would suffice, but callers in `rand` 0.8 prefer
     // explicit `RangeInclusive`. We use the half-open form on a widened range
@@ -279,7 +277,10 @@ fn builtin_rand_rng_shuffle(args: &[NativeValue]) -> Result<NativeValue, String>
         let mut state = handle.borrow_mut();
         fisher_yates(&mut state.inner, items)
     };
-    Ok(tuple2(NativeValue::Array(shuffled), NativeValue::Rng(handle)))
+    Ok(tuple2(
+        NativeValue::Array(shuffled),
+        NativeValue::Rng(handle),
+    ))
 }
 
 // ============================================================================
@@ -292,18 +293,18 @@ pub fn register(registry: &mut NativeRegistry, interner: &mut Interner) {
     type Entry = (&'static str, &'static [&'static str], crate::NativeFn);
     let entries: &[Entry] = &[
         // Unseeded
-        ("rand_int",          &["low", "high"],   builtin_rand_int),
-        ("rand_float",        &[],                builtin_rand_float),
-        ("rand_bool",         &[],                builtin_rand_bool),
-        ("rand_pick",         &["l"],             builtin_rand_pick),
-        ("rand_shuffle",      &["l"],             builtin_rand_shuffle),
-        ("rand_sample",       &["l", "n"],        builtin_rand_sample),
+        ("rand_int", &["low", "high"], builtin_rand_int),
+        ("rand_float", &[], builtin_rand_float),
+        ("rand_bool", &[], builtin_rand_bool),
+        ("rand_pick", &["l"], builtin_rand_pick),
+        ("rand_shuffle", &["l"], builtin_rand_shuffle),
+        ("rand_sample", &["l", "n"], builtin_rand_sample),
         // Seeded
-        ("rand_seeded",       &["seed"],          builtin_rand_seeded),
-        ("rand_rng_int",      &["r", "low", "high"], builtin_rand_rng_int),
-        ("rand_rng_float",    &["r"],             builtin_rand_rng_float),
-        ("rand_rng_pick",     &["r", "l"],        builtin_rand_rng_pick),
-        ("rand_rng_shuffle",  &["r", "l"],        builtin_rand_rng_shuffle),
+        ("rand_seeded", &["seed"], builtin_rand_seeded),
+        ("rand_rng_int", &["r", "low", "high"], builtin_rand_rng_int),
+        ("rand_rng_float", &["r"], builtin_rand_rng_float),
+        ("rand_rng_pick", &["r", "l"], builtin_rand_rng_pick),
+        ("rand_rng_shuffle", &["r", "l"], builtin_rand_rng_shuffle),
     ];
     for (name, params, f) in entries {
         registry.register_named(interner, name, params, *f);
@@ -405,7 +406,10 @@ mod tests {
                 break;
             }
         }
-        assert!(saw_true && saw_false, "rand_bool was monochrome over 200 trials");
+        assert!(
+            saw_true && saw_false,
+            "rand_bool was monochrome over 200 trials"
+        );
     }
 
     // ---------- Unseeded: `pick`, `shuffle`, `sample` ----------
@@ -484,7 +488,10 @@ mod tests {
             NativeValue::Rng(h) => Rc::as_ptr(h) as usize,
             _ => panic!("expected Rng in tuple slot 1"),
         };
-        assert_eq!(original_ptr, returned_ptr, "rng_int must return the same handle");
+        assert_eq!(
+            original_ptr, returned_ptr,
+            "rng_int must return the same handle"
+        );
     }
 
     #[test]
@@ -523,7 +530,10 @@ mod tests {
             a = pa[1].clone();
             b = pb[1].clone();
         }
-        assert!(any_diff, "seed 42 and 43 produced identical 16-sample sequences");
+        assert!(
+            any_diff,
+            "seed 42 and 43 produced identical 16-sample sequences"
+        );
     }
 
     #[test]
@@ -550,7 +560,10 @@ mod tests {
         }
         // Range check is unconditional — survives a lock-in mismatch.
         for n in &got {
-            assert!((0..=100).contains(n), "rng_int produced {n} outside [0, 100]");
+            assert!(
+                (0..=100).contains(n),
+                "rng_int produced {n} outside [0, 100]"
+            );
         }
         assert_eq!(
             got,

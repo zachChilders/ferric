@@ -32,9 +32,7 @@
 use std::sync::OnceLock;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use chrono::{
-    DateTime, Datelike, Local, NaiveDate, NaiveDateTime, TimeZone, Timelike, Utc,
-};
+use chrono::{DateTime, Datelike, Local, NaiveDate, NaiveDateTime, TimeZone, Timelike, Utc};
 
 use ferric_common::Interner;
 
@@ -254,9 +252,7 @@ fn builtin_time_weekday(args: &[NativeValue]) -> Result<NativeValue, String> {
     let t = expect_time(&args[0])?;
     let dt = time_to_chrono_utc(t)?;
     // chrono's `num_days_from_monday` already returns 0=Mon..6=Sun.
-    Ok(NativeValue::Int(
-        dt.weekday().num_days_from_monday() as i64,
-    ))
+    Ok(NativeValue::Int(dt.weekday().num_days_from_monday() as i64))
 }
 
 // ============================================================================
@@ -374,7 +370,9 @@ fn builtin_time_parse_iso(args: &[NativeValue]) -> Result<NativeValue, String> {
     let input = expect_str(&args[0])?;
     // RFC 3339 covers both `Z` and `+HH:MM` zone suffixes.
     match DateTime::parse_from_rfc3339(input) {
-        Ok(dt) => Ok(NativeValue::Time(chrono_utc_to_time(dt.with_timezone(&Utc)))),
+        Ok(dt) => Ok(NativeValue::Time(chrono_utc_to_time(
+            dt.with_timezone(&Utc),
+        ))),
         Err(e) => Err(format!("parse_iso: {e}")),
     }
 }
@@ -449,41 +447,41 @@ pub fn register(registry: &mut NativeRegistry, interner: &mut Interner) {
     type Entry = (&'static str, &'static [&'static str], crate::NativeFn);
     let entries: &[Entry] = &[
         // Construction / current time
-        ("time_now",            &[],                  builtin_time_now),
-        ("time_now_local",      &[],                  builtin_time_now_local),
-        ("time_monotonic",      &[],                  builtin_time_monotonic),
-        ("time_from_unix",      &["secs"],            builtin_time_from_unix),
-        ("time_from_unix_ms",   &["ms"],              builtin_time_from_unix_ms),
-        ("time_from_unix_ns",   &["ns"],              builtin_time_from_unix_ns),
+        ("time_now", &[], builtin_time_now),
+        ("time_now_local", &[], builtin_time_now_local),
+        ("time_monotonic", &[], builtin_time_monotonic),
+        ("time_from_unix", &["secs"], builtin_time_from_unix),
+        ("time_from_unix_ms", &["ms"], builtin_time_from_unix_ms),
+        ("time_from_unix_ns", &["ns"], builtin_time_from_unix_ns),
         // Decomposition
-        ("time_unix",           &["t"],               builtin_time_unix),
-        ("time_unix_ms",        &["t"],               builtin_time_unix_ms),
-        ("time_year",           &["t"],               builtin_time_year),
-        ("time_month",          &["t"],               builtin_time_month),
-        ("time_day",            &["t"],               builtin_time_day),
-        ("time_hour",           &["t"],               builtin_time_hour),
-        ("time_minute",         &["t"],               builtin_time_minute),
-        ("time_second",         &["t"],               builtin_time_second),
-        ("time_weekday",        &["t"],               builtin_time_weekday),
+        ("time_unix", &["t"], builtin_time_unix),
+        ("time_unix_ms", &["t"], builtin_time_unix_ms),
+        ("time_year", &["t"], builtin_time_year),
+        ("time_month", &["t"], builtin_time_month),
+        ("time_day", &["t"], builtin_time_day),
+        ("time_hour", &["t"], builtin_time_hour),
+        ("time_minute", &["t"], builtin_time_minute),
+        ("time_second", &["t"], builtin_time_second),
+        ("time_weekday", &["t"], builtin_time_weekday),
         // Arithmetic
-        ("time_add_secs",       &["t", "secs"],       builtin_time_add_secs),
-        ("time_add_ms",         &["t", "ms"],         builtin_time_add_ms),
-        ("time_add_days",       &["t", "days"],       builtin_time_add_days),
-        ("time_diff_secs",      &["a", "b"],          builtin_time_diff_secs),
-        ("time_diff_ms",        &["a", "b"],          builtin_time_diff_ms),
+        ("time_add_secs", &["t", "secs"], builtin_time_add_secs),
+        ("time_add_ms", &["t", "ms"], builtin_time_add_ms),
+        ("time_add_days", &["t", "days"], builtin_time_add_days),
+        ("time_diff_secs", &["a", "b"], builtin_time_diff_secs),
+        ("time_diff_ms", &["a", "b"], builtin_time_diff_ms),
         // Formatting / parsing
-        ("time_format",         &["t", "layout"],     builtin_time_format),
-        ("time_format_iso",     &["t"],               builtin_time_format_iso),
-        ("time_format_rfc2822", &["t"],               builtin_time_format_rfc2822),
-        ("time_parse",          &["s", "layout"],     builtin_time_parse),
-        ("time_parse_iso",      &["s"],               builtin_time_parse_iso),
+        ("time_format", &["t", "layout"], builtin_time_format),
+        ("time_format_iso", &["t"], builtin_time_format_iso),
+        ("time_format_rfc2822", &["t"], builtin_time_format_rfc2822),
+        ("time_parse", &["s", "layout"], builtin_time_parse),
+        ("time_parse_iso", &["s"], builtin_time_parse_iso),
         // Duration
-        ("time_secs",           &["n"],               builtin_time_secs),
-        ("time_ms",             &["n"],               builtin_time_ms),
-        ("time_minutes",        &["n"],               builtin_time_minutes),
-        ("time_hours",          &["n"],               builtin_time_hours),
-        ("time_days",           &["n"],               builtin_time_days),
-        ("time_sleep",          &["d"],               builtin_time_sleep),
+        ("time_secs", &["n"], builtin_time_secs),
+        ("time_ms", &["n"], builtin_time_ms),
+        ("time_minutes", &["n"], builtin_time_minutes),
+        ("time_hours", &["n"], builtin_time_hours),
+        ("time_days", &["n"], builtin_time_days),
+        ("time_sleep", &["d"], builtin_time_sleep),
     ];
     for (name, params, f) in entries {
         registry.register_named(interner, name, params, *f);
@@ -653,8 +651,9 @@ mod tests {
 
     #[test]
     fn test_parse_iso_accepts_offset_suffix() {
-        let t = builtin_time_parse_iso(&[NativeValue::Str("2026-04-25T14:30:00+00:00".to_string())])
-            .unwrap();
+        let t =
+            builtin_time_parse_iso(&[NativeValue::Str("2026-04-25T14:30:00+00:00".to_string())])
+                .unwrap();
         let s = unwrap_str(builtin_time_format_iso(&[t]).unwrap());
         assert_eq!(s, "2026-04-25T14:30:00Z");
     }
@@ -761,16 +760,36 @@ mod tests {
         register(&mut registry, &mut interner);
 
         let names = [
-            "time_now", "time_now_local", "time_monotonic",
-            "time_from_unix", "time_from_unix_ms", "time_from_unix_ns",
-            "time_unix", "time_unix_ms",
-            "time_year", "time_month", "time_day",
-            "time_hour", "time_minute", "time_second", "time_weekday",
-            "time_add_secs", "time_add_ms", "time_add_days",
-            "time_diff_secs", "time_diff_ms",
-            "time_format", "time_format_iso", "time_format_rfc2822",
-            "time_parse", "time_parse_iso",
-            "time_secs", "time_ms", "time_minutes", "time_hours", "time_days",
+            "time_now",
+            "time_now_local",
+            "time_monotonic",
+            "time_from_unix",
+            "time_from_unix_ms",
+            "time_from_unix_ns",
+            "time_unix",
+            "time_unix_ms",
+            "time_year",
+            "time_month",
+            "time_day",
+            "time_hour",
+            "time_minute",
+            "time_second",
+            "time_weekday",
+            "time_add_secs",
+            "time_add_ms",
+            "time_add_days",
+            "time_diff_secs",
+            "time_diff_ms",
+            "time_format",
+            "time_format_iso",
+            "time_format_rfc2822",
+            "time_parse",
+            "time_parse_iso",
+            "time_secs",
+            "time_ms",
+            "time_minutes",
+            "time_hours",
+            "time_days",
             "time_sleep",
         ];
         for n in names {
@@ -792,10 +811,12 @@ mod tests {
     fn test_wrong_arg_type_errs() {
         assert!(builtin_time_unix(&[NativeValue::Int(0)]).is_err());
         assert!(builtin_time_sleep(&[NativeValue::Int(0)]).is_err());
-        assert!(builtin_time_format(&[
-            NativeValue::Time(TimeRepr { unix_ns: 0 }),
-            NativeValue::Int(0),
-        ])
-        .is_err());
+        assert!(
+            builtin_time_format(&[
+                NativeValue::Time(TimeRepr { unix_ns: 0 }),
+                NativeValue::Int(0),
+            ])
+            .is_err()
+        );
     }
 }

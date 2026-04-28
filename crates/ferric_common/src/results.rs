@@ -1,8 +1,11 @@
 //! Output types for each compiler stage.
 
-use std::collections::HashMap;
+use crate::{
+    AsyncLowerError, AsyncWarning, Chunk, DefId, ExhaustivenessError, Item, LexError, NamedArg,
+    NodeId, ParseError, ResolveError, Span, Symbol, Token, Ty, TypeError,
+};
 use serde::{Deserialize, Serialize};
-use crate::{Token, LexError, ParseError, ResolveError, TypeError, ExhaustivenessError, AsyncLowerError, AsyncWarning, NodeId, DefId, Ty, Item, NamedArg, Chunk, Symbol, Span};
+use std::collections::HashMap;
 
 /// Result of the lexing stage.
 ///
@@ -218,7 +221,11 @@ impl AsyncResult {
         errors: Vec<AsyncLowerError>,
         warnings: Vec<AsyncWarning>,
     ) -> Self {
-        Self { ast, errors, warnings }
+        Self {
+            ast,
+            errors,
+            warnings,
+        }
     }
 
     /// Returns true if any lowering errors were recorded.
@@ -245,4 +252,3 @@ impl Program {
         Self { chunks, entry }
     }
 }
-

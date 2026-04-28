@@ -4,8 +4,8 @@
 //! Every node carries a NodeId for later stages to attach metadata,
 //! and a Span for error reporting.
 
-use serde::{Deserialize, Serialize};
 use crate::{NodeId, Span, Symbol};
+use serde::{Deserialize, Serialize};
 
 /// A named argument at a call site.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -31,7 +31,7 @@ pub enum ShellPart {
 /// not the default.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ShellOutput {
-    pub stdout:    String,
+    pub stdout: String,
     pub exit_code: i32,
 }
 
@@ -84,11 +84,11 @@ pub enum RequireMode {
 /// A require statement.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RequireStmt {
-    pub span:    Span,
-    pub mode:    RequireMode,
-    pub expr:    Box<Expr>,
+    pub span: Span,
+    pub mode: RequireMode,
+    pub expr: Box<Expr>,
     pub message: Option<Box<Expr>>,
-    pub set_fn:  Option<Box<Expr>>,
+    pub set_fn: Option<Box<Expr>>,
 }
 
 /// An `import` declaration at the top of a Ferric file.
@@ -97,9 +97,9 @@ pub struct RequireStmt {
 /// resolver later turns the path into an actual filesystem location.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ImportDecl {
-    pub id:    NodeId,
-    pub span:  Span,
-    pub path:  ImportPath,
+    pub id: NodeId,
+    pub span: Span,
+    pub path: ImportPath,
     pub items: ImportItems,
 }
 
@@ -126,8 +126,8 @@ pub enum ImportItems {
 /// One entry in a named import list.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ImportItem {
-    pub span:  Span,
-    pub name:  Symbol,
+    pub span: Span,
+    pub name: Symbol,
     pub alias: Option<Symbol>,
 }
 
@@ -137,7 +137,7 @@ pub struct ImportItem {
 /// it would be without `export`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ExportDecl {
-    pub id:   NodeId,
+    pub id: NodeId,
     pub span: Span,
     pub item: Box<Item>,
 }
@@ -148,11 +148,11 @@ pub struct ExportDecl {
 /// transparent-alias mode and is always `true`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TypeAliasItem {
-    pub id:     NodeId,
-    pub span:   Span,
-    pub name:   Symbol,
+    pub id: NodeId,
+    pub span: Span,
+    pub name: Symbol,
     pub params: Vec<Symbol>,
-    pub ty:     TypeAnnotation,
+    pub ty: TypeAnnotation,
     pub opaque: bool,
 }
 
@@ -162,9 +162,9 @@ pub struct TypeAliasItem {
 /// erase to a no-op — there is no `Value` variant for opaque types.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CastExpr {
-    pub id:     NodeId,
-    pub span:   Span,
-    pub expr:   Box<Expr>,
+    pub id: NodeId,
+    pub span: Span,
+    pub expr: Box<Expr>,
     pub target: TypeAnnotation,
 }
 
@@ -317,8 +317,8 @@ impl Item {
 /// the parser and type checker enforce this.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AwaitExpr {
-    pub id:      NodeId,
-    pub span:    Span,
+    pub id: NodeId,
+    pub span: Span,
     /// The `Async<T>` value being awaited.
     pub operand: Box<Expr>,
 }
@@ -327,8 +327,8 @@ pub struct AwaitExpr {
 /// `Async<T>` value where `T` is the type of the block's tail expression.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AsyncBlockExpr {
-    pub id:    NodeId,
-    pub span:  Span,
+    pub id: NodeId,
+    pub span: Span,
     /// The block being lifted. The parser guarantees this is `Expr::Block`.
     pub block: Box<Expr>,
 }
@@ -406,15 +406,9 @@ pub enum Expr {
         span: Span,
     },
     /// Break expression
-    Break {
-        id: NodeId,
-        span: Span,
-    },
+    Break { id: NodeId, span: Span },
     /// Continue expression
-    Continue {
-        id: NodeId,
-        span: Span,
-    },
+    Continue { id: NodeId, span: Span },
     /// Closure expression: `|| { body }`
     Closure {
         params: Vec<Param>,
@@ -510,7 +504,11 @@ pub enum Pattern {
     /// `_` — matches any value, no binding.
     Wildcard { span: Span },
     /// Binding pattern: a fresh name that captures the matched value.
-    Variable { name: Symbol, id: NodeId, span: Span },
+    Variable {
+        name: Symbol,
+        id: NodeId,
+        span: Span,
+    },
     /// Literal pattern: matches if the scrutinee is structurally equal.
     Literal { value: Literal, span: Span },
     /// Tuple destructuring: `(a, b, c)`.
@@ -629,9 +627,7 @@ pub enum Stmt {
         span: Span,
     },
     /// Expression statement
-    Expr {
-        expr: Expr,
-    },
+    Expr { expr: Expr },
     /// Require statement
     Require(RequireStmt),
     /// `for x in expr { body }` loop.

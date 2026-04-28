@@ -296,7 +296,9 @@ fn builtin_sort_by(args: &[NativeValue]) -> Result<NativeValue, String> {
     if let Some(e) = err {
         return Err(e);
     }
-    Ok(NativeValue::Array(keyed.into_iter().map(|(_, v)| v).collect()))
+    Ok(NativeValue::Array(
+        keyed.into_iter().map(|(_, v)| v).collect(),
+    ))
 }
 
 fn builtin_sort_by_desc(args: &[NativeValue]) -> Result<NativeValue, String> {
@@ -322,7 +324,9 @@ fn builtin_sort_by_desc(args: &[NativeValue]) -> Result<NativeValue, String> {
     if let Some(e) = err {
         return Err(e);
     }
-    Ok(NativeValue::Array(keyed.into_iter().map(|(_, v)| v).collect()))
+    Ok(NativeValue::Array(
+        keyed.into_iter().map(|(_, v)| v).collect(),
+    ))
 }
 
 fn builtin_sort_with(args: &[NativeValue]) -> Result<NativeValue, String> {
@@ -422,7 +426,9 @@ fn builtin_sort_top(args: &[NativeValue]) -> Result<NativeValue, String> {
         return Err(e);
     }
     keyed.truncate(n);
-    Ok(NativeValue::Array(keyed.into_iter().map(|(_, v)| v).collect()))
+    Ok(NativeValue::Array(
+        keyed.into_iter().map(|(_, v)| v).collect(),
+    ))
 }
 
 fn builtin_sort_bottom(args: &[NativeValue]) -> Result<NativeValue, String> {
@@ -450,7 +456,9 @@ fn builtin_sort_bottom(args: &[NativeValue]) -> Result<NativeValue, String> {
         return Err(e);
     }
     keyed.truncate(n);
-    Ok(NativeValue::Array(keyed.into_iter().map(|(_, v)| v).collect()))
+    Ok(NativeValue::Array(
+        keyed.into_iter().map(|(_, v)| v).collect(),
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -492,26 +500,38 @@ fn builtin_sort_is_sorted_by(args: &[NativeValue]) -> Result<NativeValue, String
 pub fn register(registry: &mut NativeRegistry, interner: &mut Interner) {
     type Entry = (&'static str, &'static [&'static str], crate::NativeFn);
     let entries: &[Entry] = &[
-        ("sort_asc",            &["l"],                          builtin_sort_asc),
-        ("sort_desc",           &["l"],                          builtin_sort_desc),
-        ("sort_by",             &["l", "key"],                   builtin_sort_by),
-        ("sort_by_desc",        &["l", "key"],                   builtin_sort_by_desc),
-        ("sort_with",           &["l", "cmp"],                   builtin_sort_with),
-        ("sort_cmp_int",        &["a", "b"],                     builtin_sort_cmp_int),
-        ("sort_cmp_float",      &["a", "b"],                     builtin_sort_cmp_float),
-        ("sort_cmp_str",        &["a", "b"],                     builtin_sort_cmp_str),
-        ("sort_cmp_str_natural",&["a", "b"],                     builtin_sort_cmp_str_natural),
+        ("sort_asc", &["l"], builtin_sort_asc),
+        ("sort_desc", &["l"], builtin_sort_desc),
+        ("sort_by", &["l", "key"], builtin_sort_by),
+        ("sort_by_desc", &["l", "key"], builtin_sort_by_desc),
+        ("sort_with", &["l", "cmp"], builtin_sort_with),
+        ("sort_cmp_int", &["a", "b"], builtin_sort_cmp_int),
+        ("sort_cmp_float", &["a", "b"], builtin_sort_cmp_float),
+        ("sort_cmp_str", &["a", "b"], builtin_sort_cmp_str),
+        (
+            "sort_cmp_str_natural",
+            &["a", "b"],
+            builtin_sort_cmp_str_natural,
+        ),
         // Applied form: cmp + the two values to compare.
-        ("sort_reverse",        &["cmp", "a", "b"],              builtin_sort_reverse),
-        ("sort_then",           &["cmp", "tiebreak", "a", "b"],  builtin_sort_then),
-        ("sort_top",            &["l", "n", "key"],              builtin_sort_top),
-        ("sort_bottom",         &["l", "n", "key"],              builtin_sort_bottom),
-        ("sort_is_sorted",      &["l"],                          builtin_sort_is_sorted),
-        ("sort_is_sorted_by",   &["l", "key"],                   builtin_sort_is_sorted_by),
+        ("sort_reverse", &["cmp", "a", "b"], builtin_sort_reverse),
+        (
+            "sort_then",
+            &["cmp", "tiebreak", "a", "b"],
+            builtin_sort_then,
+        ),
+        ("sort_top", &["l", "n", "key"], builtin_sort_top),
+        ("sort_bottom", &["l", "n", "key"], builtin_sort_bottom),
+        ("sort_is_sorted", &["l"], builtin_sort_is_sorted),
+        (
+            "sort_is_sorted_by",
+            &["l", "key"],
+            builtin_sort_is_sorted_by,
+        ),
         // Ordering constants exposed as zero-arg native functions.
-        ("sort_less",           &[],                             builtin_sort_less),
-        ("sort_equal",          &[],                             builtin_sort_equal),
-        ("sort_greater",        &[],                             builtin_sort_greater),
+        ("sort_less", &[], builtin_sort_less),
+        ("sort_equal", &[], builtin_sort_equal),
+        ("sort_greater", &[], builtin_sort_greater),
     ];
     for (name, params, f) in entries {
         registry.register_named(interner, name, params, *f);
@@ -532,11 +552,7 @@ mod tests {
     }
 
     fn strs(xs: &[&str]) -> NativeValue {
-        NativeValue::Array(
-            xs.iter()
-                .map(|s| NativeValue::Str(s.to_string()))
-                .collect(),
-        )
+        NativeValue::Array(xs.iter().map(|s| NativeValue::Str(s.to_string())).collect())
     }
 
     fn closure<F>(f: F) -> NativeValue
@@ -635,11 +651,8 @@ mod tests {
     #[test]
     fn cmp_float_total_orders_nan() {
         // total_cmp puts NaN at the extremes — verify it doesn't error.
-        let r = builtin_sort_cmp_float(&[
-            NativeValue::Float(1.0),
-            NativeValue::Float(f64::NAN),
-        ])
-        .unwrap();
+        let r = builtin_sort_cmp_float(&[NativeValue::Float(1.0), NativeValue::Float(f64::NAN)])
+            .unwrap();
         // 1.0 < NaN under total_cmp
         assert_eq!(r, ord_to_native(Ordering::Less));
     }
@@ -719,12 +732,9 @@ mod tests {
 
     #[test]
     fn reverse_of_cmp_int() {
-        let r = builtin_sort_reverse(&[
-            cmp_int_closure(),
-            NativeValue::Int(1),
-            NativeValue::Int(2),
-        ])
-        .unwrap();
+        let r =
+            builtin_sort_reverse(&[cmp_int_closure(), NativeValue::Int(1), NativeValue::Int(2)])
+                .unwrap();
         assert_eq!(r, ord_to_native(Ordering::Greater));
     }
 
@@ -835,20 +845,15 @@ mod tests {
     #[test]
     fn top_returns_n_largest_descending() {
         let identity = closure(|args| Ok(args[0].clone()));
-        let r =
-            builtin_sort_top(&[ints(&[5, 3, 9, 1, 7]), NativeValue::Int(2), identity]).unwrap();
+        let r = builtin_sort_top(&[ints(&[5, 3, 9, 1, 7]), NativeValue::Int(2), identity]).unwrap();
         assert_eq!(r, ints(&[9, 7]));
     }
 
     #[test]
     fn bottom_returns_n_smallest_ascending() {
         let identity = closure(|args| Ok(args[0].clone()));
-        let r = builtin_sort_bottom(&[
-            ints(&[5, 3, 9, 1, 7]),
-            NativeValue::Int(2),
-            identity,
-        ])
-        .unwrap();
+        let r =
+            builtin_sort_bottom(&[ints(&[5, 3, 9, 1, 7]), NativeValue::Int(2), identity]).unwrap();
         assert_eq!(r, ints(&[1, 3]));
     }
 
@@ -856,9 +861,8 @@ mod tests {
     fn sort_by_is_stable_on_equal_keys() {
         // Pairs (key, original_index). Sorting by `key` must preserve the
         // relative order of items with equal keys.
-        let pair = |k: i64, idx: i64| {
-            NativeValue::Array(vec![NativeValue::Int(k), NativeValue::Int(idx)])
-        };
+        let pair =
+            |k: i64, idx: i64| NativeValue::Array(vec![NativeValue::Int(k), NativeValue::Int(idx)]);
         let items = NativeValue::Array(vec![
             pair(1, 0),
             pair(2, 1),
@@ -936,12 +940,24 @@ mod tests {
         register(&mut registry, &mut interner);
 
         for name in [
-            "sort_asc", "sort_desc", "sort_by", "sort_by_desc", "sort_with",
-            "sort_cmp_int", "sort_cmp_float", "sort_cmp_str", "sort_cmp_str_natural",
-            "sort_reverse", "sort_then",
-            "sort_top", "sort_bottom",
-            "sort_is_sorted", "sort_is_sorted_by",
-            "sort_less", "sort_equal", "sort_greater",
+            "sort_asc",
+            "sort_desc",
+            "sort_by",
+            "sort_by_desc",
+            "sort_with",
+            "sort_cmp_int",
+            "sort_cmp_float",
+            "sort_cmp_str",
+            "sort_cmp_str_natural",
+            "sort_reverse",
+            "sort_then",
+            "sort_top",
+            "sort_bottom",
+            "sort_is_sorted",
+            "sort_is_sorted_by",
+            "sort_less",
+            "sort_equal",
+            "sort_greater",
         ] {
             let sym = interner.intern(name);
             assert!(

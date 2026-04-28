@@ -21,7 +21,13 @@ pub fn publish(snapshot: &PipelineSnapshot) -> Vec<Diagnostic> {
     // every later stage was skipped, so emit a single panic diag and exit.
     if let Some(lex) = &snapshot.lex {
         for err in &lex.errors {
-            out.push(diag(err.span(), DiagnosticSeverity::ERROR, err.description(), "lex", li));
+            out.push(diag(
+                err.span(),
+                DiagnosticSeverity::ERROR,
+                err.description(),
+                "lex",
+                li,
+            ));
         }
     } else {
         out.push(panic_diag("lex"));
@@ -33,7 +39,13 @@ pub fn publish(snapshot: &PipelineSnapshot) -> Vec<Diagnostic> {
     // result here therefore means parse panicked.
     if let Some(parse) = &snapshot.parse {
         for err in &parse.errors {
-            out.push(diag(err.span(), DiagnosticSeverity::ERROR, err.description(), "parse", li));
+            out.push(diag(
+                err.span(),
+                DiagnosticSeverity::ERROR,
+                err.description(),
+                "parse",
+                li,
+            ));
         }
     } else {
         out.push(panic_diag("parse"));
@@ -48,7 +60,13 @@ pub fn publish(snapshot: &PipelineSnapshot) -> Vec<Diagnostic> {
             //   has no warn-mode discriminator — when M2.5 Task 2 wires one
             //   in (e.g. `ResolveError::RequireWarn { … }` or a `mode` field
             //   on a generic `Require*` variant), branch here.
-            out.push(diag(err.span(), DiagnosticSeverity::ERROR, err.description(), "resolve", li));
+            out.push(diag(
+                err.span(),
+                DiagnosticSeverity::ERROR,
+                err.description(),
+                "resolve",
+                li,
+            ));
         }
     } else {
         out.push(panic_diag("resolve"));
@@ -58,7 +76,13 @@ pub fn publish(snapshot: &PipelineSnapshot) -> Vec<Diagnostic> {
     // Stage 4: typecheck.
     if let Some(types) = &snapshot.typecheck {
         for err in &types.errors {
-            out.push(diag(err.span(), DiagnosticSeverity::ERROR, err.description(), "type", li));
+            out.push(diag(
+                err.span(),
+                DiagnosticSeverity::ERROR,
+                err.description(),
+                "type",
+                li,
+            ));
         }
     } else {
         out.push(panic_diag("typecheck"));
@@ -68,18 +92,18 @@ pub fn publish(snapshot: &PipelineSnapshot) -> Vec<Diagnostic> {
 }
 
 fn diag(
-    span:     Span,
+    span: Span,
     severity: DiagnosticSeverity,
-    msg:      String,
-    code:     &str,
-    li:       &LineIndex,
+    msg: String,
+    code: &str,
+    li: &LineIndex,
 ) -> Diagnostic {
     Diagnostic {
-        range:    li.range_of(span),
+        range: li.range_of(span),
         severity: Some(severity),
-        code:     Some(NumberOrString::String(code.into())),
-        source:   Some("ferric".into()),
-        message:  msg,
+        code: Some(NumberOrString::String(code.into())),
+        source: Some("ferric".into()),
+        message: msg,
         ..Default::default()
     }
 }
@@ -87,13 +111,19 @@ fn diag(
 fn panic_diag(stage: &str) -> Diagnostic {
     Diagnostic {
         range: Range {
-            start: Position { line: 0, character: 0 },
-            end:   Position { line: 0, character: 0 },
+            start: Position {
+                line: 0,
+                character: 0,
+            },
+            end: Position {
+                line: 0,
+                character: 0,
+            },
         },
         severity: Some(DiagnosticSeverity::ERROR),
-        code:     Some(NumberOrString::String("internal".into())),
-        source:   Some("ferric".into()),
-        message:  format!("internal compiler error: {stage} stage panicked"),
+        code: Some(NumberOrString::String("internal".into())),
+        source: Some("ferric".into()),
+        message: format!("internal compiler error: {stage} stage panicked"),
         ..Default::default()
     }
 }
@@ -132,8 +162,13 @@ mod tests {
     fn parse_error_uses_parse_code() {
         // Positional args are forbidden by M2.5; this trips a ParseError.
         let diags = run("fn f(x: Int) -> Int { x } let r = f(5)");
-        let parse_diag = diags.iter().find(|d| d.code == Some(NumberOrString::String("parse".into())));
-        assert!(parse_diag.is_some(), "expected a parse-stage diagnostic in {diags:?}");
+        let parse_diag = diags
+            .iter()
+            .find(|d| d.code == Some(NumberOrString::String("parse".into())));
+        assert!(
+            parse_diag.is_some(),
+            "expected a parse-stage diagnostic in {diags:?}"
+        );
     }
 
     #[test]

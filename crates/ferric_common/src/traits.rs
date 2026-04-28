@@ -105,12 +105,7 @@ impl TraitRegistry {
     }
 
     /// Looks up the impl method DefId for `trait_name::method_name` on `ty`.
-    pub fn lookup_method(
-        &self,
-        trait_name: Symbol,
-        ty: &Ty,
-        method_name: Symbol,
-    ) -> Option<DefId> {
+    pub fn lookup_method(&self, trait_name: Symbol, ty: &Ty, method_name: Symbol) -> Option<DefId> {
         let key = ImplTy::from_ty(ty)?;
         let impl_def = self.impls.get(&(trait_name, key))?;
         impl_def.methods.get(&method_name).copied()
@@ -119,11 +114,7 @@ impl TraitRegistry {
     /// Finds any (trait, method DefId) pair where `ty` implements `trait` and
     /// the trait declares a method named `method_name`. Used for method-call
     /// dispatch where the trait is inferred from the receiver type.
-    pub fn find_method(
-        &self,
-        ty: &Ty,
-        method_name: Symbol,
-    ) -> Option<(Symbol, DefId)> {
+    pub fn find_method(&self, ty: &Ty, method_name: Symbol) -> Option<(Symbol, DefId)> {
         let key = ImplTy::from_ty(ty)?;
         for ((trait_name, impl_ty), impl_def) in &self.impls {
             if *impl_ty != key {

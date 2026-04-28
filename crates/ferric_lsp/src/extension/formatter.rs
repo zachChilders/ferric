@@ -16,12 +16,18 @@ pub trait Formatter: Send + Sync {
     /// skipped (e.g. the file has syntax errors that prevent safe formatting).
     fn format(&self, source: &str, ast: &ParseResult) -> Option<String>;
 
-    fn is_noop(&self) -> bool { false }
+    fn is_noop(&self) -> bool {
+        false
+    }
 }
 
 pub struct NoopFormatter;
 
 impl Formatter for NoopFormatter {
-    fn format(&self, _source: &str, _ast: &ParseResult) -> Option<String> { None }
-    fn is_noop(&self) -> bool { true }
+    fn format(&self, _source: &str, _ast: &ParseResult) -> Option<String> {
+        None
+    }
+    fn is_noop(&self) -> bool {
+        true
+    }
 }

@@ -68,9 +68,7 @@ fn expect_map(v: &NativeValue) -> Result<&BTreeMap<MapKey, NativeValue>, String>
     }
 }
 
-fn expect_map_mut(
-    v: &NativeValue,
-) -> Result<&Rc<RefCell<BTreeMap<MapKey, NativeValue>>>, String> {
+fn expect_map_mut(v: &NativeValue) -> Result<&Rc<RefCell<BTreeMap<MapKey, NativeValue>>>, String> {
     match v {
         NativeValue::MapMut(m) => Ok(m),
         other => Err(format!("expected map builder, got {other:?}")),
@@ -357,8 +355,10 @@ fn builtin_map_count_by(args: &[NativeValue]) -> Result<NativeValue, String> {
         let k = MapKey::from_value(&k_val)?;
         *out.entry(k).or_insert(0) += 1;
     }
-    let lifted: BTreeMap<MapKey, NativeValue> =
-        out.into_iter().map(|(k, n)| (k, NativeValue::Int(n))).collect();
+    let lifted: BTreeMap<MapKey, NativeValue> = out
+        .into_iter()
+        .map(|(k, n)| (k, NativeValue::Int(n)))
+        .collect();
     Ok(NativeValue::Map(lifted))
 }
 
@@ -396,30 +396,30 @@ fn builtin_map_build(args: &[NativeValue]) -> Result<NativeValue, String> {
 pub fn register(registry: &mut NativeRegistry, interner: &mut Interner) {
     type Entry = (&'static str, &'static [&'static str], crate::NativeFn);
     let entries: &[Entry] = &[
-        ("map_new",          &[],                       builtin_map_new),
-        ("map_from_list",    &["pairs"],                builtin_map_from_list),
-        ("map_from_lists",   &["keys", "vals"],         builtin_map_from_lists),
-        ("map_get",          &["m", "key"],             builtin_map_get),
-        ("map_get_or",       &["m", "key", "default"],  builtin_map_get_or),
-        ("map_contains_key", &["m", "key"],             builtin_map_contains_key),
-        ("map_len",          &["m"],                    builtin_map_len),
-        ("map_is_empty",     &["m"],                    builtin_map_is_empty),
-        ("map_insert",       &["m", "key", "val"],      builtin_map_insert),
-        ("map_remove",       &["m", "key"],             builtin_map_remove),
-        ("map_merge",        &["a", "b"],               builtin_map_merge),
-        ("map_merge_with",   &["a", "b", "f"],          builtin_map_merge_with),
-        ("map_keys",         &["m"],                    builtin_map_keys),
-        ("map_values",       &["m"],                    builtin_map_values),
-        ("map_entries",      &["m"],                    builtin_map_entries),
-        ("map_map_values",   &["m", "f"],               builtin_map_map_values),
-        ("map_filter",       &["m", "f"],               builtin_map_filter),
-        ("map_filter_map",   &["m", "f"],               builtin_map_filter_map),
-        ("map_fold",         &["m", "init", "f"],       builtin_map_fold),
-        ("map_group_by",     &["l", "f"],               builtin_map_group_by),
-        ("map_count_by",     &["l", "f"],               builtin_map_count_by),
-        ("map_builder",      &[],                       builtin_map_builder),
-        ("map_set",          &["buf", "key", "val"],    builtin_map_set),
-        ("map_build",        &["buf"],                  builtin_map_build),
+        ("map_new", &[], builtin_map_new),
+        ("map_from_list", &["pairs"], builtin_map_from_list),
+        ("map_from_lists", &["keys", "vals"], builtin_map_from_lists),
+        ("map_get", &["m", "key"], builtin_map_get),
+        ("map_get_or", &["m", "key", "default"], builtin_map_get_or),
+        ("map_contains_key", &["m", "key"], builtin_map_contains_key),
+        ("map_len", &["m"], builtin_map_len),
+        ("map_is_empty", &["m"], builtin_map_is_empty),
+        ("map_insert", &["m", "key", "val"], builtin_map_insert),
+        ("map_remove", &["m", "key"], builtin_map_remove),
+        ("map_merge", &["a", "b"], builtin_map_merge),
+        ("map_merge_with", &["a", "b", "f"], builtin_map_merge_with),
+        ("map_keys", &["m"], builtin_map_keys),
+        ("map_values", &["m"], builtin_map_values),
+        ("map_entries", &["m"], builtin_map_entries),
+        ("map_map_values", &["m", "f"], builtin_map_map_values),
+        ("map_filter", &["m", "f"], builtin_map_filter),
+        ("map_filter_map", &["m", "f"], builtin_map_filter_map),
+        ("map_fold", &["m", "init", "f"], builtin_map_fold),
+        ("map_group_by", &["l", "f"], builtin_map_group_by),
+        ("map_count_by", &["l", "f"], builtin_map_count_by),
+        ("map_builder", &[], builtin_map_builder),
+        ("map_set", &["buf", "key", "val"], builtin_map_set),
+        ("map_build", &["buf"], builtin_map_build),
     ];
     for (name, params, f) in entries {
         registry.register_named(interner, name, params, *f);
@@ -481,11 +481,8 @@ mod tests {
 
     #[test]
     fn from_lists_ok() {
-        let m = builtin_map_from_lists(&[
-            list(vec![s("a"), s("b")]),
-            list(vec![i(1), i(2)]),
-        ])
-        .unwrap();
+        let m =
+            builtin_map_from_lists(&[list(vec![s("a"), s("b")]), list(vec![i(1), i(2)])]).unwrap();
         let v = builtin_map_get(&[m, s("b")]).unwrap();
         assert_eq!(v, NativeValue::Int(2));
     }
@@ -501,10 +498,8 @@ mod tests {
 
     #[test]
     fn insert_returns_new_map_original_unchanged() {
-        let original =
-            builtin_map_from_list(&[list(vec![pair(s("a"), i(1))])]).unwrap();
-        let updated =
-            builtin_map_insert(&[original.clone(), s("b"), i(2)]).unwrap();
+        let original = builtin_map_from_list(&[list(vec![pair(s("a"), i(1))])]).unwrap();
+        let updated = builtin_map_insert(&[original.clone(), s("b"), i(2)]).unwrap();
         assert_eq!(builtin_map_len(&[original]).unwrap(), i(1));
         assert_eq!(builtin_map_len(&[updated]).unwrap(), i(2));
     }
@@ -519,8 +514,7 @@ mod tests {
     #[test]
     fn remove_removes_present_key() {
         let m =
-            builtin_map_from_list(&[list(vec![pair(s("a"), i(1)), pair(s("b"), i(2))])])
-                .unwrap();
+            builtin_map_from_list(&[list(vec![pair(s("a"), i(1)), pair(s("b"), i(2))])]).unwrap();
         let after = builtin_map_remove(&[m, s("a")]).unwrap();
         assert_eq!(builtin_map_len(&[after.clone()]).unwrap(), i(1));
         assert_eq!(
@@ -571,10 +565,10 @@ mod tests {
 
     #[test]
     fn merge_b_wins_on_conflict() {
-        let a = builtin_map_from_list(&[list(vec![pair(s("a"), i(1)), pair(s("b"), i(2))])])
-            .unwrap();
-        let b = builtin_map_from_list(&[list(vec![pair(s("b"), i(3)), pair(s("c"), i(4))])])
-            .unwrap();
+        let a =
+            builtin_map_from_list(&[list(vec![pair(s("a"), i(1)), pair(s("b"), i(2))])]).unwrap();
+        let b =
+            builtin_map_from_list(&[list(vec![pair(s("b"), i(3)), pair(s("c"), i(4))])]).unwrap();
         let merged = builtin_map_merge(&[a, b]).unwrap();
         assert_eq!(builtin_map_get(&[merged.clone(), s("a")]).unwrap(), i(1));
         assert_eq!(builtin_map_get(&[merged.clone(), s("b")]).unwrap(), i(3));
@@ -587,8 +581,8 @@ mod tests {
 
     #[test]
     fn keys_values_entries() {
-        let m = builtin_map_from_list(&[list(vec![pair(s("a"), i(1)), pair(s("b"), i(2))])])
-            .unwrap();
+        let m =
+            builtin_map_from_list(&[list(vec![pair(s("a"), i(1)), pair(s("b"), i(2))])]).unwrap();
         let keys = builtin_map_keys(&[m.clone()]).unwrap();
         let vals = builtin_map_values(&[m.clone()]).unwrap();
         let entries = builtin_map_entries(&[m]).unwrap();

@@ -17,10 +17,10 @@
 //   produced by io_modified_at wraps std::time::SystemTime; the time task
 //   chooses the canonical `Time` representation during integration.
 
+use std::cell::RefCell;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufRead, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
-use std::cell::RefCell;
 use std::rc::Rc;
 
 use ferric_common::Interner;
@@ -33,7 +33,11 @@ use crate::{NativeRegistry, NativeValue};
 
 fn check_arg_count(args: &[NativeValue], expected: usize) -> Result<(), String> {
     if args.len() != expected {
-        Err(format!("expected {} argument(s), got {}", expected, args.len()))
+        Err(format!(
+            "expected {} argument(s), got {}",
+            expected,
+            args.len()
+        ))
     } else {
         Ok(())
     }
@@ -169,7 +173,8 @@ fn builtin_io_append_file(args: &[NativeValue]) -> Result<NativeValue, String> {
         .append(true)
         .open(path.as_str())
         .map_err(|e| io_err(path, e))?;
-    f.write_all(content.as_bytes()).map_err(|e| io_err(path, e))?;
+    f.write_all(content.as_bytes())
+        .map_err(|e| io_err(path, e))?;
     Ok(NativeValue::Unit)
 }
 
@@ -181,7 +186,11 @@ fn builtin_io_read_lines(args: &[NativeValue]) -> Result<NativeValue, String> {
     let mut lines: Vec<NativeValue> = contents
         .split('\n')
         .map(|line| {
-            let trimmed = if let Some(stripped) = line.strip_suffix('\r') { stripped } else { line };
+            let trimmed = if let Some(stripped) = line.strip_suffix('\r') {
+                stripped
+            } else {
+                line
+            };
             NativeValue::Str(trimmed.to_string())
         })
         .collect();
@@ -537,50 +546,62 @@ pub fn register(registry: &mut NativeRegistry, interner: &mut Interner) {
     type Entry = (&'static str, &'static [&'static str], crate::NativeFn);
     let entries: &[Entry] = &[
         // Standard streams
-        ("io_print",             &["s"],               builtin_io_print),
-        ("io_println",           &["s"],               builtin_io_println),
-        ("io_eprint",            &["s"],               builtin_io_eprint),
-        ("io_eprintln",          &["s"],               builtin_io_eprintln),
-        ("io_read_line",         &[],                  builtin_io_read_line),
-        ("io_read_all",          &[],                  builtin_io_read_all),
+        ("io_print", &["s"], builtin_io_print),
+        ("io_println", &["s"], builtin_io_println),
+        ("io_eprint", &["s"], builtin_io_eprint),
+        ("io_eprintln", &["s"], builtin_io_eprintln),
+        ("io_read_line", &[], builtin_io_read_line),
+        ("io_read_all", &[], builtin_io_read_all),
         // File — text
-        ("io_read_file",         &["path"],            builtin_io_read_file),
-        ("io_write_file",        &["path", "content"], builtin_io_write_file),
-        ("io_append_file",       &["path", "content"], builtin_io_append_file),
-        ("io_read_lines",        &["path"],            builtin_io_read_lines),
+        ("io_read_file", &["path"], builtin_io_read_file),
+        ("io_write_file", &["path", "content"], builtin_io_write_file),
+        (
+            "io_append_file",
+            &["path", "content"],
+            builtin_io_append_file,
+        ),
+        ("io_read_lines", &["path"], builtin_io_read_lines),
         // File — bytes
-        ("io_read_bytes",        &["path"],            builtin_io_read_bytes),
-        ("io_write_bytes",       &["path", "content"], builtin_io_write_bytes),
+        ("io_read_bytes", &["path"], builtin_io_read_bytes),
+        (
+            "io_write_bytes",
+            &["path", "content"],
+            builtin_io_write_bytes,
+        ),
         // Metadata
-        ("io_exists",            &["path"],            builtin_io_exists),
-        ("io_is_file",           &["path"],            builtin_io_is_file),
-        ("io_is_dir",            &["path"],            builtin_io_is_dir),
-        ("io_file_size",         &["path"],            builtin_io_file_size),
-        ("io_modified_at",       &["path"],            builtin_io_modified_at),
+        ("io_exists", &["path"], builtin_io_exists),
+        ("io_is_file", &["path"], builtin_io_is_file),
+        ("io_is_dir", &["path"], builtin_io_is_dir),
+        ("io_file_size", &["path"], builtin_io_file_size),
+        ("io_modified_at", &["path"], builtin_io_modified_at),
         // Directory
-        ("io_list_dir",          &["path"],            builtin_io_list_dir),
-        ("io_list_dir_recursive",&["path"],            builtin_io_list_dir_recursive),
-        ("io_make_dir",          &["path"],            builtin_io_make_dir),
-        ("io_make_dir_all",      &["path"],            builtin_io_make_dir_all),
-        ("io_remove_file",       &["path"],            builtin_io_remove_file),
-        ("io_remove_dir",        &["path"],            builtin_io_remove_dir),
-        ("io_remove_dir_all",    &["path"],            builtin_io_remove_dir_all),
-        ("io_rename",            &["from", "to"],      builtin_io_rename),
-        ("io_copy",              &["from", "to"],      builtin_io_copy),
+        ("io_list_dir", &["path"], builtin_io_list_dir),
+        (
+            "io_list_dir_recursive",
+            &["path"],
+            builtin_io_list_dir_recursive,
+        ),
+        ("io_make_dir", &["path"], builtin_io_make_dir),
+        ("io_make_dir_all", &["path"], builtin_io_make_dir_all),
+        ("io_remove_file", &["path"], builtin_io_remove_file),
+        ("io_remove_dir", &["path"], builtin_io_remove_dir),
+        ("io_remove_dir_all", &["path"], builtin_io_remove_dir_all),
+        ("io_rename", &["from", "to"], builtin_io_rename),
+        ("io_copy", &["from", "to"], builtin_io_copy),
         // FileWriter
-        ("io_file_writer",       &["path"],            builtin_io_file_writer),
-        ("io_write",             &["w", "s"],          builtin_io_write),
-        ("io_writeln",           &["w", "s"],          builtin_io_writeln),
-        ("io_flush",             &["w"],               builtin_io_flush),
-        ("io_close",             &["w"],               builtin_io_close),
+        ("io_file_writer", &["path"], builtin_io_file_writer),
+        ("io_write", &["w", "s"], builtin_io_write),
+        ("io_writeln", &["w", "s"], builtin_io_writeln),
+        ("io_flush", &["w"], builtin_io_flush),
+        ("io_close", &["w"], builtin_io_close),
         // Unprefixed aliases — short names that user code calls directly.
         // Same impls as their `io_*` siblings except where a separate
         // `crate::builtin_*` predates the `io_*` form.
-        ("println",              &["s"],               crate::builtin_println),
-        ("print",                &["s"],               crate::builtin_print),
-        ("eprint",               &["s"],               builtin_io_eprint),
-        ("eprintln",             &["s"],               builtin_io_eprintln),
-        ("read_line",            &[],                  crate::builtin_read_line),
+        ("println", &["s"], crate::builtin_println),
+        ("print", &["s"], crate::builtin_print),
+        ("eprint", &["s"], builtin_io_eprint),
+        ("eprintln", &["s"], builtin_io_eprintln),
+        ("read_line", &[], crate::builtin_read_line),
     ];
     for (name, params, f) in entries {
         registry.register_named(interner, name, params, *f);
@@ -760,19 +781,40 @@ mod tests {
 
         builtin_io_write_file(&[s(&fpath_s), s("12345")]).unwrap();
 
-        assert_eq!(builtin_io_exists(&[s(&fpath_s)]).unwrap(), NativeValue::Bool(true));
-        assert_eq!(builtin_io_is_file(&[s(&fpath_s)]).unwrap(), NativeValue::Bool(true));
-        assert_eq!(builtin_io_is_file(&[s(&dpath)]).unwrap(), NativeValue::Bool(false));
-        assert_eq!(builtin_io_is_dir(&[s(&dpath)]).unwrap(), NativeValue::Bool(true));
-        assert_eq!(builtin_io_is_dir(&[s(&fpath_s)]).unwrap(), NativeValue::Bool(false));
-        assert_eq!(builtin_io_file_size(&[s(&fpath_s)]).unwrap(), NativeValue::Int(5));
+        assert_eq!(
+            builtin_io_exists(&[s(&fpath_s)]).unwrap(),
+            NativeValue::Bool(true)
+        );
+        assert_eq!(
+            builtin_io_is_file(&[s(&fpath_s)]).unwrap(),
+            NativeValue::Bool(true)
+        );
+        assert_eq!(
+            builtin_io_is_file(&[s(&dpath)]).unwrap(),
+            NativeValue::Bool(false)
+        );
+        assert_eq!(
+            builtin_io_is_dir(&[s(&dpath)]).unwrap(),
+            NativeValue::Bool(true)
+        );
+        assert_eq!(
+            builtin_io_is_dir(&[s(&fpath_s)]).unwrap(),
+            NativeValue::Bool(false)
+        );
+        assert_eq!(
+            builtin_io_file_size(&[s(&fpath_s)]).unwrap(),
+            NativeValue::Int(5)
+        );
     }
 
     #[test]
     fn exists_returns_false_for_missing() {
         let tp = unique_temp("missing");
         let p = tp.as_str();
-        assert_eq!(builtin_io_exists(&[s(&p)]).unwrap(), NativeValue::Bool(false));
+        assert_eq!(
+            builtin_io_exists(&[s(&p)]).unwrap(),
+            NativeValue::Bool(false)
+        );
     }
 
     #[test]
@@ -794,9 +836,15 @@ mod tests {
         let tp = unique_temp("mkdir");
         let p = tp.as_str();
         builtin_io_make_dir(&[s(&p)]).unwrap();
-        assert_eq!(builtin_io_is_dir(&[s(&p)]).unwrap(), NativeValue::Bool(true));
+        assert_eq!(
+            builtin_io_is_dir(&[s(&p)]).unwrap(),
+            NativeValue::Bool(true)
+        );
         builtin_io_remove_dir(&[s(&p)]).unwrap();
-        assert_eq!(builtin_io_exists(&[s(&p)]).unwrap(), NativeValue::Bool(false));
+        assert_eq!(
+            builtin_io_exists(&[s(&p)]).unwrap(),
+            NativeValue::Bool(false)
+        );
     }
 
     #[test]
@@ -806,7 +854,10 @@ mod tests {
         deep.push("a/b/c");
         let deep_s = deep.to_string_lossy().into_owned();
         builtin_io_make_dir_all(&[s(&deep_s)]).unwrap();
-        assert_eq!(builtin_io_is_dir(&[s(&deep_s)]).unwrap(), NativeValue::Bool(true));
+        assert_eq!(
+            builtin_io_is_dir(&[s(&deep_s)]).unwrap(),
+            NativeValue::Bool(true)
+        );
     }
 
     #[test]
@@ -815,7 +866,10 @@ mod tests {
         let p = tp.as_str();
         builtin_io_write_file(&[s(&p), s("x")]).unwrap();
         builtin_io_remove_file(&[s(&p)]).unwrap();
-        assert_eq!(builtin_io_exists(&[s(&p)]).unwrap(), NativeValue::Bool(false));
+        assert_eq!(
+            builtin_io_exists(&[s(&p)]).unwrap(),
+            NativeValue::Bool(false)
+        );
     }
 
     #[test]
@@ -846,8 +900,14 @@ mod tests {
         let to_s = to.to_string_lossy().into_owned();
         builtin_io_write_file(&[s(&from_s), s("payload")]).unwrap();
         builtin_io_rename(&[s(&from_s), s(&to_s)]).unwrap();
-        assert_eq!(builtin_io_exists(&[s(&from_s)]).unwrap(), NativeValue::Bool(false));
-        assert_eq!(builtin_io_read_file(&[s(&to_s)]).unwrap(), NativeValue::Str("payload".into()));
+        assert_eq!(
+            builtin_io_exists(&[s(&from_s)]).unwrap(),
+            NativeValue::Bool(false)
+        );
+        assert_eq!(
+            builtin_io_read_file(&[s(&to_s)]).unwrap(),
+            NativeValue::Str("payload".into())
+        );
     }
 
     #[test]
@@ -862,7 +922,10 @@ mod tests {
         builtin_io_write_file(&[s(&from_s), s("12345")]).unwrap();
         let r = builtin_io_copy(&[s(&from_s), s(&to_s)]).unwrap();
         assert_eq!(r, NativeValue::Int(5));
-        assert_eq!(builtin_io_read_file(&[s(&to_s)]).unwrap(), NativeValue::Str("12345".into()));
+        assert_eq!(
+            builtin_io_read_file(&[s(&to_s)]).unwrap(),
+            NativeValue::Str("12345".into())
+        );
     }
 
     // ---- Errors ---------------------------------------------------------

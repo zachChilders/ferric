@@ -23,7 +23,7 @@ use std::collections::BTreeSet;
 
 use ferric_common::Interner;
 
-use crate::{invoke_closure, MapKey, NativeRegistry, NativeValue};
+use crate::{MapKey, NativeRegistry, NativeValue, invoke_closure};
 
 // ============================================================================
 // Helpers (private to this module)
@@ -241,23 +241,27 @@ fn builtin_set_map(args: &[NativeValue]) -> Result<NativeValue, String> {
 pub fn register(registry: &mut NativeRegistry, interner: &mut Interner) {
     type Entry = (&'static str, &'static [&'static str], crate::NativeFn);
     let entries: &[Entry] = &[
-        ("set_new",                  &[],            builtin_set_new),
-        ("set_from_list",            &["l"],         builtin_set_from_list),
-        ("set_contains",             &["s", "item"], builtin_set_contains),
-        ("set_len",                  &["s"],         builtin_set_len),
-        ("set_is_empty",             &["s"],         builtin_set_is_empty),
-        ("set_insert",               &["s", "item"], builtin_set_insert),
-        ("set_remove",               &["s", "item"], builtin_set_remove),
-        ("set_union",                &["a", "b"],    builtin_set_union),
-        ("set_intersection",         &["a", "b"],    builtin_set_intersection),
-        ("set_difference",           &["a", "b"],    builtin_set_difference),
-        ("set_symmetric_difference", &["a", "b"],    builtin_set_symmetric_difference),
-        ("set_is_subset",            &["a", "b"],    builtin_set_is_subset),
-        ("set_is_superset",          &["a", "b"],    builtin_set_is_superset),
-        ("set_is_disjoint",          &["a", "b"],    builtin_set_is_disjoint),
-        ("set_to_list",              &["s"],         builtin_set_to_list),
-        ("set_filter",               &["s", "f"],    builtin_set_filter),
-        ("set_map",                  &["s", "f"],    builtin_set_map),
+        ("set_new", &[], builtin_set_new),
+        ("set_from_list", &["l"], builtin_set_from_list),
+        ("set_contains", &["s", "item"], builtin_set_contains),
+        ("set_len", &["s"], builtin_set_len),
+        ("set_is_empty", &["s"], builtin_set_is_empty),
+        ("set_insert", &["s", "item"], builtin_set_insert),
+        ("set_remove", &["s", "item"], builtin_set_remove),
+        ("set_union", &["a", "b"], builtin_set_union),
+        ("set_intersection", &["a", "b"], builtin_set_intersection),
+        ("set_difference", &["a", "b"], builtin_set_difference),
+        (
+            "set_symmetric_difference",
+            &["a", "b"],
+            builtin_set_symmetric_difference,
+        ),
+        ("set_is_subset", &["a", "b"], builtin_set_is_subset),
+        ("set_is_superset", &["a", "b"], builtin_set_is_superset),
+        ("set_is_disjoint", &["a", "b"], builtin_set_is_disjoint),
+        ("set_to_list", &["s"], builtin_set_to_list),
+        ("set_filter", &["s", "f"], builtin_set_filter),
+        ("set_map", &["s", "f"], builtin_set_map),
     ];
     for (name, params, f) in entries {
         registry.register_named(interner, name, params, *f);
@@ -309,10 +313,7 @@ mod tests {
     #[test]
     fn empty_set_is_empty() {
         let s = builtin_set_new(&[]).unwrap();
-        assert_eq!(
-            builtin_set_is_empty(&[s]).unwrap(),
-            NativeValue::Bool(true)
-        );
+        assert_eq!(builtin_set_is_empty(&[s]).unwrap(), NativeValue::Bool(true));
     }
 
     #[test]

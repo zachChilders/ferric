@@ -229,9 +229,7 @@ fn expect_bytes(value: &NativeValue) -> Result<Vec<u8>, String> {
     }
 }
 
-fn expect_builder(
-    value: &NativeValue,
-) -> Result<Rc<RefCell<RequestBuilderRepr>>, String> {
+fn expect_builder(value: &NativeValue) -> Result<Rc<RefCell<RequestBuilderRepr>>, String> {
     match value {
         NativeValue::HttpRequestBuilder(rc) => Ok(rc.clone()),
         other => Err(format!("expected RequestBuilder, got {other:?}")),
@@ -461,10 +459,8 @@ impl<'a> JsonParser<'a> {
                             if self.pos + 4 > self.input.len() {
                                 return Err("truncated \\u escape".to_string());
                             }
-                            let hex = std::str::from_utf8(
-                                &self.input[self.pos..self.pos + 4],
-                            )
-                            .map_err(|_| "invalid \\u escape".to_string())?;
+                            let hex = std::str::from_utf8(&self.input[self.pos..self.pos + 4])
+                                .map_err(|_| "invalid \\u escape".to_string())?;
                             let cp = u32::from_str_radix(hex, 16)
                                 .map_err(|_| "invalid \\u escape".to_string())?;
                             self.pos += 4;
@@ -474,12 +470,7 @@ impl<'a> JsonParser<'a> {
                                 return Err("invalid unicode codepoint".to_string());
                             }
                         }
-                        other => {
-                            return Err(format!(
-                                "unknown escape \\{}",
-                                other as char
-                            ))
-                        }
+                        other => return Err(format!("unknown escape \\{}", other as char)),
                     }
                 }
                 b => out.push(b as char),
@@ -559,9 +550,7 @@ impl<'a> JsonParser<'a> {
 // ============================================================================
 
 fn new_builder(method: &str, url: &str) -> NativeValue {
-    NativeValue::HttpRequestBuilder(Rc::new(RefCell::new(RequestBuilderRepr::new(
-        method, url,
-    ))))
+    NativeValue::HttpRequestBuilder(Rc::new(RefCell::new(RequestBuilderRepr::new(method, url))))
 }
 
 /// Mutates the builder in place and returns the same Rc so chained calls
@@ -589,13 +578,10 @@ fn basic_auth_value(user: &str, pass: &str) -> String {
 /// `base64` crate (which the `encode` task pulls in). Integration may
 /// replace with `base64::engine::general_purpose::STANDARD.encode(...)`.
 fn base64_encode(input: &[u8], out: &mut String) {
-    const ALPHABET: &[u8; 64] =
-        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut i = 0;
     while i + 3 <= input.len() {
-        let n = ((input[i] as u32) << 16)
-            | ((input[i + 1] as u32) << 8)
-            | (input[i + 2] as u32);
+        let n = ((input[i] as u32) << 16) | ((input[i + 1] as u32) << 8) | (input[i + 2] as u32);
         out.push(ALPHABET[((n >> 18) & 63) as usize] as char);
         out.push(ALPHABET[((n >> 12) & 63) as usize] as char);
         out.push(ALPHABET[((n >> 6) & 63) as usize] as char);
@@ -739,10 +725,8 @@ fn builtin_http_body_json(args: &[NativeValue]) -> Result<NativeValue, String> {
     let serialized = json_to_str(&json);
     mutate_builder(&args[0], |b| {
         b.body = serialized.into_bytes();
-        b.headers.insert(
-            "content-type".to_string(),
-            "application/json".to_string(),
-        );
+        b.headers
+            .insert("content-type".to_string(), "application/json".to_string());
     })
 }
 
@@ -805,9 +789,7 @@ fn builtin_http_ok(args: &[NativeValue]) -> Result<NativeValue, String> {
     // but tests in the spec also check `ok(200) == true` against an int —
     // we support both for ergonomics).
     match &args[0] {
-        NativeValue::HttpResponse(r) => {
-            Ok(NativeValue::Bool((200..300).contains(&r.status)))
-        }
+        NativeValue::HttpResponse(r) => Ok(NativeValue::Bool((200..300).contains(&r.status))),
         NativeValue::Int(n) => Ok(NativeValue::Bool((200..300).contains(&(*n as u16)))),
         other => Err(format!("expected Response or Int, got {other:?}")),
     }
@@ -856,8 +838,7 @@ fn builtin_http_body_str_resp(args: &[NativeValue]) -> Result<NativeValue, Strin
 fn builtin_http_body_json_resp(args: &[NativeValue]) -> Result<NativeValue, String> {
     check_arg_count(args, 1)?;
     let r = expect_response(&args[0])?;
-    let s = std::str::from_utf8(&r.body)
-        .map_err(|e| format!("JsonError: invalid utf-8 ({e})"))?;
+    let s = std::str::from_utf8(&r.body).map_err(|e| format!("JsonError: invalid utf-8 ({e})"))?;
     let j = json_parse(s).map_err(|e| format!("JsonError: {e}"))?;
     Ok(NativeValue::Json(Box::new(j)))
 }
@@ -871,8 +852,8 @@ fn builtin_http_get_json(args: &[NativeValue]) -> Result<NativeValue, String> {
     req.headers
         .insert("accept".to_string(), "application/json".to_string());
     let resp = send_request_inner(req)?;
-    let s = std::str::from_utf8(&resp.body)
-        .map_err(|e| format!("JsonError: invalid utf-8 ({e})"))?;
+    let s =
+        std::str::from_utf8(&resp.body).map_err(|e| format!("JsonError: invalid utf-8 ({e})"))?;
     let j = json_parse(s).map_err(|e| format!("JsonError: {e}"))?;
     Ok(NativeValue::Json(Box::new(j)))
 }
@@ -883,16 +864,14 @@ fn builtin_http_post_json(args: &[NativeValue]) -> Result<NativeValue, String> {
     let body_json = expect_json(&args[1])?;
     let body = json_to_str(&body_json);
     let mut req = RequestBuilderRepr::new("POST", url);
-    req.headers.insert(
-        "content-type".to_string(),
-        "application/json".to_string(),
-    );
+    req.headers
+        .insert("content-type".to_string(), "application/json".to_string());
     req.headers
         .insert("accept".to_string(), "application/json".to_string());
     req.body = body.into_bytes();
     let resp = send_request_inner(req)?;
-    let s = std::str::from_utf8(&resp.body)
-        .map_err(|e| format!("JsonError: invalid utf-8 ({e})"))?;
+    let s =
+        std::str::from_utf8(&resp.body).map_err(|e| format!("JsonError: invalid utf-8 ({e})"))?;
     let j = json_parse(s).map_err(|e| format!("JsonError: {e}"))?;
     Ok(NativeValue::Json(Box::new(j)))
 }
@@ -998,35 +977,43 @@ pub fn register(registry: &mut NativeRegistry, interner: &mut Interner) {
     type Entry = (&'static str, &'static [&'static str], crate::NativeFn);
     let entries: &[Entry] = &[
         // Quick helpers
-        ("http_get",              &["url"],            builtin_http_get),
-        ("http_post",             &["url", "body"],    builtin_http_post),
-        ("http_put",              &["url", "body"],    builtin_http_put),
-        ("http_patch",            &["url", "body"],    builtin_http_patch),
-        ("http_delete",           &["url"],            builtin_http_delete),
+        ("http_get", &["url"], builtin_http_get),
+        ("http_post", &["url", "body"], builtin_http_post),
+        ("http_put", &["url", "body"], builtin_http_put),
+        ("http_patch", &["url", "body"], builtin_http_patch),
+        ("http_delete", &["url"], builtin_http_delete),
         // Builder
-        ("http_request",          &["method", "url"],  builtin_http_request),
-        ("http_header",           &["req", "name", "val"], builtin_http_header),
-        ("http_headers",          &["req", "h"],       builtin_http_headers),
-        ("http_body_bytes",       &["req", "b"],       builtin_http_body_bytes),
-        ("http_body_str",         &["req", "s"],       builtin_http_body_str),
-        ("http_body_json",        &["req", "val"],     builtin_http_body_json),
-        ("http_timeout",          &["req", "ms"],      builtin_http_timeout),
-        ("http_follow_redirects", &["req", "follow"],  builtin_http_follow_redirects),
-        ("http_basic_auth",       &["req", "user", "pass"], builtin_http_basic_auth),
-        ("http_bearer",           &["req", "token"],   builtin_http_bearer),
-        ("http_send",             &["req"],            builtin_http_send),
+        ("http_request", &["method", "url"], builtin_http_request),
+        ("http_header", &["req", "name", "val"], builtin_http_header),
+        ("http_headers", &["req", "h"], builtin_http_headers),
+        ("http_body_bytes", &["req", "b"], builtin_http_body_bytes),
+        ("http_body_str", &["req", "s"], builtin_http_body_str),
+        ("http_body_json", &["req", "val"], builtin_http_body_json),
+        ("http_timeout", &["req", "ms"], builtin_http_timeout),
+        (
+            "http_follow_redirects",
+            &["req", "follow"],
+            builtin_http_follow_redirects,
+        ),
+        (
+            "http_basic_auth",
+            &["req", "user", "pass"],
+            builtin_http_basic_auth,
+        ),
+        ("http_bearer", &["req", "token"], builtin_http_bearer),
+        ("http_send", &["req"], builtin_http_send),
         // Response inspection (response-side body_* fns suffixed with _resp
         // to avoid colliding with the builder mutators).
-        ("http_status",           &["r"],              builtin_http_status),
-        ("http_ok",               &["r"],              builtin_http_ok),
-        ("http_header_get",       &["r", "name"],      builtin_http_header_get),
-        ("http_headers_all",      &["r"],              builtin_http_headers_all),
-        ("http_body_bytes_resp",  &["r"],              builtin_http_body_bytes_resp),
-        ("http_body_str_resp",    &["r"],              builtin_http_body_str_resp),
-        ("http_body_json_resp",   &["r"],              builtin_http_body_json_resp),
+        ("http_status", &["r"], builtin_http_status),
+        ("http_ok", &["r"], builtin_http_ok),
+        ("http_header_get", &["r", "name"], builtin_http_header_get),
+        ("http_headers_all", &["r"], builtin_http_headers_all),
+        ("http_body_bytes_resp", &["r"], builtin_http_body_bytes_resp),
+        ("http_body_str_resp", &["r"], builtin_http_body_str_resp),
+        ("http_body_json_resp", &["r"], builtin_http_body_json_resp),
         // Typed convenience
-        ("http_get_json",         &["url"],            builtin_http_get_json),
-        ("http_post_json",        &["url", "body"],    builtin_http_post_json),
+        ("http_get_json", &["url"], builtin_http_get_json),
+        ("http_post_json", &["url", "body"], builtin_http_post_json),
     ];
     for (name, params, f) in entries {
         registry.register_named(interner, name, params, *f);
@@ -1175,8 +1162,7 @@ mod tests {
     #[test]
     fn bearer_emits_bearer_token() {
         let b = builder("GET", "http://e.com");
-        let r =
-            builtin_http_bearer(&[b, NativeValue::Str("tok".into())]).unwrap();
+        let r = builtin_http_bearer(&[b, NativeValue::Str("tok".into())]).unwrap();
         let inner = unwrap_builder(&r);
         assert_eq!(
             inner.borrow().headers.get("authorization").unwrap(),
@@ -1224,10 +1210,7 @@ mod tests {
     #[test]
     fn status_extracts_int() {
         let r = fake_response(204, b"");
-        assert_eq!(
-            builtin_http_status(&[r]).unwrap(),
-            NativeValue::Int(204)
-        );
+        assert_eq!(builtin_http_status(&[r]).unwrap(), NativeValue::Int(204));
     }
 
     #[test]
@@ -1264,13 +1247,11 @@ mod tests {
     fn header_get_is_case_insensitive() {
         let r = fake_response(200, b"");
         assert_eq!(
-            builtin_http_header_get(&[r.clone(), NativeValue::Str("X-Trace-Id".into())])
-                .unwrap(),
+            builtin_http_header_get(&[r.clone(), NativeValue::Str("X-Trace-Id".into())]).unwrap(),
             NativeValue::Str("abc-123".into())
         );
         assert_eq!(
-            builtin_http_header_get(&[r.clone(), NativeValue::Str("x-trace-id".into())])
-                .unwrap(),
+            builtin_http_header_get(&[r.clone(), NativeValue::Str("x-trace-id".into())]).unwrap(),
             NativeValue::Str("abc-123".into())
         );
         // missing -> Unit (None placeholder)
@@ -1437,20 +1418,20 @@ mod tests {
     #[test]
     fn type_guards_reject_wrong_types() {
         // header expects (builder, str, str)
-        assert!(builtin_http_header(&[
-            NativeValue::Int(1),
-            NativeValue::Str("a".into()),
-            NativeValue::Str("b".into())
-        ])
-        .is_err());
+        assert!(
+            builtin_http_header(&[
+                NativeValue::Int(1),
+                NativeValue::Str("a".into()),
+                NativeValue::Str("b".into())
+            ])
+            .is_err()
+        );
         // status expects a Response
         assert!(builtin_http_status(&[NativeValue::Int(200)]).is_err());
         // header_get expects a Response
-        assert!(builtin_http_header_get(&[
-            NativeValue::Int(1),
-            NativeValue::Str("a".into())
-        ])
-        .is_err());
+        assert!(
+            builtin_http_header_get(&[NativeValue::Int(1), NativeValue::Str("a".into())]).is_err()
+        );
     }
 
     // -- registration sanity -------------------------------------------------
@@ -1509,8 +1490,8 @@ mod tests {
 
 #[cfg(test)]
 mod integration_tests {
-    use super::*;
     use super::tests::unwrap_response;
+    use super::*;
     use std::sync::mpsc;
     use std::thread;
     use std::time::Duration;
@@ -1535,7 +1516,14 @@ mod integration_tests {
                 handler(req);
             }
         });
-        (base, ServerHandle { server, join: Some(join), tx })
+        (
+            base,
+            ServerHandle {
+                server,
+                join: Some(join),
+                tx,
+            },
+        )
     }
 
     struct ServerHandle {
@@ -1575,26 +1563,21 @@ mod integration_tests {
             let _ = std::io::Read::read_to_end(req.as_reader(), &mut body);
             // Echo the body back as JSON.
             let resp = tiny_http::Response::from_data(body).with_header(
-                "content-type: application/json".parse::<tiny_http::Header>().unwrap(),
+                "content-type: application/json"
+                    .parse::<tiny_http::Header>()
+                    .unwrap(),
             );
             let _ = req.respond(resp);
         });
         let obj: Vec<(String, JsonRepr)> =
             vec![("hello".to_string(), JsonRepr::Str("world".into()))];
         let val = NativeValue::Json(Box::new(JsonRepr::Object(obj.clone())));
-        let v = builtin_http_post_json(&[
-            NativeValue::Str(format!("{base}/")),
-            val,
-        ])
-        .unwrap();
+        let v = builtin_http_post_json(&[NativeValue::Str(format!("{base}/")), val]).unwrap();
         match v {
             NativeValue::Json(j) => match *j {
                 JsonRepr::Object(m) => {
                     let lookup = |k: &str| m.iter().find(|(kk, _)| kk == k).map(|(_, v)| v);
-                    assert_eq!(
-                        lookup("hello").unwrap(),
-                        &JsonRepr::Str("world".into())
-                    );
+                    assert_eq!(lookup("hello").unwrap(), &JsonRepr::Str("world".into()));
                 }
                 _ => panic!("expected object"),
             },
@@ -1613,9 +1596,8 @@ mod integration_tests {
             let mut n = counter_c.lock().unwrap();
             *n += 1;
             if req.url() == "/start" {
-                let resp = tiny_http::Response::empty(302).with_header(
-                    "location: /target".parse::<tiny_http::Header>().unwrap(),
-                );
+                let resp = tiny_http::Response::empty(302)
+                    .with_header("location: /target".parse::<tiny_http::Header>().unwrap());
                 let _ = req.respond(resp);
             } else {
                 let resp = tiny_http::Response::from_string("final");
@@ -1633,9 +1615,8 @@ mod integration_tests {
 
     fn redirect_follow_off_returns_3xx() {
         let (base, _h) = spawn_server(|req| {
-            let resp = tiny_http::Response::empty(302).with_header(
-                "location: /elsewhere".parse::<tiny_http::Header>().unwrap(),
-            );
+            let resp = tiny_http::Response::empty(302)
+                .with_header("location: /elsewhere".parse::<tiny_http::Header>().unwrap());
             let _ = req.respond(resp);
         });
         let b = new_builder("GET", &format!("{base}/here"));

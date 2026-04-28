@@ -11,24 +11,29 @@ use ferric_common::{ParseResult, ResolveResult, Span, TypeResult};
 
 #[derive(Debug, Clone)]
 pub struct LintDiagnostic {
-    pub span:     Span,
-    pub message:  String,
+    pub span: Span,
+    pub message: String,
     pub severity: LintSeverity,
     /// Optional rule code — e.g. "F0042". Lets clients link to docs.
-    pub code:     Option<String>,
+    pub code: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LintSeverity { Warning, Error, Info, Hint }
+pub enum LintSeverity {
+    Warning,
+    Error,
+    Info,
+    Hint,
+}
 
 /// Implementations are called after every fully-successful pipeline run with
 /// every stage's output available.
 pub trait Linter: Send + Sync {
     fn lint(
         &self,
-        ast:     &ParseResult,
+        ast: &ParseResult,
         resolve: &ResolveResult,
-        types:   &TypeResult,
+        types: &TypeResult,
     ) -> Vec<LintDiagnostic>;
 }
 
@@ -37,9 +42,9 @@ pub struct NoopLinter;
 impl Linter for NoopLinter {
     fn lint(
         &self,
-        _ast:     &ParseResult,
+        _ast: &ParseResult,
         _resolve: &ResolveResult,
-        _types:   &TypeResult,
+        _types: &TypeResult,
     ) -> Vec<LintDiagnostic> {
         vec![]
     }

@@ -1,8 +1,8 @@
 //! String interning for efficient identifier management.
 
-use std::collections::HashMap;
-use serde::{Deserialize, Serialize};
 use crate::Symbol;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 /// String interner for managing identifiers efficiently.
 ///
