@@ -1,0 +1,23 @@
+// Round-trip a small file through the io.* stdlib: write, exists,
+// size, read back, then clean up. Uses an absolute /tmp path so the
+// fixture is independent of the harness's working directory.
+
+let path = "/tmp/ferric_stdlib_io_fs.txt"
+let body = "first line\nsecond line\n"
+
+io_write_file(path: path, content: body)
+println(s: bool_to_str(b: io_exists(path: path)))
+println(s: bool_to_str(b: io_is_file(path: path)))
+println(s: int_to_str(n: io_file_size(path: path)))
+
+let read_back = io_read_file(path: path)
+println(s: read_back)
+
+let lines = io_read_lines(path: path)
+println(s: int_to_str(n: list_len(l: lines)))
+for line in lines {
+    println(s: line)
+}
+
+io_remove_file(path: path)
+println(s: bool_to_str(b: io_exists(path: path)))

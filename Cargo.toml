@@ -12,6 +12,7 @@ members = [
     "crates/ferric_vm",
     "crates/ferric_diagnostics",
     "crates/ferric_stdlib",
+    "crates/ferric_stdlib_meta",
     "crates/ferric_manifest",
     "crates/ferric_module",
     "crates/ferric_async",

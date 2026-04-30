@@ -443,6 +443,49 @@ impl NativeRegistry {
     }
 }
 
+/// Registers every native in `meta` against its body in `bodies`, looking
+/// each up by name. `bodies` is a `&[(&str, NativeFn)]` table that lives
+/// next to the function definitions in each `ferric_stdlib` module file —
+/// metadata (names, params, signatures) lives in `ferric_stdlib_meta`, so
+/// this is the only place the two halves meet.
+///
+/// Panics in debug builds if metadata names a function with no body, or a
+/// body has no metadata entry — that catches the common drift case where
+/// someone adds a native to one side but not the other.
+pub fn register_module(
+    registry: &mut NativeRegistry,
+    interner: &mut Interner,
+    meta: &[ferric_stdlib_meta::FunctionMeta],
+    bodies: &[(&str, NativeFn)],
+) {
+    debug_assert_eq!(
+        meta.len(),
+        bodies.len(),
+        "register_module: meta has {} entries, bodies has {} — names: meta={:?}, bodies={:?}",
+        meta.len(),
+        bodies.len(),
+        meta.iter().map(|m| m.name).collect::<Vec<_>>(),
+        bodies.iter().map(|(n, _)| *n).collect::<Vec<_>>(),
+    );
+    for entry in meta {
+        let body = bodies
+            .iter()
+            .find(|(n, _)| *n == entry.name)
+            .map(|(_, f)| *f)
+            .unwrap_or_else(|| panic!("register_module: no body for native `{}`", entry.name));
+        registry.register_named(interner, entry.name, entry.params, body);
+    }
+    // Catch the reverse: a body without a meta entry.
+    debug_assert!(
+        bodies
+            .iter()
+            .all(|(n, _)| meta.iter().any(|m| m.name == *n)),
+        "register_module: body without metadata. bodies={:?}, meta={:?}",
+        bodies.iter().map(|(n, _)| *n).collect::<Vec<_>>(),
+        meta.iter().map(|m| m.name).collect::<Vec<_>>(),
+    );
+}
+
 impl Default for NativeRegistry {
     fn default() -> Self {
         Self::new()
@@ -686,26 +729,23 @@ pub(crate) fn builtin_read_line(args: &[NativeValue]) -> Result<NativeValue, Str
 pub fn builtin_enum_table(
     interner: &mut Interner,
 ) -> Vec<(Symbol, Vec<(Symbol, Vec<TypeAnnotation>)>)> {
-    let option_sym = interner.intern("Option");
-    let some_sym = interner.intern("Some");
-    let none_sym = interner.intern("None");
-    let result_sym = interner.intern("Result");
-    let ok_sym = interner.intern("Ok");
-    let err_sym = interner.intern("Err");
-
-    vec![
-        (
-            option_sym,
-            vec![(some_sym, vec![TypeAnnotation::Infer]), (none_sym, vec![])],
-        ),
-        (
-            result_sym,
-            vec![
-                (ok_sym, vec![TypeAnnotation::Infer]),
-                (err_sym, vec![TypeAnnotation::Infer]),
-            ],
-        ),
-    ]
+    ferric_stdlib_meta::builtin_enums::BUILTIN_ENUMS
+        .iter()
+        .map(|e| {
+            let name = interner.intern(e.name);
+            let variants = e
+                .variants
+                .iter()
+                .map(|v| {
+                    (
+                        interner.intern(v.name),
+                        ferric_stdlib_meta::builtin_enums::payload_annotations(v.payload_arity),
+                    )
+                })
+                .collect();
+            (name, variants)
+        })
+        .collect()
 }
 
 // ============================================================================
@@ -755,16 +795,22 @@ pub fn register_stdlib(registry: &mut NativeRegistry, interner: &mut ferric_comm
     // Compiler-internal / shell-expression natives.
     //
     // `shell_stdout` / `shell_exit_code` are surface natives the user calls
-    // on a `ShellOutput` value. `__shell_exec` is emitted by the compiler
-    // when lowering `$ cmd @{interp}` expressions — it isn't callable from
-    // Ferric source, so it goes through the param-less `register`.
-    registry.register_named(interner, "shell_stdout", &["output"], builtin_shell_stdout);
-    registry.register_named(
+    // on a `ShellOutput` value — registered through the meta `core`
+    // module so the LSP picks up their signatures.
+    let core_bodies: &[(&str, NativeFn)] = &[
+        ("shell_stdout", builtin_shell_stdout),
+        ("shell_exit_code", builtin_shell_exit_code),
+    ];
+    register_module(
+        registry,
         interner,
-        "shell_exit_code",
-        &["output"],
-        builtin_shell_exit_code,
+        ferric_stdlib_meta::core::CORE_FNS,
+        core_bodies,
     );
+    // `__shell_exec` is emitted by the compiler when lowering `$ cmd
+    // @{interp}` expressions — it isn't callable from Ferric source, so it
+    // goes through the param-less `register` and is intentionally absent
+    // from the meta tables.
     let shell_exec_sym = interner.intern(SHELL_EXEC_NATIVE);
     registry.register(shell_exec_sym, builtin_shell_exec);
 }
@@ -782,18 +828,11 @@ pub fn register_stdlib(registry: &mut NativeRegistry, interner: &mut ferric_comm
 /// concatenates this with [`NativeRegistry::fn_table`] so that named-arg
 /// validation works for both stdlib natives and async intrinsics.
 pub fn async_intrinsic_param_table(interner: &mut Interner) -> Vec<(Symbol, Vec<Symbol>)> {
-    let entries: &[(&str, &[&str])] = &[
-        ("spawn", &["task"]),
-        ("join", &["a", "b"]),
-        ("sleep", &["ms"]),
-        ("shell_run_async", &["cmd"]),
-        ("block_on", &["task"]),
-    ];
-    entries
+    ferric_stdlib_meta::async_intrinsics::ASYNC_INTRINSICS
         .iter()
-        .map(|(name, params)| {
-            let n = interner.intern(name);
-            let ps = params.iter().map(|p| interner.intern(p)).collect();
+        .map(|m| {
+            let n = interner.intern(m.name);
+            let ps = m.params.iter().map(|p| interner.intern(p)).collect();
             (n, ps)
         })
         .collect()
@@ -858,6 +897,51 @@ mod tests {
         assert!(registry.get(println_sym).is_some());
         assert!(registry.get(print_sym).is_some());
         assert!(registry.get(int_to_str_sym).is_some());
+    }
+
+    /// Drift guard: every name in `ferric_stdlib_meta::iter_all()` must
+    /// have a body wired through `register_stdlib`, and vice versa
+    /// (excluding the compiler-internal `__shell_exec`, which is
+    /// intentionally unreachable from Ferric source). If this test fails,
+    /// either a meta entry or a body was added without the matching half.
+    #[test]
+    fn meta_and_registry_are_in_sync() {
+        let mut registry = NativeRegistry::new();
+        let mut interner = ferric_common::Interner::new();
+        register_stdlib(&mut registry, &mut interner);
+
+        let mut registered: std::collections::HashSet<String> = registry
+            .fn_table()
+            .into_iter()
+            .map(|(sym, _)| interner.resolve(sym).to_string())
+            .collect();
+        // `__shell_exec` is registered without params and excluded from
+        // the meta tables on purpose.
+        registered.remove(SHELL_EXEC_NATIVE);
+
+        // Async intrinsics live in meta but the VM dispatches them — they
+        // don't appear in the NativeRegistry. Filter them out before the
+        // diff.
+        let async_names: std::collections::HashSet<&'static str> =
+            ferric_stdlib_meta::async_intrinsics::ASYNC_INTRINSICS
+                .iter()
+                .map(|m| m.name)
+                .collect();
+        let meta_names: std::collections::HashSet<String> = ferric_stdlib_meta::iter_all()
+            .filter(|m| !async_names.contains(m.name))
+            .map(|m| m.name.to_string())
+            .collect();
+
+        let only_in_registry: Vec<_> = registered.difference(&meta_names).collect();
+        assert!(
+            only_in_registry.is_empty(),
+            "registered without metadata: {only_in_registry:?}",
+        );
+        let only_in_meta: Vec<_> = meta_names.difference(&registered).collect();
+        assert!(
+            only_in_meta.is_empty(),
+            "metadata without body in registry: {only_in_meta:?}",
+        );
     }
 
     #[test]

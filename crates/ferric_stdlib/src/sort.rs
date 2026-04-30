@@ -498,44 +498,32 @@ fn builtin_sort_is_sorted_by(args: &[NativeValue]) -> Result<NativeValue, String
 // ---------------------------------------------------------------------------
 
 pub fn register(registry: &mut NativeRegistry, interner: &mut Interner) {
-    type Entry = (&'static str, &'static [&'static str], crate::NativeFn);
-    let entries: &[Entry] = &[
-        ("sort_asc", &["l"], builtin_sort_asc),
-        ("sort_desc", &["l"], builtin_sort_desc),
-        ("sort_by", &["l", "key"], builtin_sort_by),
-        ("sort_by_desc", &["l", "key"], builtin_sort_by_desc),
-        ("sort_with", &["l", "cmp"], builtin_sort_with),
-        ("sort_cmp_int", &["a", "b"], builtin_sort_cmp_int),
-        ("sort_cmp_float", &["a", "b"], builtin_sort_cmp_float),
-        ("sort_cmp_str", &["a", "b"], builtin_sort_cmp_str),
-        (
-            "sort_cmp_str_natural",
-            &["a", "b"],
-            builtin_sort_cmp_str_natural,
-        ),
-        // Applied form: cmp + the two values to compare.
-        ("sort_reverse", &["cmp", "a", "b"], builtin_sort_reverse),
-        (
-            "sort_then",
-            &["cmp", "tiebreak", "a", "b"],
-            builtin_sort_then,
-        ),
-        ("sort_top", &["l", "n", "key"], builtin_sort_top),
-        ("sort_bottom", &["l", "n", "key"], builtin_sort_bottom),
-        ("sort_is_sorted", &["l"], builtin_sort_is_sorted),
-        (
-            "sort_is_sorted_by",
-            &["l", "key"],
-            builtin_sort_is_sorted_by,
-        ),
-        // Ordering constants exposed as zero-arg native functions.
-        ("sort_less", &[], builtin_sort_less),
-        ("sort_equal", &[], builtin_sort_equal),
-        ("sort_greater", &[], builtin_sort_greater),
+    let bodies: &[(&str, crate::NativeFn)] = &[
+        ("sort_asc", builtin_sort_asc),
+        ("sort_desc", builtin_sort_desc),
+        ("sort_by", builtin_sort_by),
+        ("sort_by_desc", builtin_sort_by_desc),
+        ("sort_with", builtin_sort_with),
+        ("sort_cmp_int", builtin_sort_cmp_int),
+        ("sort_cmp_float", builtin_sort_cmp_float),
+        ("sort_cmp_str", builtin_sort_cmp_str),
+        ("sort_cmp_str_natural", builtin_sort_cmp_str_natural),
+        ("sort_reverse", builtin_sort_reverse),
+        ("sort_then", builtin_sort_then),
+        ("sort_top", builtin_sort_top),
+        ("sort_bottom", builtin_sort_bottom),
+        ("sort_is_sorted", builtin_sort_is_sorted),
+        ("sort_is_sorted_by", builtin_sort_is_sorted_by),
+        ("sort_less", builtin_sort_less),
+        ("sort_equal", builtin_sort_equal),
+        ("sort_greater", builtin_sort_greater),
     ];
-    for (name, params, f) in entries {
-        registry.register_named(interner, name, params, *f);
-    }
+    crate::register_module(
+        registry,
+        interner,
+        ferric_stdlib_meta::sort::SORT_FNS,
+        bodies,
+    );
 }
 
 // ---------------------------------------------------------------------------

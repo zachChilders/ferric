@@ -1,0 +1,39 @@
+// Documentation-only fixture (no expected.txt — the harness skips it).
+//
+// Shows the intended surface of the `llm_*` natives. NOT executable
+// end-to-end today: `NativeValue::Result` and `NativeValue::Json` are
+// folded to `Value::Unit` at the VM boundary
+// (crates/ferric_vm/src/bytecode.rs ~line 1058 — "Extended stdlib
+// variants land in the VM as opaque Unit for now"), so any `match` on
+// the return value crashes at runtime. Resolver + typecheck still
+// accept the program, which is what makes this useful as a spec.
+//
+// Once Result/Json cross the boundary properly, this becomes a real
+// fixture — capture expected.txt then.
+//
+// Configuration (read from env at call time):
+//   OPENROUTER_API_KEY=...                          # required
+//   OPENROUTER_MODEL=anthropic/claude-sonnet-4-7    # optional
+//   OPENROUTER_BASE_URL=https://openrouter.ai/api/v1  # optional
+//   OPENROUTER_TIMEOUT_MS=60000                     # optional
+
+// --- One-shot text prompt ---------------------------------------------
+let reply = llm_prompt(text: "In one sentence: what is Ferric?")
+match reply {
+    Result::Ok(text)  => println(s: text),
+    Result::Err(msg)  => println(s: msg),
+}
+
+// --- Structured prompt with a JSON schema -----------------------------
+// Schema is parsed from a string to avoid spelling out json_object /
+// json_array constructors.
+let schema = json_parse(s: "{\"type\":\"object\",\"properties\":{\"language\":{\"type\":\"string\"},\"year\":{\"type\":\"integer\"}},\"required\":[\"language\",\"year\"],\"additionalProperties\":false}")
+
+let structured = llm_prompt_schema(
+    text: "Return the language name and the year it first appeared.",
+    schema: schema
+)
+match structured {
+    Result::Ok(value) => println(s: json_to_str(v: value)),
+    Result::Err(msg)  => println(s: msg),
+}

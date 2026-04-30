@@ -163,9 +163,9 @@ pub fn run_pipeline(uri: String, version: i32, source: String) -> PipelineSnapsh
         ferric_lexer::lex(&source, &mut interner)
     }));
 
-    // Native function table for resolve. Mirrors `native_fn_table` in
-    // `src/main.rs`. Long-term this should live in `ferric_stdlib` so the
-    // CLI and the LSP cannot drift.
+    // Native function table for resolve. Pulled from
+    // `ferric_stdlib_meta` — the same source `src/main.rs` and
+    // `ferric_infer` use, so the CLI and the LSP cannot drift.
     let native_fns: Vec<(Symbol, Vec<Symbol>)> = stdlib_native_fn_table(&mut interner);
     let builtin_enums = stdlib_builtin_enum_table(&mut interner);
 
@@ -227,79 +227,42 @@ where
     std::panic::catch_unwind(f).ok()
 }
 
-/// Built-in enum table mirroring `ferric_stdlib::builtin_enum_table`. The
-/// LSP intentionally does not depend on `ferric_stdlib` (it has no native
-/// runtime to register), so this is duplicated. Must be kept in sync.
+/// Built-in enum table — reads from `ferric_stdlib_meta::builtin_enums`,
+/// the single source of truth shared with `ferric_stdlib::builtin_enum_table`.
 #[allow(clippy::type_complexity)]
 fn stdlib_builtin_enum_table(
     interner: &mut Interner,
 ) -> Vec<(Symbol, Vec<(Symbol, Vec<TypeAnnotation>)>)> {
-    let option_sym = interner.intern("Option");
-    let some_sym = interner.intern("Some");
-    let none_sym = interner.intern("None");
-    let result_sym = interner.intern("Result");
-    let ok_sym = interner.intern("Ok");
-    let err_sym = interner.intern("Err");
-
-    vec![
-        (
-            option_sym,
-            vec![(some_sym, vec![TypeAnnotation::Infer]), (none_sym, vec![])],
-        ),
-        (
-            result_sym,
-            vec![
-                (ok_sym, vec![TypeAnnotation::Infer]),
-                (err_sym, vec![TypeAnnotation::Infer]),
-            ],
-        ),
-    ]
+    ferric_stdlib_meta::builtin_enums::BUILTIN_ENUMS
+        .iter()
+        .map(|e| {
+            let name = interner.intern(e.name);
+            let variants = e
+                .variants
+                .iter()
+                .map(|v| {
+                    (
+                        interner.intern(v.name),
+                        ferric_stdlib_meta::builtin_enums::payload_annotations(v.payload_arity),
+                    )
+                })
+                .collect();
+            (name, variants)
+        })
+        .collect()
 }
 
-/// Native function table that mirrors `src/main.rs::native_fn_table`. Must be
-/// kept in sync with the CLI table — when a new native is added to
-/// `ferric_stdlib::register_stdlib`, add it here too. (Long-term: move this
-/// table into `ferric_stdlib` so there is one definition.)
+/// Native function table — reads from `ferric_stdlib_meta`, the single
+/// source of truth shared with `ferric_stdlib::register_stdlib` and
+/// `ferric_infer::register_native_signatures`. Includes the async
+/// intrinsics (which the VM dispatches but the resolver still has to
+/// recognise).
 fn stdlib_native_fn_table(interner: &mut Interner) -> Vec<(Symbol, Vec<Symbol>)> {
-    let entries: &[(&str, &[&str])] = &[
-        ("println", &["s"]),
-        ("print", &["s"]),
-        ("int_to_str", &["n"]),
-        ("float_to_str", &["n"]),
-        ("bool_to_str", &["b"]),
-        ("int_to_float", &["n"]),
-        ("shell_stdout", &["output"]),
-        ("shell_exit_code", &["output"]),
-        ("array_len", &["arr"]),
-        ("str_len", &["s"]),
-        ("str_trim", &["s"]),
-        ("str_contains", &["s", "sub"]),
-        ("str_starts_with", &["s", "prefix"]),
-        ("str_parse_int", &["s"]),
-        ("str_split", &["s", "sep"]),
-        ("abs", &["n"]),
-        ("min", &["a", "b"]),
-        ("max", &["a", "b"]),
-        ("sqrt", &["n"]),
-        ("pow", &["base", "exp"]),
-        ("floor", &["n"]),
-        ("ceil", &["n"]),
-        ("read_line", &[]),
-        // M8: async stdlib intrinsics. Implemented as VM intrinsics in
-        // `ferric_vm` (not via `register_stdlib`) but registered here so
-        // the resolver recognises the names. Kept in sync manually with
-        // `src/main.rs::native_fn_table`.
-        ("spawn", &["task"]),
-        ("join", &["a", "b"]),
-        ("sleep", &["ms"]),
-        ("shell_run_async", &["cmd"]),
-        ("block_on", &["task"]),
-    ];
-    entries
-        .iter()
-        .map(|(name, params)| {
-            let n = interner.intern(name);
-            let ps = params.iter().map(|p| interner.intern(p)).collect();
+    ferric_stdlib_meta::iter_all()
+        .chain(ferric_stdlib_meta::async_intrinsics::ASYNC_INTRINSICS.iter())
+        .map(|m| {
+            let n = interner.intern(m.name);
+            let ps = m.params.iter().map(|p| interner.intern(p)).collect();
             (n, ps)
         })
         .collect()

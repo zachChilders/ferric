@@ -406,44 +406,29 @@ fn builtin_encode_csv_parse_row(args: &[NativeValue]) -> Result<NativeValue, Str
 /// Native names use the `encode_*` prefix per overview rule 8:
 /// `encode::base64` → `encode_base64`, etc.
 pub fn register(registry: &mut NativeRegistry, interner: &mut Interner) {
-    type Entry = (&'static str, &'static [&'static str], crate::NativeFn);
-    let entries: &[Entry] = &[
-        // Base64
-        ("encode_base64", &["data"], builtin_encode_base64),
-        ("encode_base64_url", &["data"], builtin_encode_base64_url),
-        ("encode_base64_decode", &["s"], builtin_encode_base64_decode),
-        (
-            "encode_base64_url_decode",
-            &["s"],
-            builtin_encode_base64_url_decode,
-        ),
-        // Hex
-        ("encode_hex", &["data"], builtin_encode_hex),
-        ("encode_hex_upper", &["data"], builtin_encode_hex_upper),
-        ("encode_hex_decode", &["s"], builtin_encode_hex_decode),
-        // URL
-        ("encode_url_encode", &["s"], builtin_encode_url_encode),
-        ("encode_url_decode", &["s"], builtin_encode_url_decode),
-        (
-            "encode_url_encode_component",
-            &["s"],
-            builtin_encode_url_encode_component,
-        ),
-        (
-            "encode_url_decode_component",
-            &["s"],
-            builtin_encode_url_decode_component,
-        ),
-        // HTML
-        ("encode_html_escape", &["s"], builtin_encode_html_escape),
-        ("encode_html_unescape", &["s"], builtin_encode_html_unescape),
-        // CSV
-        ("encode_csv_row", &["fields"], builtin_encode_csv_row),
-        ("encode_csv_parse_row", &["s"], builtin_encode_csv_parse_row),
+    let bodies: &[(&str, crate::NativeFn)] = &[
+        ("encode_base64", builtin_encode_base64),
+        ("encode_base64_url", builtin_encode_base64_url),
+        ("encode_base64_decode", builtin_encode_base64_decode),
+        ("encode_base64_url_decode", builtin_encode_base64_url_decode),
+        ("encode_hex", builtin_encode_hex),
+        ("encode_hex_upper", builtin_encode_hex_upper),
+        ("encode_hex_decode", builtin_encode_hex_decode),
+        ("encode_url_encode", builtin_encode_url_encode),
+        ("encode_url_decode", builtin_encode_url_decode),
+        ("encode_url_encode_component", builtin_encode_url_encode_component),
+        ("encode_url_decode_component", builtin_encode_url_decode_component),
+        ("encode_html_escape", builtin_encode_html_escape),
+        ("encode_html_unescape", builtin_encode_html_unescape),
+        ("encode_csv_row", builtin_encode_csv_row),
+        ("encode_csv_parse_row", builtin_encode_csv_parse_row),
     ];
-    for (name, params, f) in entries {
-        registry.register_named(interner, name, params, *f);
-    }
+    crate::register_module(
+        registry,
+        interner,
+        ferric_stdlib_meta::encode::ENCODE_FNS,
+        bodies,
+    );
 }
 
 // ============================================================================

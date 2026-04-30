@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 ferric_common = { path = "../ferric_common" }
+ferric_stdlib_meta = { path = "../ferric_stdlib_meta" }
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 regex = "1"
 rand = "0.8"

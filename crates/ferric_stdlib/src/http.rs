@@ -974,50 +974,39 @@ fn send_request_inner(req: RequestBuilderRepr) -> Result<ResponseRepr, String> {
 
 /// Registers every `http_*` native into the registry.
 pub fn register(registry: &mut NativeRegistry, interner: &mut Interner) {
-    type Entry = (&'static str, &'static [&'static str], crate::NativeFn);
-    let entries: &[Entry] = &[
-        // Quick helpers
-        ("http_get", &["url"], builtin_http_get),
-        ("http_post", &["url", "body"], builtin_http_post),
-        ("http_put", &["url", "body"], builtin_http_put),
-        ("http_patch", &["url", "body"], builtin_http_patch),
-        ("http_delete", &["url"], builtin_http_delete),
-        // Builder
-        ("http_request", &["method", "url"], builtin_http_request),
-        ("http_header", &["req", "name", "val"], builtin_http_header),
-        ("http_headers", &["req", "h"], builtin_http_headers),
-        ("http_body_bytes", &["req", "b"], builtin_http_body_bytes),
-        ("http_body_str", &["req", "s"], builtin_http_body_str),
-        ("http_body_json", &["req", "val"], builtin_http_body_json),
-        ("http_timeout", &["req", "ms"], builtin_http_timeout),
-        (
-            "http_follow_redirects",
-            &["req", "follow"],
-            builtin_http_follow_redirects,
-        ),
-        (
-            "http_basic_auth",
-            &["req", "user", "pass"],
-            builtin_http_basic_auth,
-        ),
-        ("http_bearer", &["req", "token"], builtin_http_bearer),
-        ("http_send", &["req"], builtin_http_send),
-        // Response inspection (response-side body_* fns suffixed with _resp
-        // to avoid colliding with the builder mutators).
-        ("http_status", &["r"], builtin_http_status),
-        ("http_ok", &["r"], builtin_http_ok),
-        ("http_header_get", &["r", "name"], builtin_http_header_get),
-        ("http_headers_all", &["r"], builtin_http_headers_all),
-        ("http_body_bytes_resp", &["r"], builtin_http_body_bytes_resp),
-        ("http_body_str_resp", &["r"], builtin_http_body_str_resp),
-        ("http_body_json_resp", &["r"], builtin_http_body_json_resp),
-        // Typed convenience
-        ("http_get_json", &["url"], builtin_http_get_json),
-        ("http_post_json", &["url", "body"], builtin_http_post_json),
+    let bodies: &[(&str, crate::NativeFn)] = &[
+        ("http_get", builtin_http_get),
+        ("http_post", builtin_http_post),
+        ("http_put", builtin_http_put),
+        ("http_patch", builtin_http_patch),
+        ("http_delete", builtin_http_delete),
+        ("http_request", builtin_http_request),
+        ("http_header", builtin_http_header),
+        ("http_headers", builtin_http_headers),
+        ("http_body_bytes", builtin_http_body_bytes),
+        ("http_body_str", builtin_http_body_str),
+        ("http_body_json", builtin_http_body_json),
+        ("http_timeout", builtin_http_timeout),
+        ("http_follow_redirects", builtin_http_follow_redirects),
+        ("http_basic_auth", builtin_http_basic_auth),
+        ("http_bearer", builtin_http_bearer),
+        ("http_send", builtin_http_send),
+        ("http_status", builtin_http_status),
+        ("http_ok", builtin_http_ok),
+        ("http_header_get", builtin_http_header_get),
+        ("http_headers_all", builtin_http_headers_all),
+        ("http_body_bytes_resp", builtin_http_body_bytes_resp),
+        ("http_body_str_resp", builtin_http_body_str_resp),
+        ("http_body_json_resp", builtin_http_body_json_resp),
+        ("http_get_json", builtin_http_get_json),
+        ("http_post_json", builtin_http_post_json),
     ];
-    for (name, params, f) in entries {
-        registry.register_named(interner, name, params, *f);
-    }
+    crate::register_module(
+        registry,
+        interner,
+        ferric_stdlib_meta::http::HTTP_FNS,
+        bodies,
+    );
 }
 
 // ============================================================================

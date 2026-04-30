@@ -394,37 +394,38 @@ fn builtin_map_build(args: &[NativeValue]) -> Result<NativeValue, String> {
 
 /// Registers every `map_*` native with the runtime registry.
 pub fn register(registry: &mut NativeRegistry, interner: &mut Interner) {
-    type Entry = (&'static str, &'static [&'static str], crate::NativeFn);
-    let entries: &[Entry] = &[
-        ("map_new", &[], builtin_map_new),
-        ("map_from_list", &["pairs"], builtin_map_from_list),
-        ("map_from_lists", &["keys", "vals"], builtin_map_from_lists),
-        ("map_get", &["m", "key"], builtin_map_get),
-        ("map_get_or", &["m", "key", "default"], builtin_map_get_or),
-        ("map_contains_key", &["m", "key"], builtin_map_contains_key),
-        ("map_len", &["m"], builtin_map_len),
-        ("map_is_empty", &["m"], builtin_map_is_empty),
-        ("map_insert", &["m", "key", "val"], builtin_map_insert),
-        ("map_remove", &["m", "key"], builtin_map_remove),
-        ("map_merge", &["a", "b"], builtin_map_merge),
-        ("map_merge_with", &["a", "b", "f"], builtin_map_merge_with),
-        ("map_keys", &["m"], builtin_map_keys),
-        ("map_values", &["m"], builtin_map_values),
-        ("map_entries", &["m"], builtin_map_entries),
-        ("map_map_values", &["m", "f"], builtin_map_map_values),
-        ("map_filter", &["m", "f"], builtin_map_filter),
-        ("map_filter_map", &["m", "f"], builtin_map_filter_map),
-        ("map_fold", &["m", "init", "f"], builtin_map_fold),
-        ("map_group_by", &["l", "f"], builtin_map_group_by),
-        ("map_count_by", &["l", "f"], builtin_map_count_by),
-        ("map_builder", &[], builtin_map_builder),
-        ("map_set", &["buf", "key", "val"], builtin_map_set),
-        ("map_build", &["buf"], builtin_map_build),
+    let bodies: &[(&str, crate::NativeFn)] = &[
+        ("map_new", builtin_map_new),
+        ("map_from_list", builtin_map_from_list),
+        ("map_from_lists", builtin_map_from_lists),
+        ("map_get", builtin_map_get),
+        ("map_get_or", builtin_map_get_or),
+        ("map_contains_key", builtin_map_contains_key),
+        ("map_len", builtin_map_len),
+        ("map_is_empty", builtin_map_is_empty),
+        ("map_insert", builtin_map_insert),
+        ("map_remove", builtin_map_remove),
+        ("map_merge", builtin_map_merge),
+        ("map_merge_with", builtin_map_merge_with),
+        ("map_keys", builtin_map_keys),
+        ("map_values", builtin_map_values),
+        ("map_entries", builtin_map_entries),
+        ("map_map_values", builtin_map_map_values),
+        ("map_filter", builtin_map_filter),
+        ("map_filter_map", builtin_map_filter_map),
+        ("map_fold", builtin_map_fold),
+        ("map_group_by", builtin_map_group_by),
+        ("map_count_by", builtin_map_count_by),
+        ("map_builder", builtin_map_builder),
+        ("map_set", builtin_map_set),
+        ("map_build", builtin_map_build),
     ];
-    for (name, params, f) in entries {
-        registry.register_named(interner, name, params, *f);
-    }
-    let _ = expect_int; // silence unused warning until used by future helpers
+    crate::register_module(
+        registry,
+        interner,
+        ferric_stdlib_meta::map::MAP_FNS,
+        bodies,
+    );
 }
 
 // ============================================================================

@@ -296,29 +296,24 @@ fn builtin_fmt_debug(args: &[NativeValue]) -> Result<NativeValue, String> {
 
 /// Register every `fmt::*` native into the registry.
 pub fn register(registry: &mut NativeRegistry, interner: &mut Interner) {
-    type Entry = (&'static str, &'static [&'static str], crate::NativeFn);
-    let entries: &[Entry] = &[
-        ("fmt_format", &["template", "args"], builtin_fmt_format),
-        ("fmt_int", &["n", "radix"], builtin_fmt_int),
-        (
-            "fmt_int_padded",
-            &["n", "width", "pad"],
-            builtin_fmt_int_padded,
-        ),
-        ("fmt_float", &["n", "decimals"], builtin_fmt_float),
-        ("fmt_float_exp", &["n", "decimals"], builtin_fmt_float_exp),
-        ("fmt_bool", &["b"], builtin_fmt_bool),
-        ("fmt_debug", &["v"], builtin_fmt_debug),
-        // Unprefixed conversion shortcuts — these don't have prefixed `fmt_*`
-        // siblings because they correspond to legacy M1/M2 conversion ABIs
-        // (no radix / decimals param). Implementations live in `lib.rs`.
-        ("int_to_str", &["n"], crate::builtin_int_to_str),
-        ("float_to_str", &["n"], crate::builtin_float_to_str),
-        ("bool_to_str", &["b"], crate::builtin_bool_to_str),
+    let bodies: &[(&str, crate::NativeFn)] = &[
+        ("fmt_format", builtin_fmt_format),
+        ("fmt_int", builtin_fmt_int),
+        ("fmt_int_padded", builtin_fmt_int_padded),
+        ("fmt_float", builtin_fmt_float),
+        ("fmt_float_exp", builtin_fmt_float_exp),
+        ("fmt_bool", builtin_fmt_bool),
+        ("fmt_debug", builtin_fmt_debug),
+        ("int_to_str", crate::builtin_int_to_str),
+        ("float_to_str", crate::builtin_float_to_str),
+        ("bool_to_str", crate::builtin_bool_to_str),
     ];
-    for (name, params, f) in entries {
-        registry.register_named(interner, name, params, *f);
-    }
+    crate::register_module(
+        registry,
+        interner,
+        ferric_stdlib_meta::fmt::FMT_FNS,
+        bodies,
+    );
 }
 
 // ---------------------------------------------------------------------------

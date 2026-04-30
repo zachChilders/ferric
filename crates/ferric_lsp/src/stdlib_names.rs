@@ -1,40 +1,15 @@
-//! Static catalog of stdlib function names and signatures.
+//! Stdlib function display catalogue, used by completion menus.
 //!
-//! The stdlib is registered both in `register_stdlib` (runtime bodies) and in
-//! `pipeline.rs::stdlib_native_fn_table` (resolver name + param info). Those
-//! are the source of truth for which names exist; this catalog adds the
-//! signature strings the LSP shows in completion `detail`. Keep in sync — a
-//! drift here just means the completion menu shows a stale signature, not a
-//! correctness bug.
+//! Reads from `ferric_stdlib_meta` (the single source of truth) so this
+//! file is no longer a hand-curated mirror — it just exposes
+//! `iter_stdlib_functions()` to the completion handler.
 
-pub const STDLIB_FUNCTIONS: &[(&str, &str)] = &[
-    ("println", "fn(s: Str) -> Unit"),
-    ("print", "fn(s: Str) -> Unit"),
-    ("int_to_str", "fn(n: Int) -> Str"),
-    ("float_to_str", "fn(n: Float) -> Str"),
-    ("bool_to_str", "fn(b: Bool) -> Str"),
-    ("int_to_float", "fn(n: Int) -> Float"),
-    ("shell_stdout", "fn(output: ShellOutput) -> Str"),
-    ("shell_exit_code", "fn(output: ShellOutput) -> Int"),
-    ("array_len", "fn(arr: [T]) -> Int"),
-    ("str_len", "fn(s: Str) -> Int"),
-    ("str_trim", "fn(s: Str) -> Str"),
-    ("str_contains", "fn(s: Str, sub: Str) -> Bool"),
-    ("str_starts_with", "fn(s: Str, prefix: Str) -> Bool"),
-    ("str_parse_int", "fn(s: Str) -> Option<Int>"),
-    ("str_split", "fn(s: Str, sep: Str) -> [Str]"),
-    ("abs", "fn(n: Int) -> Int"),
-    ("min", "fn(a: Int, b: Int) -> Int"),
-    ("max", "fn(a: Int, b: Int) -> Int"),
-    ("sqrt", "fn(n: Float) -> Float"),
-    ("pow", "fn(base: Float, exp: Float) -> Float"),
-    ("floor", "fn(n: Float) -> Int"),
-    ("ceil", "fn(n: Float) -> Int"),
-    ("read_line", "fn() -> Str"),
-    // M8: async stdlib intrinsics — see `ferric_vm::bytecode::AsyncIntrinsics`.
-    ("spawn", "fn(task: Async<T>) -> Handle<T>"),
-    ("join", "fn(a: Handle<A>, b: Handle<B>) -> (A, B)"),
-    ("sleep", "fn(ms: Int) -> Async<Unit>"),
-    ("shell_run_async", "fn(cmd: Str) -> Async<ShellOutput>"),
-    ("block_on", "fn(task: Async<T>) -> T"),
-];
+/// Iterate `(name, display)` pairs for every stdlib native + async
+/// intrinsic. `display` is the completion menu's `detail` string, e.g.
+/// `"fn(path: Str) -> Str"` for natives that have a typed signature, or
+/// `"fn(...)"` for natives whose signature hasn't been filled in yet.
+pub fn iter_stdlib_functions() -> impl Iterator<Item = (&'static str, &'static str)> {
+    ferric_stdlib_meta::iter_all()
+        .chain(ferric_stdlib_meta::async_intrinsics::ASYNC_INTRINSICS.iter())
+        .map(|m| (m.name, m.display))
+}

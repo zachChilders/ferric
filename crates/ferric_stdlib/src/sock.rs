@@ -474,61 +474,35 @@ fn builtin_sock_udp_recv(args: &[NativeValue]) -> Result<NativeValue, String> {
 /// Registers every `sock::*` native in the registry. Names use the
 /// canonical `sock_<function>` convention from the stdlib overview.
 pub fn register(registry: &mut NativeRegistry, interner: &mut Interner) {
-    type Entry = (&'static str, &'static [&'static str], crate::NativeFn);
-    let entries: &[Entry] = &[
-        // TCP client
-        (
-            "sock_tcp_connect",
-            &["host", "port"],
-            builtin_sock_tcp_connect,
-        ),
-        (
-            "sock_tcp_connect_timeout",
-            &["host", "port", "ms"],
-            builtin_sock_tcp_connect_timeout,
-        ),
-        // TCP stream ops
-        ("sock_read", &["s", "buf"], builtin_sock_read),
-        ("sock_read_exact", &["s", "n"], builtin_sock_read_exact),
-        ("sock_read_line", &["s"], builtin_sock_read_line),
-        ("sock_write", &["s", "data"], builtin_sock_write),
-        ("sock_write_all", &["s", "data"], builtin_sock_write_all),
-        ("sock_write_str", &["s", "data"], builtin_sock_write_str),
-        ("sock_flush", &["s"], builtin_sock_flush),
-        ("sock_close", &["s"], builtin_sock_close),
-        ("sock_set_timeout", &["s", "ms"], builtin_sock_set_timeout),
-        ("sock_local_addr", &["s"], builtin_sock_local_addr),
-        ("sock_peer_addr", &["s"], builtin_sock_peer_addr),
-        // TCP server
-        ("sock_tcp_listen", &["port"], builtin_sock_tcp_listen),
-        (
-            "sock_tcp_listen_addr",
-            &["addr", "port"],
-            builtin_sock_tcp_listen_addr,
-        ),
-        ("sock_accept", &["l"], builtin_sock_accept),
-        (
-            "sock_accept_loop",
-            &["l", "handler"],
-            builtin_sock_accept_loop,
-        ),
-        // UDP
-        ("sock_udp_bind", &["port"], builtin_sock_udp_bind),
-        (
-            "sock_udp_bind_addr",
-            &["addr", "port"],
-            builtin_sock_udp_bind_addr,
-        ),
-        (
-            "sock_udp_send",
-            &["s", "to", "port", "data"],
-            builtin_sock_udp_send,
-        ),
-        ("sock_udp_recv", &["s"], builtin_sock_udp_recv),
+    let bodies: &[(&str, crate::NativeFn)] = &[
+        ("sock_tcp_connect", builtin_sock_tcp_connect),
+        ("sock_tcp_connect_timeout", builtin_sock_tcp_connect_timeout),
+        ("sock_read", builtin_sock_read),
+        ("sock_read_exact", builtin_sock_read_exact),
+        ("sock_read_line", builtin_sock_read_line),
+        ("sock_write", builtin_sock_write),
+        ("sock_write_all", builtin_sock_write_all),
+        ("sock_write_str", builtin_sock_write_str),
+        ("sock_flush", builtin_sock_flush),
+        ("sock_close", builtin_sock_close),
+        ("sock_set_timeout", builtin_sock_set_timeout),
+        ("sock_local_addr", builtin_sock_local_addr),
+        ("sock_peer_addr", builtin_sock_peer_addr),
+        ("sock_tcp_listen", builtin_sock_tcp_listen),
+        ("sock_tcp_listen_addr", builtin_sock_tcp_listen_addr),
+        ("sock_accept", builtin_sock_accept),
+        ("sock_accept_loop", builtin_sock_accept_loop),
+        ("sock_udp_bind", builtin_sock_udp_bind),
+        ("sock_udp_bind_addr", builtin_sock_udp_bind_addr),
+        ("sock_udp_send", builtin_sock_udp_send),
+        ("sock_udp_recv", builtin_sock_udp_recv),
     ];
-    for (name, params, f) in entries {
-        registry.register_named(interner, name, params, *f);
-    }
+    crate::register_module(
+        registry,
+        interner,
+        ferric_stdlib_meta::sock::SOCK_FNS,
+        bodies,
+    );
 }
 
 // ============================================================================

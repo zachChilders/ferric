@@ -373,20 +373,22 @@ pub fn get_with(o: &OnceRepr, init: impl FnOnce() -> NativeValue) -> NativeValue
 
 /// Registers every `sync_*` native with the registry.
 pub fn register(registry: &mut NativeRegistry, interner: &mut Interner) {
-    type Entry = (&'static str, &'static [&'static str], crate::NativeFn);
-    let entries: &[Entry] = &[
-        ("sync_channel", &["capacity"], builtin_sync_channel),
-        ("sync_send", &["s", "val"], builtin_sync_send),
-        ("sync_recv", &["r"], builtin_sync_recv),
-        ("sync_try_recv", &["r"], builtin_sync_try_recv),
-        ("sync_mutex", &["val"], builtin_sync_mutex),
-        ("sync_lock", &["m", "f"], builtin_sync_lock),
-        ("sync_once", &["init"], builtin_sync_once),
-        ("sync_get", &["o"], builtin_sync_get),
+    let bodies: &[(&str, crate::NativeFn)] = &[
+        ("sync_channel", builtin_sync_channel),
+        ("sync_send", builtin_sync_send),
+        ("sync_recv", builtin_sync_recv),
+        ("sync_try_recv", builtin_sync_try_recv),
+        ("sync_mutex", builtin_sync_mutex),
+        ("sync_lock", builtin_sync_lock),
+        ("sync_once", builtin_sync_once),
+        ("sync_get", builtin_sync_get),
     ];
-    for (name, params, f) in entries {
-        registry.register_named(interner, name, params, *f);
-    }
+    crate::register_module(
+        registry,
+        interner,
+        ferric_stdlib_meta::sync::SYNC_FNS,
+        bodies,
+    );
 }
 
 // ============================================================================

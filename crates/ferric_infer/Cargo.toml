@@ -5,3 +5,4 @@ edition = "2024"
 
 [dependencies]
 ferric_common = { path = "../ferric_common" }
+ferric_stdlib_meta = { path = "../ferric_stdlib_meta" }

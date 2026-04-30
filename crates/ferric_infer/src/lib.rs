@@ -14,6 +14,19 @@ use ferric_common::{
     TraitRegistry, Ty, TyVar, TypeAnnotation, TypeError, TypeParam, TypeResult, TypeScheme, UnOp,
 };
 
+/// Adapter that lets `ferric_stdlib_meta` polymorphic-signature builders
+/// mint fresh `TyVar`s through the inferencer's counter. Created on demand
+/// via [`TypeInfer::ty_var_gen`].
+struct InferTyVarGen<'b, 'a: 'b> {
+    infer: &'b mut TypeInfer<'a>,
+}
+
+impl ferric_stdlib_meta::TyVarGen for InferTyVarGen<'_, '_> {
+    fn fresh(&mut self) -> TyVar {
+        self.infer.fresh_var_only()
+    }
+}
+
 /// Type-checks (and infers) a parsed AST with resolution information.
 ///
 /// This is the single public entry point for the inference stage. It mirrors
@@ -371,6 +384,12 @@ impl<'a> TypeInfer<'a> {
         v
     }
 
+    /// Adapter: lets `ferric_stdlib_meta::Signature::Poly` builders mint
+    /// fresh `TyVar`s through the inferencer's counter.
+    fn ty_var_gen(&mut self) -> InferTyVarGen<'_, 'a> {
+        InferTyVarGen { infer: self }
+    }
+
     // ------------------------------------------------------------------
     // Top-level
     // ------------------------------------------------------------------
@@ -639,148 +658,35 @@ impl<'a> TypeInfer<'a> {
 
     /// Registers the stdlib native signatures (looked up by name in the
     /// interner). Names that were never interned are silently skipped —
-    /// they cannot appear in the AST.
+    /// they cannot appear in the AST. Source of truth is
+    /// `ferric_stdlib_meta`; entries marked `Signature::Unknown` there are
+    /// skipped here too (their return type stays a free var).
     fn register_native_signatures(&mut self) {
-        let natives: &[(&str, &[Ty], Ty)] = &[
-            ("println", &[Ty::Str], Ty::Unit),
-            ("print", &[Ty::Str], Ty::Unit),
-            ("int_to_str", &[Ty::Int], Ty::Str),
-            ("float_to_str", &[Ty::Float], Ty::Str),
-            ("bool_to_str", &[Ty::Bool], Ty::Str),
-            ("int_to_float", &[Ty::Int], Ty::Float),
-            ("shell_stdout", &[Ty::ShellOutput], Ty::Str),
-            ("shell_exit_code", &[Ty::ShellOutput], Ty::Int),
-            // M6: string / math / io
-            ("str_len", &[Ty::Str], Ty::Int),
-            ("str_trim", &[Ty::Str], Ty::Str),
-            ("str_contains", &[Ty::Str, Ty::Str], Ty::Bool),
-            ("str_starts_with", &[Ty::Str, Ty::Str], Ty::Bool),
-            ("str_parse_int", &[Ty::Str], Ty::Int),
-            (
-                "str_split",
-                &[Ty::Str, Ty::Str],
-                Ty::Array(Box::new(Ty::Str)),
-            ),
-            ("abs", &[Ty::Int], Ty::Int),
-            ("min", &[Ty::Int, Ty::Int], Ty::Int),
-            ("max", &[Ty::Int, Ty::Int], Ty::Int),
-            ("sqrt", &[Ty::Float], Ty::Float),
-            ("pow", &[Ty::Float, Ty::Float], Ty::Float),
-            ("floor", &[Ty::Float], Ty::Int),
-            ("ceil", &[Ty::Float], Ty::Int),
-            ("read_line", &[], Ty::Str),
-        ];
-        for (name, params, ret) in natives {
-            if let Some(sym) = self.interner.lookup(name) {
-                let fn_ty = Ty::Fn {
-                    params: params.to_vec(),
-                    ret: Box::new(ret.clone()),
-                };
-                self.env.define(sym, TypeScheme::monomorphic(fn_ty));
-            }
-        }
-
-        // Polymorphic natives: `array_len(arr: [T]) -> Int` is generic in T.
-        // Build a type scheme with one quantified TyVar so each call site
-        // instantiates a fresh element type.
-        if let Some(sym) = self.interner.lookup("array_len") {
-            let elem_var = TyVar(self.next_tyvar);
-            self.next_tyvar += 1;
-            let fn_ty = Ty::Fn {
-                params: vec![Ty::Array(Box::new(Ty::Var(elem_var)))],
-                ret: Box::new(Ty::Int),
+        // Iterate every module's metadata + the async intrinsics, defining
+        // each function's `TypeScheme` once. The polymorphic builders
+        // borrow `&mut self` through the `InferTyVarGen` adapter, so the
+        // Symbol lookup happens up-front to avoid a double-borrow.
+        let entries: Vec<(&'static ferric_stdlib_meta::FunctionMeta, Symbol)> =
+            ferric_stdlib_meta::iter_all()
+                .chain(ferric_stdlib_meta::async_intrinsics::ASYNC_INTRINSICS.iter())
+                .filter_map(|m| self.interner.lookup(m.name).map(|sym| (m, sym)))
+                .collect();
+        for (meta, sym) in entries {
+            let scheme = match &meta.signature {
+                ferric_stdlib_meta::Signature::Unknown => continue,
+                ferric_stdlib_meta::Signature::Mono(builder) => {
+                    let (params, ret) = builder();
+                    TypeScheme::monomorphic(Ty::Fn {
+                        params,
+                        ret: Box::new(ret),
+                    })
+                }
+                ferric_stdlib_meta::Signature::Poly(builder) => {
+                    let mut g = self.ty_var_gen();
+                    builder(&mut g)
+                }
             };
-            self.env.define(
-                sym,
-                TypeScheme {
-                    forall: vec![elem_var],
-                    ty: fn_ty,
-                },
-            );
-        }
-
-        // M8 Task 3: `spawn(task: Async<T>) -> Handle<T>` — generic in T.
-        if let Some(sym) = self.interner.lookup("spawn") {
-            let t = TyVar(self.next_tyvar);
-            self.next_tyvar += 1;
-            let fn_ty = Ty::Fn {
-                params: vec![Ty::Async(Box::new(Ty::Var(t)))],
-                ret: Box::new(Ty::Handle(Box::new(Ty::Var(t)))),
-            };
-            self.env.define(
-                sym,
-                TypeScheme {
-                    forall: vec![t],
-                    ty: fn_ty,
-                },
-            );
-        }
-
-        // M8 Task 3: `join(a: Handle<A>, b: Handle<B>) -> (A, B)` — generic in
-        // A, B. The spec mentions optional 3-arity and 4-arity overloads, but
-        // the milestone done-when only requires the 2-arity form; the
-        // additional overloads are deferred until a real call site demands
-        // them.
-        if let Some(sym) = self.interner.lookup("join") {
-            let a = TyVar(self.next_tyvar);
-            self.next_tyvar += 1;
-            let b = TyVar(self.next_tyvar);
-            self.next_tyvar += 1;
-            let fn_ty = Ty::Fn {
-                params: vec![
-                    Ty::Handle(Box::new(Ty::Var(a))),
-                    Ty::Handle(Box::new(Ty::Var(b))),
-                ],
-                ret: Box::new(Ty::Tuple(vec![Ty::Var(a), Ty::Var(b)])),
-            };
-            self.env.define(
-                sym,
-                TypeScheme {
-                    forall: vec![a, b],
-                    ty: fn_ty,
-                },
-            );
-        }
-
-        // M8 Task 5: `sleep(ms: Int) -> Async<Unit>` — wall-clock pause.
-        if let Some(sym) = self.interner.lookup("sleep") {
-            let fn_ty = Ty::Fn {
-                params: vec![Ty::Int],
-                ret: Box::new(Ty::Async(Box::new(Ty::Unit))),
-            };
-            self.env.define(sym, TypeScheme::monomorphic(fn_ty));
-        }
-
-        // M8 Task 5: `shell_run_async(cmd: Str) -> Async<ShellOutput>`.
-        // The async-context lowering rewrites `$ ...` inside async fns to a
-        // call here.
-        if let Some(sym) = self.interner.lookup("shell_run_async") {
-            let fn_ty = Ty::Fn {
-                params: vec![Ty::Str],
-                ret: Box::new(Ty::Async(Box::new(Ty::ShellOutput))),
-            };
-            self.env.define(sym, TypeScheme::monomorphic(fn_ty));
-        }
-
-        // M8 Task 5: `block_on(task: Async<T>) -> T` — host-side runner.
-        // Generic in T; mirrors `await` but is callable from sync top-level
-        // code where `await` would be a parse/type error. Needed to extract
-        // results from async-producing functions when the script itself is
-        // not async.
-        if let Some(sym) = self.interner.lookup("block_on") {
-            let t = TyVar(self.next_tyvar);
-            self.next_tyvar += 1;
-            let fn_ty = Ty::Fn {
-                params: vec![Ty::Async(Box::new(Ty::Var(t)))],
-                ret: Box::new(Ty::Var(t)),
-            };
-            self.env.define(
-                sym,
-                TypeScheme {
-                    forall: vec![t],
-                    ty: fn_ty,
-                },
-            );
+            self.env.define(sym, scheme);
         }
     }
 

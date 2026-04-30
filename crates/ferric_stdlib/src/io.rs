@@ -544,69 +544,50 @@ type _RcRefCellPlaceholder = Rc<RefCell<BufWriter<File>>>;
 
 /// Registers all `io_*` native functions with the registry.
 pub fn register(registry: &mut NativeRegistry, interner: &mut Interner) {
-    type Entry = (&'static str, &'static [&'static str], crate::NativeFn);
-    let entries: &[Entry] = &[
-        // Standard streams
-        ("io_print", &["s"], builtin_io_print),
-        ("io_println", &["s"], builtin_io_println),
-        ("io_eprint", &["s"], builtin_io_eprint),
-        ("io_eprintln", &["s"], builtin_io_eprintln),
-        ("io_read_line", &[], builtin_io_read_line),
-        ("io_read_all", &[], builtin_io_read_all),
-        // File — text
-        ("io_read_file", &["path"], builtin_io_read_file),
-        ("io_write_file", &["path", "content"], builtin_io_write_file),
-        (
-            "io_append_file",
-            &["path", "content"],
-            builtin_io_append_file,
-        ),
-        ("io_read_lines", &["path"], builtin_io_read_lines),
-        // File — bytes
-        ("io_read_bytes", &["path"], builtin_io_read_bytes),
-        (
-            "io_write_bytes",
-            &["path", "content"],
-            builtin_io_write_bytes,
-        ),
-        // Metadata
-        ("io_exists", &["path"], builtin_io_exists),
-        ("io_is_file", &["path"], builtin_io_is_file),
-        ("io_is_dir", &["path"], builtin_io_is_dir),
-        ("io_file_size", &["path"], builtin_io_file_size),
-        ("io_modified_at", &["path"], builtin_io_modified_at),
-        // Directory
-        ("io_list_dir", &["path"], builtin_io_list_dir),
-        (
-            "io_list_dir_recursive",
-            &["path"],
-            builtin_io_list_dir_recursive,
-        ),
-        ("io_make_dir", &["path"], builtin_io_make_dir),
-        ("io_make_dir_all", &["path"], builtin_io_make_dir_all),
-        ("io_remove_file", &["path"], builtin_io_remove_file),
-        ("io_remove_dir", &["path"], builtin_io_remove_dir),
-        ("io_remove_dir_all", &["path"], builtin_io_remove_dir_all),
-        ("io_rename", &["from", "to"], builtin_io_rename),
-        ("io_copy", &["from", "to"], builtin_io_copy),
-        // FileWriter
-        ("io_file_writer", &["path"], builtin_io_file_writer),
-        ("io_write", &["w", "s"], builtin_io_write),
-        ("io_writeln", &["w", "s"], builtin_io_writeln),
-        ("io_flush", &["w"], builtin_io_flush),
-        ("io_close", &["w"], builtin_io_close),
-        // Unprefixed aliases — short names that user code calls directly.
-        // Same impls as their `io_*` siblings except where a separate
-        // `crate::builtin_*` predates the `io_*` form.
-        ("println", &["s"], crate::builtin_println),
-        ("print", &["s"], crate::builtin_print),
-        ("eprint", &["s"], builtin_io_eprint),
-        ("eprintln", &["s"], builtin_io_eprintln),
-        ("read_line", &[], crate::builtin_read_line),
+    let bodies: &[(&str, crate::NativeFn)] = &[
+        ("io_print", builtin_io_print),
+        ("io_println", builtin_io_println),
+        ("io_eprint", builtin_io_eprint),
+        ("io_eprintln", builtin_io_eprintln),
+        ("io_read_line", builtin_io_read_line),
+        ("io_read_all", builtin_io_read_all),
+        ("io_read_file", builtin_io_read_file),
+        ("io_write_file", builtin_io_write_file),
+        ("io_append_file", builtin_io_append_file),
+        ("io_read_lines", builtin_io_read_lines),
+        ("io_read_bytes", builtin_io_read_bytes),
+        ("io_write_bytes", builtin_io_write_bytes),
+        ("io_exists", builtin_io_exists),
+        ("io_is_file", builtin_io_is_file),
+        ("io_is_dir", builtin_io_is_dir),
+        ("io_file_size", builtin_io_file_size),
+        ("io_modified_at", builtin_io_modified_at),
+        ("io_list_dir", builtin_io_list_dir),
+        ("io_list_dir_recursive", builtin_io_list_dir_recursive),
+        ("io_make_dir", builtin_io_make_dir),
+        ("io_make_dir_all", builtin_io_make_dir_all),
+        ("io_remove_file", builtin_io_remove_file),
+        ("io_remove_dir", builtin_io_remove_dir),
+        ("io_remove_dir_all", builtin_io_remove_dir_all),
+        ("io_rename", builtin_io_rename),
+        ("io_copy", builtin_io_copy),
+        ("io_file_writer", builtin_io_file_writer),
+        ("io_write", builtin_io_write),
+        ("io_writeln", builtin_io_writeln),
+        ("io_flush", builtin_io_flush),
+        ("io_close", builtin_io_close),
+        ("println", crate::builtin_println),
+        ("print", crate::builtin_print),
+        ("eprint", builtin_io_eprint),
+        ("eprintln", builtin_io_eprintln),
+        ("read_line", crate::builtin_read_line),
     ];
-    for (name, params, f) in entries {
-        registry.register_named(interner, name, params, *f);
-    }
+    crate::register_module(
+        registry,
+        interner,
+        ferric_stdlib_meta::io::IO_FNS,
+        bodies,
+    );
 }
 
 // Silence dead_code on BufRead: not used directly but kept for any future
