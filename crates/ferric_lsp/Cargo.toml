@@ -21,6 +21,10 @@ ferric_infer   = { path = "../ferric_infer" }
 # stage from `(ParseResult, ResolveResult, Interner)`. M5 added it between
 # resolve and infer; the LSP must run it for trait-aware types.
 ferric_traits  = { path = "../ferric_traits" }
+# Stdlib metadata (zero heavy deps — no reqwest/tiny_http/etc). Single source
+# of truth for native names, params, and signatures; replaces the LSP's
+# previous hand-curated mirror tables.
+ferric_stdlib_meta = { path = "../ferric_stdlib_meta" }
 
 tower-lsp  = "0.20"
 tokio      = { version = "1", features = ["full"] }

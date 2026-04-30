@@ -253,25 +253,18 @@ fn load_into_env_from_path(p: &PathBuf, override_: bool) -> Result<NativeValue, 
 // ---------------------------------------------------------------------------
 
 pub fn register(registry: &mut NativeRegistry, interner: &mut Interner) {
-    registry.register_named(interner, "dotenv_parse", &["content"], builtin_dotenv_parse);
-    registry.register_named(interner, "dotenv_load", &[], builtin_dotenv_load);
-    registry.register_named(
+    let bodies: &[(&str, crate::NativeFn)] = &[
+        ("dotenv_parse", builtin_dotenv_parse),
+        ("dotenv_load", builtin_dotenv_load),
+        ("dotenv_load_path", builtin_dotenv_load_path),
+        ("dotenv_load_into_env", builtin_dotenv_load_into_env),
+        ("dotenv_load_into_env_path", builtin_dotenv_load_into_env_path),
+    ];
+    crate::register_module(
+        registry,
         interner,
-        "dotenv_load_path",
-        &["path"],
-        builtin_dotenv_load_path,
-    );
-    registry.register_named(
-        interner,
-        "dotenv_load_into_env",
-        &[],
-        builtin_dotenv_load_into_env,
-    );
-    registry.register_named(
-        interner,
-        "dotenv_load_into_env_path",
-        &["path", "override_"],
-        builtin_dotenv_load_into_env_path,
+        ferric_stdlib_meta::dotenv::DOTENV_FNS,
+        bodies,
     );
 }
 

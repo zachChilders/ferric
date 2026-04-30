@@ -530,75 +530,41 @@ fn builtin_bytes_build(args: &[NativeValue]) -> Result<NativeValue, String> {
 // ---------------------------------------------------------------------------
 
 pub fn register(registry: &mut NativeRegistry, interner: &mut Interner) {
-    type Entry = (&'static str, &'static [&'static str], crate::NativeFn);
-    let entries: &[Entry] = &[
-        ("bytes_new", &[], builtin_bytes_new),
-        ("bytes_from_hex", &["s"], builtin_bytes_from_hex),
-        ("bytes_from_base64", &["s"], builtin_bytes_from_base64),
-        ("bytes_repeat", &["b", "n"], builtin_bytes_repeat),
-        ("bytes_len", &["b"], builtin_bytes_len),
-        ("bytes_is_empty", &["b"], builtin_bytes_is_empty),
-        ("bytes_get", &["b", "index"], builtin_bytes_get),
-        ("bytes_slice", &["b", "from", "to"], builtin_bytes_slice),
-        (
-            "bytes_contains",
-            &["haystack", "needle"],
-            builtin_bytes_contains,
-        ),
-        ("bytes_find", &["haystack", "needle"], builtin_bytes_find),
-        ("bytes_concat", &["a", "b"], builtin_bytes_concat),
-        ("bytes_to_hex", &["b"], builtin_bytes_to_hex),
-        ("bytes_to_base64", &["b"], builtin_bytes_to_base64),
-        ("bytes_to_str", &["b"], builtin_bytes_to_str),
-        ("bytes_to_list", &["b"], builtin_bytes_to_list),
-        ("bytes_from_list", &["ints"], builtin_bytes_from_list),
-        ("bytes_builder", &[], builtin_bytes_builder),
-        (
-            "bytes_write_byte",
-            &["buf", "byte"],
-            builtin_bytes_write_byte,
-        ),
-        (
-            "bytes_write_bytes",
-            &["buf", "b"],
-            builtin_bytes_write_bytes,
-        ),
-        ("bytes_write_str", &["buf", "s"], builtin_bytes_write_str),
-        (
-            "bytes_write_u16_le",
-            &["buf", "n"],
-            builtin_bytes_write_u16_le,
-        ),
-        (
-            "bytes_write_u16_be",
-            &["buf", "n"],
-            builtin_bytes_write_u16_be,
-        ),
-        (
-            "bytes_write_u32_le",
-            &["buf", "n"],
-            builtin_bytes_write_u32_le,
-        ),
-        (
-            "bytes_write_u32_be",
-            &["buf", "n"],
-            builtin_bytes_write_u32_be,
-        ),
-        (
-            "bytes_write_i64_le",
-            &["buf", "n"],
-            builtin_bytes_write_i64_le,
-        ),
-        (
-            "bytes_write_i64_be",
-            &["buf", "n"],
-            builtin_bytes_write_i64_be,
-        ),
-        ("bytes_build", &["buf"], builtin_bytes_build),
+    let bodies: &[(&str, crate::NativeFn)] = &[
+        ("bytes_new", builtin_bytes_new),
+        ("bytes_from_hex", builtin_bytes_from_hex),
+        ("bytes_from_base64", builtin_bytes_from_base64),
+        ("bytes_repeat", builtin_bytes_repeat),
+        ("bytes_len", builtin_bytes_len),
+        ("bytes_is_empty", builtin_bytes_is_empty),
+        ("bytes_get", builtin_bytes_get),
+        ("bytes_slice", builtin_bytes_slice),
+        ("bytes_contains", builtin_bytes_contains),
+        ("bytes_find", builtin_bytes_find),
+        ("bytes_concat", builtin_bytes_concat),
+        ("bytes_to_hex", builtin_bytes_to_hex),
+        ("bytes_to_base64", builtin_bytes_to_base64),
+        ("bytes_to_str", builtin_bytes_to_str),
+        ("bytes_to_list", builtin_bytes_to_list),
+        ("bytes_from_list", builtin_bytes_from_list),
+        ("bytes_builder", builtin_bytes_builder),
+        ("bytes_write_byte", builtin_bytes_write_byte),
+        ("bytes_write_bytes", builtin_bytes_write_bytes),
+        ("bytes_write_str", builtin_bytes_write_str),
+        ("bytes_write_u16_le", builtin_bytes_write_u16_le),
+        ("bytes_write_u16_be", builtin_bytes_write_u16_be),
+        ("bytes_write_u32_le", builtin_bytes_write_u32_le),
+        ("bytes_write_u32_be", builtin_bytes_write_u32_be),
+        ("bytes_write_i64_le", builtin_bytes_write_i64_le),
+        ("bytes_write_i64_be", builtin_bytes_write_i64_be),
+        ("bytes_build", builtin_bytes_build),
     ];
-    for (name, params, f) in entries {
-        registry.register_named(interner, name, params, *f);
-    }
+    crate::register_module(
+        registry,
+        interner,
+        ferric_stdlib_meta::bytes::BYTES_FNS,
+        bodies,
+    );
 }
 
 // ---------------------------------------------------------------------------

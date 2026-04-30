@@ -2,7 +2,7 @@
 //!
 //! Items emitted, in this order:
 //!   1. Every keyword from `ferric_common::keywords::KEYWORDS`.
-//!   2. Every stdlib function from `crate::stdlib_names::STDLIB_FUNCTIONS`,
+//!   2. Every stdlib function from `crate::stdlib_names::iter_stdlib_functions()`,
 //!      with a signature `detail`.
 //!   3. Every name in the snapshot's `ResolveResult::defs` (or the last-good
 //!      snapshot's, if the current one has no resolve yet).
@@ -15,7 +15,7 @@ use ferric_common::keywords::KEYWORDS;
 use tower_lsp::lsp_types::{CompletionItem, CompletionItemKind, CompletionResponse, Position};
 
 use crate::pipeline::PipelineSnapshot;
-use crate::stdlib_names::STDLIB_FUNCTIONS;
+use crate::stdlib_names::iter_stdlib_functions;
 
 pub fn complete(
     snapshot: &PipelineSnapshot,
@@ -34,11 +34,11 @@ pub fn complete(
     }
 
     // 2. Stdlib — always available, with signature in `detail`.
-    for (name, signature) in STDLIB_FUNCTIONS {
+    for (name, signature) in iter_stdlib_functions() {
         items.push(CompletionItem {
-            label: (*name).into(),
+            label: name.into(),
             kind: Some(CompletionItemKind::FUNCTION),
-            detail: Some((*signature).into()),
+            detail: Some(signature.into()),
             ..Default::default()
         });
     }
@@ -114,11 +114,11 @@ mod tests {
     #[test]
     fn every_stdlib_fn_appears_with_signature() {
         let items = complete_for("");
-        for (name, sig) in STDLIB_FUNCTIONS {
+        for (name, sig) in iter_stdlib_functions() {
             let found = items.iter().any(|i| {
-                i.label == *name
+                i.label == name
                     && i.kind == Some(CompletionItemKind::FUNCTION)
-                    && i.detail.as_deref() == Some(*sig)
+                    && i.detail.as_deref() == Some(sig)
             });
             assert!(found, "stdlib `{name}` missing or has wrong detail");
         }

@@ -540,6 +540,7 @@ name = "ferric_infer"
 version = "0.1.0"
 dependencies = [
  "ferric_common",
+ "ferric_stdlib_meta",
 ]
 
 [[package]]
@@ -559,6 +560,7 @@ dependencies = [
  "ferric_lexer",
  "ferric_parser",
  "ferric_resolve",
+ "ferric_stdlib_meta",
  "ferric_traits",
  "serde",
  "serde_json",
@@ -611,6 +613,7 @@ dependencies = [
  "chrono",
  "ed25519-dalek",
  "ferric_common",
+ "ferric_stdlib_meta",
  "hex",
  "hmac",
  "rand 0.8.6",
@@ -623,6 +626,13 @@ dependencies = [
  "tiny_http",
  "urlencoding",
  "wait-timeout",
+]
+
+[[package]]
+name = "ferric_stdlib_meta"
+version = "0.1.0"
+dependencies = [
+ "ferric_common",
 ]
 
 [[package]]

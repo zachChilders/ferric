@@ -239,33 +239,31 @@ fn builtin_set_map(args: &[NativeValue]) -> Result<NativeValue, String> {
 
 /// Registers every `set_*` native with the runtime registry.
 pub fn register(registry: &mut NativeRegistry, interner: &mut Interner) {
-    type Entry = (&'static str, &'static [&'static str], crate::NativeFn);
-    let entries: &[Entry] = &[
-        ("set_new", &[], builtin_set_new),
-        ("set_from_list", &["l"], builtin_set_from_list),
-        ("set_contains", &["s", "item"], builtin_set_contains),
-        ("set_len", &["s"], builtin_set_len),
-        ("set_is_empty", &["s"], builtin_set_is_empty),
-        ("set_insert", &["s", "item"], builtin_set_insert),
-        ("set_remove", &["s", "item"], builtin_set_remove),
-        ("set_union", &["a", "b"], builtin_set_union),
-        ("set_intersection", &["a", "b"], builtin_set_intersection),
-        ("set_difference", &["a", "b"], builtin_set_difference),
-        (
-            "set_symmetric_difference",
-            &["a", "b"],
-            builtin_set_symmetric_difference,
-        ),
-        ("set_is_subset", &["a", "b"], builtin_set_is_subset),
-        ("set_is_superset", &["a", "b"], builtin_set_is_superset),
-        ("set_is_disjoint", &["a", "b"], builtin_set_is_disjoint),
-        ("set_to_list", &["s"], builtin_set_to_list),
-        ("set_filter", &["s", "f"], builtin_set_filter),
-        ("set_map", &["s", "f"], builtin_set_map),
+    let bodies: &[(&str, crate::NativeFn)] = &[
+        ("set_new", builtin_set_new),
+        ("set_from_list", builtin_set_from_list),
+        ("set_contains", builtin_set_contains),
+        ("set_len", builtin_set_len),
+        ("set_is_empty", builtin_set_is_empty),
+        ("set_insert", builtin_set_insert),
+        ("set_remove", builtin_set_remove),
+        ("set_union", builtin_set_union),
+        ("set_intersection", builtin_set_intersection),
+        ("set_difference", builtin_set_difference),
+        ("set_symmetric_difference", builtin_set_symmetric_difference),
+        ("set_is_subset", builtin_set_is_subset),
+        ("set_is_superset", builtin_set_is_superset),
+        ("set_is_disjoint", builtin_set_is_disjoint),
+        ("set_to_list", builtin_set_to_list),
+        ("set_filter", builtin_set_filter),
+        ("set_map", builtin_set_map),
     ];
-    for (name, params, f) in entries {
-        registry.register_named(interner, name, params, *f);
-    }
+    crate::register_module(
+        registry,
+        interner,
+        ferric_stdlib_meta::set::SET_FNS,
+        bodies,
+    );
 }
 
 // ============================================================================

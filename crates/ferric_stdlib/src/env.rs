@@ -34,7 +34,7 @@
 
 use std::collections::BTreeMap;
 
-use ferric_common::{Interner, Symbol};
+use ferric_common::Interner;
 
 use crate::{MapKey, NativeRegistry, NativeValue};
 
@@ -252,8 +252,7 @@ fn builtin_env_exit(args: &[NativeValue]) -> Result<NativeValue, String> {
 /// `docs/tasks/stdlib-00-overview.md` §8: e.g. `env::get` is registered as
 /// the native `env_get`.
 pub fn register(registry: &mut NativeRegistry, interner: &mut Interner) {
-    #[allow(clippy::type_complexity)]
-    let entries: &[(&str, fn(&[NativeValue]) -> Result<NativeValue, String>)] = &[
+    let bodies: &[(&str, crate::NativeFn)] = &[
         ("env_get", builtin_env_get),
         ("env_get_or", builtin_env_get_or),
         ("env_require", builtin_env_require),
@@ -266,10 +265,12 @@ pub fn register(registry: &mut NativeRegistry, interner: &mut Interner) {
         ("env_temp_dir", builtin_env_temp_dir),
         ("env_exit", builtin_env_exit),
     ];
-    for (name, f) in entries {
-        let sym: Symbol = interner.intern(name);
-        registry.register(sym, *f);
-    }
+    crate::register_module(
+        registry,
+        interner,
+        ferric_stdlib_meta::env::ENV_FNS,
+        bodies,
+    );
 }
 
 // ---------------------------------------------------------------------------

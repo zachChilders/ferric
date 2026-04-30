@@ -264,12 +264,15 @@ fn builtin_llm_prompt_schema(args: &[NativeValue]) -> Result<NativeValue, String
 // ---------------------------------------------------------------------------
 
 pub fn register(registry: &mut NativeRegistry, interner: &mut Interner) {
-    registry.register_named(interner, "llm_prompt", &["text"], builtin_llm_prompt);
-    registry.register_named(
+    let bodies: &[(&str, crate::NativeFn)] = &[
+        ("llm_prompt", builtin_llm_prompt),
+        ("llm_prompt_schema", builtin_llm_prompt_schema),
+    ];
+    crate::register_module(
+        registry,
         interner,
-        "llm_prompt_schema",
-        &["text", "schema"],
-        builtin_llm_prompt_schema,
+        ferric_stdlib_meta::llm::LLM_FNS,
+        bodies,
     );
 }
 

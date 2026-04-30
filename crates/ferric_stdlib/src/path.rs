@@ -249,27 +249,25 @@ fn builtin_path_components(args: &[NativeValue]) -> Result<NativeValue, String> 
 
 /// Registers all `path_*` native functions with the registry.
 pub fn register(registry: &mut NativeRegistry, interner: &mut Interner) {
-    type Entry = (&'static str, &'static [&'static str], crate::NativeFn);
-    let entries: &[Entry] = &[
-        ("path_join", &["base", "parts"], builtin_path_join),
-        ("path_parent", &["p"], builtin_path_parent),
-        ("path_filename", &["p"], builtin_path_filename),
-        ("path_stem", &["p"], builtin_path_stem),
-        ("path_extension", &["p"], builtin_path_extension),
-        (
-            "path_with_extension",
-            &["p", "ext"],
-            builtin_path_with_extension,
-        ),
-        ("path_is_absolute", &["p"], builtin_path_is_absolute),
-        ("path_is_relative", &["p"], builtin_path_is_relative),
-        ("path_normalize", &["p"], builtin_path_normalize),
-        ("path_relative_to", &["p", "base"], builtin_path_relative_to),
-        ("path_components", &["p"], builtin_path_components),
+    let bodies: &[(&str, crate::NativeFn)] = &[
+        ("path_join", builtin_path_join),
+        ("path_parent", builtin_path_parent),
+        ("path_filename", builtin_path_filename),
+        ("path_stem", builtin_path_stem),
+        ("path_extension", builtin_path_extension),
+        ("path_with_extension", builtin_path_with_extension),
+        ("path_is_absolute", builtin_path_is_absolute),
+        ("path_is_relative", builtin_path_is_relative),
+        ("path_normalize", builtin_path_normalize),
+        ("path_relative_to", builtin_path_relative_to),
+        ("path_components", builtin_path_components),
     ];
-    for (name, params, f) in entries {
-        registry.register_named(interner, name, params, *f);
-    }
+    crate::register_module(
+        registry,
+        interner,
+        ferric_stdlib_meta::path::PATH_FNS,
+        bodies,
+    );
 }
 
 // ============================================================================
