@@ -47,13 +47,6 @@ fn check_arg_count(args: &[NativeValue], expected: usize) -> Result<(), String> 
     }
 }
 
-fn expect_int(v: &NativeValue) -> Result<i64, String> {
-    match v {
-        NativeValue::Int(n) => Ok(*n),
-        other => Err(format!("expected int, got {other:?}")),
-    }
-}
-
 fn expect_list(v: &NativeValue) -> Result<&Vec<NativeValue>, String> {
     match v {
         NativeValue::List(xs) => Ok(xs),
