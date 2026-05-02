@@ -405,9 +405,9 @@ impl ResolveError {
                 expected,
                 found
             ),
-            ResolveError::PrivateImport {
-                name: n, path, ..
-            } => format!("`{}` is not exported from \"{}\"", name(*n), path),
+            ResolveError::PrivateImport { name: n, path, .. } => {
+                format!("`{}` is not exported from \"{}\"", name(*n), path)
+            }
         }
     }
 }
@@ -747,11 +747,9 @@ impl TypeError {
                 "shell interpolation must be Str or Int, found {}",
                 found.description()
             ),
-            TypeError::InfiniteType { var, ty, .. } => format!(
-                "infinite type: ?T{} occurs in {}",
-                var.0,
-                ty.description()
-            ),
+            TypeError::InfiniteType { var, ty, .. } => {
+                format!("infinite type: ?T{} occurs in {}", var.0, ty.description())
+            }
             TypeError::CannotInfer { .. } => {
                 "type annotations needed: cannot infer type".to_string()
             }
@@ -764,11 +762,9 @@ impl TypeError {
             TypeError::NotAStruct { ty, .. } => {
                 format!("type `{}` is not a struct", ty.description())
             }
-            TypeError::NoSuchField { ty, field, .. } => format!(
-                "type `{}` has no field `{}`",
-                ty.description(),
-                nm(*field)
-            ),
+            TypeError::NoSuchField { ty, field, .. } => {
+                format!("type `{}` has no field `{}`", ty.description(), nm(*field))
+            }
             TypeError::FieldTypeMismatch {
                 struct_name,
                 field,

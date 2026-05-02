@@ -268,12 +268,7 @@ pub fn register(registry: &mut NativeRegistry, interner: &mut Interner) {
         ("llm_prompt", builtin_llm_prompt),
         ("llm_prompt_schema", builtin_llm_prompt_schema),
     ];
-    crate::register_module(
-        registry,
-        interner,
-        ferric_stdlib_meta::llm::LLM_FNS,
-        bodies,
-    );
+    crate::register_module(registry, interner, ferric_stdlib_meta::llm::LLM_FNS, bodies);
 }
 
 // ---------------------------------------------------------------------------

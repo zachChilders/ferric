@@ -20,10 +20,7 @@ fn sig_str_to_arr_str() -> (Vec<Ty>, Ty) {
 }
 fn sig_join() -> (Vec<Ty>, Ty) {
     // path_join(base: Str, parts: [Str]) -> Str
-    (
-        vec![Ty::Str, Ty::Array(Box::new(Ty::Str))],
-        Ty::Str,
-    )
+    (vec![Ty::Str, Ty::Array(Box::new(Ty::Str))], Ty::Str)
 }
 
 pub const PATH_FNS: &[FunctionMeta] = &[

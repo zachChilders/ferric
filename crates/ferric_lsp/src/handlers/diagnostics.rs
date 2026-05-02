@@ -198,7 +198,9 @@ mod tests {
             resolve_diag.message
         );
         assert!(
-            resolve_diag.message.starts_with("missing required argument `"),
+            resolve_diag
+                .message
+                .starts_with("missing required argument `"),
             "got {:?}",
             resolve_diag.message
         );

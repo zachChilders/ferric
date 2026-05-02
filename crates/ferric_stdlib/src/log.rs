@@ -448,12 +448,7 @@ pub fn register(registry: &mut NativeRegistry, interner: &mut Interner) {
         ("log_set_level", builtin_log_set_level),
         ("log_get_level", builtin_log_get_level),
     ];
-    crate::register_module(
-        registry,
-        interner,
-        ferric_stdlib_meta::log::LOG_FNS,
-        bodies,
-    );
+    crate::register_module(registry, interner, ferric_stdlib_meta::log::LOG_FNS, bodies);
 }
 
 // ---------------------------------------------------------------------------

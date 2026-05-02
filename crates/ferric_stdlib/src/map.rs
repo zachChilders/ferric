@@ -413,12 +413,7 @@ pub fn register(registry: &mut NativeRegistry, interner: &mut Interner) {
         ("map_set", builtin_map_set),
         ("map_build", builtin_map_build),
     ];
-    crate::register_module(
-        registry,
-        interner,
-        ferric_stdlib_meta::map::MAP_FNS,
-        bodies,
-    );
+    crate::register_module(registry, interner, ferric_stdlib_meta::map::MAP_FNS, bodies);
 }
 
 // ============================================================================

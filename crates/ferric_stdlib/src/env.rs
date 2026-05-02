@@ -265,12 +265,7 @@ pub fn register(registry: &mut NativeRegistry, interner: &mut Interner) {
         ("env_temp_dir", builtin_env_temp_dir),
         ("env_exit", builtin_env_exit),
     ];
-    crate::register_module(
-        registry,
-        interner,
-        ferric_stdlib_meta::env::ENV_FNS,
-        bodies,
-    );
+    crate::register_module(registry, interner, ferric_stdlib_meta::env::ENV_FNS, bodies);
 }
 
 // ---------------------------------------------------------------------------

@@ -416,8 +416,14 @@ pub fn register(registry: &mut NativeRegistry, interner: &mut Interner) {
         ("encode_hex_decode", builtin_encode_hex_decode),
         ("encode_url_encode", builtin_encode_url_encode),
         ("encode_url_decode", builtin_encode_url_decode),
-        ("encode_url_encode_component", builtin_encode_url_encode_component),
-        ("encode_url_decode_component", builtin_encode_url_decode_component),
+        (
+            "encode_url_encode_component",
+            builtin_encode_url_encode_component,
+        ),
+        (
+            "encode_url_decode_component",
+            builtin_encode_url_decode_component,
+        ),
         ("encode_html_escape", builtin_encode_html_escape),
         ("encode_html_unescape", builtin_encode_html_unescape),
         ("encode_csv_row", builtin_encode_csv_row),

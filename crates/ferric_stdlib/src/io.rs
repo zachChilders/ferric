@@ -582,12 +582,7 @@ pub fn register(registry: &mut NativeRegistry, interner: &mut Interner) {
         ("eprintln", builtin_io_eprintln),
         ("read_line", crate::builtin_read_line),
     ];
-    crate::register_module(
-        registry,
-        interner,
-        ferric_stdlib_meta::io::IO_FNS,
-        bodies,
-    );
+    crate::register_module(registry, interner, ferric_stdlib_meta::io::IO_FNS, bodies);
 }
 
 // Silence dead_code on BufRead: not used directly but kept for any future

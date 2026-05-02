@@ -308,12 +308,7 @@ pub fn register(registry: &mut NativeRegistry, interner: &mut Interner) {
         ("float_to_str", crate::builtin_float_to_str),
         ("bool_to_str", crate::builtin_bool_to_str),
     ];
-    crate::register_module(
-        registry,
-        interner,
-        ferric_stdlib_meta::fmt::FMT_FNS,
-        bodies,
-    );
+    crate::register_module(registry, interner, ferric_stdlib_meta::fmt::FMT_FNS, bodies);
 }
 
 // ---------------------------------------------------------------------------

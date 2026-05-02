@@ -26,15 +26,27 @@ pub const BUILTIN_ENUMS: &[BuiltinEnum] = &[
     BuiltinEnum {
         name: "Option",
         variants: &[
-            BuiltinVariant { name: "Some", payload_arity: 1 },
-            BuiltinVariant { name: "None", payload_arity: 0 },
+            BuiltinVariant {
+                name: "Some",
+                payload_arity: 1,
+            },
+            BuiltinVariant {
+                name: "None",
+                payload_arity: 0,
+            },
         ],
     },
     BuiltinEnum {
         name: "Result",
         variants: &[
-            BuiltinVariant { name: "Ok", payload_arity: 1 },
-            BuiltinVariant { name: "Err", payload_arity: 1 },
+            BuiltinVariant {
+                name: "Ok",
+                payload_arity: 1,
+            },
+            BuiltinVariant {
+                name: "Err",
+                payload_arity: 1,
+            },
         ],
     },
 ];
