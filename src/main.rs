@@ -49,7 +49,7 @@ fn main() {
     }
 
     if args.len() >= 2 && args[1] == "init-ai" {
-        init_ai::run(&args[2..].to_vec());
+        init_ai::run(&args[2..]);
         return;
     }
 
