@@ -7,6 +7,9 @@
 //!
 //! `ferric_common::errors` exposes `.span()` and `.description()` on every
 //! error enum, so this handler stays out of the per-variant detail.
+//! Resolve and type errors also expose `.message(&Interner)` for the rich
+//! one-liner that includes parameter/field/type names — that's what gets
+//! shown in hovers and the Problems panel.
 
 use ferric_common::Span;
 use tower_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, NumberOrString, Position, Range};
@@ -63,7 +66,7 @@ pub fn publish(snapshot: &PipelineSnapshot) -> Vec<Diagnostic> {
             out.push(diag(
                 err.span(),
                 DiagnosticSeverity::ERROR,
-                err.description(),
+                err.message(&snapshot.interner),
                 "resolve",
                 li,
             ));
@@ -79,7 +82,7 @@ pub fn publish(snapshot: &PipelineSnapshot) -> Vec<Diagnostic> {
             out.push(diag(
                 err.span(),
                 DiagnosticSeverity::ERROR,
-                err.description(),
+                err.message(&snapshot.interner),
                 "type",
                 li,
             ));
@@ -177,6 +180,30 @@ mod tests {
         let diags = run("let x = 1\nlet y = \"oops");
         let d = diags.first().expect("at least one diag");
         assert_eq!(d.range.start.line, 1, "diag range: {:?}", d.range);
+    }
+
+    #[test]
+    fn missing_arg_message_names_the_parameter() {
+        // `io_file_size` is `fn(path: Str) -> Int` in the stdlib — calling it
+        // with no arguments must produce a resolve diagnostic that names the
+        // missing parameter, not just "missing required argument".
+        let diags = run("io_file_size()");
+        let resolve_diag = diags
+            .iter()
+            .find(|d| d.code == Some(NumberOrString::String("resolve".into())))
+            .expect("expected a resolve diagnostic");
+        assert!(
+            resolve_diag.message.contains('`'),
+            "resolve message should name the parameter in backticks, got {:?}",
+            resolve_diag.message
+        );
+        assert!(
+            resolve_diag
+                .message
+                .starts_with("missing required argument `"),
+            "got {:?}",
+            resolve_diag.message
+        );
     }
 
     #[test]

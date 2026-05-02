@@ -258,12 +258,7 @@ pub fn register(registry: &mut NativeRegistry, interner: &mut Interner) {
         ("set_filter", builtin_set_filter),
         ("set_map", builtin_set_map),
     ];
-    crate::register_module(
-        registry,
-        interner,
-        ferric_stdlib_meta::set::SET_FNS,
-        bodies,
-    );
+    crate::register_module(registry, interner, ferric_stdlib_meta::set::SET_FNS, bodies);
 }
 
 // ============================================================================

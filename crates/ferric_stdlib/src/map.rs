@@ -47,13 +47,6 @@ fn check_arg_count(args: &[NativeValue], expected: usize) -> Result<(), String> 
     }
 }
 
-fn expect_int(v: &NativeValue) -> Result<i64, String> {
-    match v {
-        NativeValue::Int(n) => Ok(*n),
-        other => Err(format!("expected int, got {other:?}")),
-    }
-}
-
 fn expect_list(v: &NativeValue) -> Result<&Vec<NativeValue>, String> {
     match v {
         NativeValue::List(xs) => Ok(xs),
@@ -420,12 +413,7 @@ pub fn register(registry: &mut NativeRegistry, interner: &mut Interner) {
         ("map_set", builtin_map_set),
         ("map_build", builtin_map_build),
     ];
-    crate::register_module(
-        registry,
-        interner,
-        ferric_stdlib_meta::map::MAP_FNS,
-        bodies,
-    );
+    crate::register_module(registry, interner, ferric_stdlib_meta::map::MAP_FNS, bodies);
 }
 
 // ============================================================================

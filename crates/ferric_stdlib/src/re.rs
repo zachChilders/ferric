@@ -378,12 +378,7 @@ pub fn register(registry: &mut NativeRegistry, interner: &mut Interner) {
         ("re_split", builtin_re_split),
         ("re_split_n", builtin_re_split_n),
     ];
-    crate::register_module(
-        registry,
-        interner,
-        ferric_stdlib_meta::re::RE_FNS,
-        bodies,
-    );
+    crate::register_module(registry, interner, ferric_stdlib_meta::re::RE_FNS, bodies);
 }
 
 // ---------------------------------------------------------------------------

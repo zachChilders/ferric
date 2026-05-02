@@ -3,7 +3,12 @@
     "displayName": "Ferric",
     "description": "Language support for the Ferric programming language",
     "version": "0.1.0",
+    "license": "MIT OR Apache-2.0",
     "publisher": "ferric",
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/zachChilders/ferric.git"
+    },
     "engines": { "vscode": "^1.75.0" },
     "categories": ["Programming Languages"],
     "main": "./client/extension.js",

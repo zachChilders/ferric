@@ -7,7 +7,7 @@
 
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 EXT_DIR="$REPO_ROOT/crates/ferric_lsp/vscode-extension"
 
 # The Cargo *package* is `ferric_lsp` (snake_case to match workspace style);

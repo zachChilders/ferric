@@ -258,7 +258,10 @@ pub fn register(registry: &mut NativeRegistry, interner: &mut Interner) {
         ("dotenv_load", builtin_dotenv_load),
         ("dotenv_load_path", builtin_dotenv_load_path),
         ("dotenv_load_into_env", builtin_dotenv_load_into_env),
-        ("dotenv_load_into_env_path", builtin_dotenv_load_into_env_path),
+        (
+            "dotenv_load_into_env_path",
+            builtin_dotenv_load_into_env_path,
+        ),
     ];
     crate::register_module(
         registry,
