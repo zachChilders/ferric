@@ -1,3 +1,5 @@
+mod init_ai;
+
 use ferric_async::lower_async;
 use ferric_common::{
     ExhaustivenessError, ExhaustivenessResult, Interner, LexResult, ManifestResult, ModuleResult,
@@ -46,6 +48,11 @@ fn main() {
         return;
     }
 
+    if args.len() >= 2 && args[1] == "init-ai" {
+        init_ai::run(&args[2..].to_vec());
+        return;
+    }
+
     if args.len() == 1 {
         // No arguments - start REPL
         run_repl();
@@ -53,10 +60,12 @@ fn main() {
         // One argument - run file
         run_file(&args[1]);
     } else {
-        eprintln!("Usage: ferric [file]");
+        eprintln!("Usage: ferric [command] [args]");
         eprintln!("  ferric                       Start interactive REPL");
         eprintln!("  ferric <file>                Run a Ferric source file");
         eprintln!("  ferric --dump-ast <file>     Print the parsed AST as JSON");
+        eprintln!("  ferric init-ai [target]      Install language reference for AI tools");
+        eprintln!("    targets: claude, cursor, copilot, all (default: auto-detect)");
         process::exit(2);
     }
 }
