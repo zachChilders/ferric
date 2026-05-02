@@ -3,7 +3,7 @@
 //! CRITICAL: Every error type MUST carry a Span field (Rule 5).
 //! This enables precise error reporting and future renderer replacement.
 
-use crate::{Span, Symbol, TokenKind, Ty, TyVar};
+use crate::{Interner, Span, Symbol, TokenKind, Ty, TyVar};
 use serde::{Deserialize, Serialize};
 
 /// Errors that can occur during lexing.
@@ -336,6 +336,80 @@ impl ResolveError {
             }
         }
     }
+
+    /// Returns a rich, user-facing message that resolves any `Symbol` fields
+    /// through `interner`. This is the same one-liner the diagnostics renderer
+    /// uses as its top-level message and is what the LSP shows in hovers.
+    pub fn message(&self, interner: &Interner) -> String {
+        let name = |s: Symbol| interner.resolve(s).to_string();
+        match self {
+            ResolveError::UndefinedVariable { name: n, .. } => {
+                format!("undefined variable `{}`", name(*n))
+            }
+            ResolveError::DuplicateDefinition { name: n, .. } => {
+                format!("duplicate definition of `{}`", name(*n))
+            }
+            ResolveError::AssignToImmutable { name: n, .. } => {
+                format!("cannot assign to immutable variable `{}`", name(*n))
+            }
+            ResolveError::BreakOutsideLoop { .. } => "`break` used outside of a loop".to_string(),
+            ResolveError::ContinueOutsideLoop { .. } => {
+                "`continue` used outside of a loop".to_string()
+            }
+            ResolveError::ReturnOutsideFn { .. } => {
+                "`return` used outside of a function".to_string()
+            }
+            ResolveError::MissingArg { param, .. } => {
+                format!("missing required argument `{}`", name(*param))
+            }
+            ResolveError::UnknownArg { name: n, .. } => {
+                format!("unknown argument name `{}`", name(*n))
+            }
+            ResolveError::RequireSetArity { .. } => {
+                "the `set:` closure of a require must take zero parameters".to_string()
+            }
+            ResolveError::UndefinedType { name: n, .. } => {
+                format!("undefined type `{}`", name(*n))
+            }
+            ResolveError::UnknownField {
+                struct_name, field, ..
+            } => format!(
+                "struct `{}` has no field `{}`",
+                name(*struct_name),
+                name(*field)
+            ),
+            ResolveError::MissingField {
+                struct_name, field, ..
+            } => format!(
+                "missing field `{}` in struct `{}` literal",
+                name(*field),
+                name(*struct_name)
+            ),
+            ResolveError::UnknownVariant {
+                enum_name, variant, ..
+            } => format!(
+                "enum `{}` has no variant `{}`",
+                name(*enum_name),
+                name(*variant)
+            ),
+            ResolveError::VariantArity {
+                enum_name,
+                variant,
+                expected,
+                found,
+                ..
+            } => format!(
+                "variant `{}::{}` expects {} field(s), got {}",
+                name(*enum_name),
+                name(*variant),
+                expected,
+                found
+            ),
+            ResolveError::PrivateImport {
+                name: n, path, ..
+            } => format!("`{}` is not exported from \"{}\"", name(*n), path),
+        }
+    }
 }
 
 /// Errors that can occur during type checking.
@@ -631,6 +705,149 @@ impl TypeError {
                     found.description()
                 )
             }
+        }
+    }
+
+    /// Returns a rich, user-facing message that resolves any `Symbol` fields
+    /// through `interner`. Mirrors the top-level message string the diagnostics
+    /// renderer produces, and is what the LSP shows in hovers.
+    pub fn message(&self, interner: &Interner) -> String {
+        let nm = |s: Symbol| interner.resolve(s).to_string();
+        match self {
+            TypeError::Mismatch {
+                expected, found, ..
+            } => format!(
+                "type mismatch: expected {}, found {}",
+                expected.description(),
+                found.description()
+            ),
+            TypeError::IncompatibleTypes {
+                operation,
+                left,
+                right,
+                ..
+            } => format!(
+                "operator `{}` does not apply to `{}` and `{}`",
+                operation,
+                left.description(),
+                right.description()
+            ),
+            TypeError::RequireNonBool { found, .. } => format!(
+                "require condition must be Bool, found {}",
+                found.description()
+            ),
+            TypeError::RequireMessageNonStr { found, .. } => {
+                format!("require message must be Str, found {}", found.description())
+            }
+            TypeError::RequireSetType { found, .. } => format!(
+                "require `set:` closure must have type fn() -> (), found {}",
+                found.description()
+            ),
+            TypeError::ShellInterpType { found, .. } => format!(
+                "shell interpolation must be Str or Int, found {}",
+                found.description()
+            ),
+            TypeError::InfiniteType { var, ty, .. } => format!(
+                "infinite type: ?T{} occurs in {}",
+                var.0,
+                ty.description()
+            ),
+            TypeError::CannotInfer { .. } => {
+                "type annotations needed: cannot infer type".to_string()
+            }
+            TypeError::WrongArgumentCount {
+                expected, found, ..
+            } => format!("expected {expected} argument(s), found {found}"),
+            TypeError::NotCallable { ty, .. } => {
+                format!("type `{}` is not callable", ty.description())
+            }
+            TypeError::NotAStruct { ty, .. } => {
+                format!("type `{}` is not a struct", ty.description())
+            }
+            TypeError::NoSuchField { ty, field, .. } => format!(
+                "type `{}` has no field `{}`",
+                ty.description(),
+                nm(*field)
+            ),
+            TypeError::FieldTypeMismatch {
+                struct_name,
+                field,
+                expected,
+                found,
+                ..
+            } => format!(
+                "field `{}::{}` expects {}, found {}",
+                nm(*struct_name),
+                nm(*field),
+                expected.description(),
+                found.description()
+            ),
+            TypeError::NoSuchMethod { ty, method, .. } => format!(
+                "type `{}` has no method `{}`",
+                ty.description(),
+                nm(*method)
+            ),
+            TypeError::TraitBoundNotSatisfied {
+                type_param,
+                bound,
+                ty,
+                ..
+            } => format!(
+                "the trait bound `{}: {}` is not satisfied (got `{}`)",
+                nm(*type_param),
+                nm(*bound),
+                ty.description()
+            ),
+            TypeError::UnknownTrait { name, .. } => {
+                format!("unknown trait `{}`", nm(*name))
+            }
+            TypeError::ImplOfUnknownTrait { trait_name, .. } => {
+                format!("impl of unknown trait `{}`", nm(*trait_name))
+            }
+            TypeError::ImplMethodSignatureMismatch {
+                trait_name, method, ..
+            } => format!(
+                "impl method `{}::{}` does not match the trait signature",
+                nm(*trait_name),
+                nm(*method)
+            ),
+            TypeError::OpaqueTypeMismatch {
+                expected, found, ..
+            } => format!(
+                "type mismatch: expected `{}`, found `{}`",
+                expected.description(),
+                found.description()
+            ),
+            TypeError::InvalidCast { from, to, .. } => format!(
+                "cannot cast `{}` to `{}`",
+                from.description(),
+                to.description()
+            ),
+            TypeError::AwaitOutsideAsync { .. } => {
+                "`await` is only valid inside an `async fn` or `async { ... }` block".to_string()
+            }
+            TypeError::AwaitOnNonAsync { found, .. } => format!(
+                "`await` requires an `Async<T>` operand, found `{}`",
+                found.description()
+            ),
+            TypeError::AsyncBlockInSync { .. } => {
+                "`async { ... }` produces an `Async<T>` value that cannot be used here".to_string()
+            }
+            TypeError::SpawnNonAsync { found, .. } => format!(
+                "`spawn` requires an `Async<T>` argument, found `{}`",
+                found.description()
+            ),
+            TypeError::AsyncNotAwaited {
+                found, expected, ..
+            } => format!(
+                "this expression is `{}` but `{}` is expected",
+                found.description(),
+                expected.description()
+            ),
+            TypeError::JoinNonHandle { found, .. } => format!(
+                "`join` requires `Handle<T>` arguments, found `{}`",
+                found.description()
+            ),
         }
     }
 }
