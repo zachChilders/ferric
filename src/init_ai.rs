@@ -50,10 +50,9 @@ enum Target {
 /// Returns all three if nothing is detected (first-time setup).
 fn detect_targets() -> Vec<Target> {
     let has_claude = Path::new("CLAUDE.md").exists() || Path::new(".claude").is_dir();
-    let has_cursor =
-        Path::new(".cursor").is_dir() || Path::new(".cursorrules").exists();
-    let has_copilot = Path::new(".github/copilot-instructions.md").exists()
-        || Path::new(".github").is_dir();
+    let has_cursor = Path::new(".cursor").is_dir() || Path::new(".cursorrules").exists();
+    let has_copilot =
+        Path::new(".github/copilot-instructions.md").exists() || Path::new(".github").is_dir();
 
     let mut targets = Vec::new();
     if has_claude {
@@ -123,9 +122,8 @@ fn setup_claude() {
             Ok(existing) => {
                 // Append an import section so existing project instructions are
                 // preserved and the language reference is clearly separated.
-                let updated = format!(
-                    "{existing}\n## Ferric language reference\n\n{import_line}\n"
-                );
+                let updated =
+                    format!("{existing}\n## Ferric language reference\n\n{import_line}\n");
                 if let Err(e) = fs::write(claude_md, updated) {
                     eprintln!("claude: failed to update CLAUDE.md: {e}");
                 } else {
