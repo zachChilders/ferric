@@ -13,6 +13,7 @@ use ferric_common::{Ty, TyVar, TypeScheme};
 
 pub mod async_intrinsics;
 pub mod builtin_enums;
+pub mod coercion;
 
 // One module per `ferric_stdlib` module, mirroring the layout. Each holds a
 // `pub const FOO_FNS: &[FunctionMeta]`.

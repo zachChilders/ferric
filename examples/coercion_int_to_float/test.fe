@@ -1,0 +1,12 @@
+// Coercion task 4: implicit `Int → Float` coercion at a call argument.
+//
+// `add_floats` takes two `Float`s. Passing the integer literal `1` for `a`
+// triggers the built-in `impl To<Float> for Int { fn to(self) -> Float }`
+// stdlib coercion. The compiler inserts a hidden `to()` call before the
+// argument is pushed; the user code stays unchanged.
+fn add_floats(a: Float, b: Float) -> Float {
+    a + b
+}
+
+let result = add_floats(a: 1, b: 2.5)
+println(s: float_to_str(n: result))

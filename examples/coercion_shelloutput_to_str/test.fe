@@ -1,0 +1,13 @@
+// Coercion task 4: implicit `ShellOutput → Str` coercion at a call argument.
+//
+// `echo` takes a `Str`. The variable `output` has type `ShellOutput` (the
+// result of a `$ ...` shell expression). Passing it directly fires the
+// built-in `impl To<Str> for ShellOutput { fn to(self) -> Str { stdout } }`
+// stdlib coercion — the compiler emits the hidden `to()` call so `echo`
+// receives the captured stdout as a `Str`.
+fn echo(s: Str) {
+    println(s: s)
+}
+
+let output = $ printf hello
+echo(s: output)

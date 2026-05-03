@@ -12,7 +12,7 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::rc::Rc;
 
-use ferric_common::{Interner, ShellOutput, Symbol, TypeAnnotation};
+use ferric_common::{Interner, ResolveResult, ShellOutput, Symbol, TraitRegistry, TypeAnnotation};
 
 // Public modules — each contributes a `register()` entry point.
 pub mod bytes;
@@ -582,6 +582,38 @@ pub(crate) fn builtin_bool_to_str(args: &[NativeValue]) -> Result<NativeValue, S
     Ok(NativeValue::Str(b.to_string()))
 }
 
+// ---------------------------------------------------------------------------
+// Built-in `To<T>` impl method bodies (Coercion task 2).
+//
+// The methods are registered as ordinary natives so they get resolver-allocated
+// `DefId`s and can be dispatched through the existing `Value::NativeFn` path.
+// They take exactly one argument (the receiver `self`).
+// ---------------------------------------------------------------------------
+
+/// Body of `impl To<Float> for Int { fn to(self) -> Float { ... } }`.
+pub(crate) fn builtin_to_int_to_float(args: &[NativeValue]) -> Result<NativeValue, String> {
+    check_arg_count(args, 1)?;
+    let n = expect_int(&args[0])?;
+    Ok(NativeValue::Float(n as f64))
+}
+
+/// Body of `impl To<Str> for ShellOutput { fn to(self) -> Str { self.stdout } }`.
+pub(crate) fn builtin_to_shellout_to_str(args: &[NativeValue]) -> Result<NativeValue, String> {
+    check_arg_count(args, 1)?;
+    match &args[0] {
+        NativeValue::ShellOutput(out) => Ok(NativeValue::Str(out.stdout.clone())),
+        other => Err(format!("expected ShellOutput, got {other:?}")),
+    }
+}
+
+// The To-coercion constants live in `ferric_stdlib_meta::coercion` so the
+// LSP — which doesn't link `ferric_stdlib` — can wire the same `To<T>`
+// trait into its in-memory `TraitRegistry`. Re-exported here for back-compat
+// with downstream callers that import them from `ferric_stdlib`.
+pub use ferric_stdlib_meta::coercion::{
+    TO_INT_TO_FLOAT_NATIVE, TO_METHOD_NAME, TO_SHELLOUT_TO_STR_NATIVE, TO_TRAIT_NAME,
+};
+
 /// Returns the captured stdout of a `ShellOutput`.
 pub(crate) fn builtin_shell_stdout(args: &[NativeValue]) -> Result<NativeValue, String> {
     check_arg_count(args, 1)?;
@@ -813,6 +845,38 @@ pub fn register_stdlib(registry: &mut NativeRegistry, interner: &mut ferric_comm
     // from the meta tables.
     let shell_exec_sym = interner.intern(SHELL_EXEC_NATIVE);
     registry.register(shell_exec_sym, builtin_shell_exec);
+
+    // Built-in `To<T>` impl method bodies (Coercion task 2). Registered as
+    // single-argument natives so they participate in the regular resolver
+    // DefId allocation; the trait registry maps `To` impl methods to their
+    // DefIds in `register_builtin_traits` below.
+    registry.register_named(
+        interner,
+        TO_INT_TO_FLOAT_NATIVE,
+        &["self"],
+        builtin_to_int_to_float,
+    );
+    registry.register_named(
+        interner,
+        TO_SHELLOUT_TO_STR_NATIVE,
+        &["self"],
+        builtin_to_shellout_to_str,
+    );
+}
+
+/// Registers the built-in `To<T>` trait and its two stdlib impls into a
+/// `TraitRegistry`. Must be called after the resolver has run, so the
+/// `to`-method `DefId`s (allocated when `register_stdlib` registered the
+/// underlying natives) are available via `resolve.find_def_by_name`.
+///
+/// Returns the seeded registry. Pass it as the `seeded` argument to
+/// `ferric_traits::build_registry_seeded`.
+///
+/// The actual seeding lives in `ferric_stdlib_meta::coercion::seed_to_trait`
+/// so the LSP — which doesn't depend on this crate — can build the same
+/// registry shape from its own pipeline.
+pub fn register_builtin_traits(interner: &mut Interner, resolve: &ResolveResult) -> TraitRegistry {
+    ferric_stdlib_meta::coercion::seed_to_trait(interner, resolve)
 }
 
 // ----------------------------------------------------------------------------
@@ -918,6 +982,11 @@ mod tests {
         // `__shell_exec` is registered without params and excluded from
         // the meta tables on purpose.
         registered.remove(SHELL_EXEC_NATIVE);
+        // Built-in `To<T>` impl method bodies (Coercion task 2) are
+        // dispatched only via trait registry lookup — they have no Ferric
+        // surface name and are intentionally absent from the meta tables.
+        registered.remove(TO_INT_TO_FLOAT_NATIVE);
+        registered.remove(TO_SHELLOUT_TO_STR_NATIVE);
 
         // Async intrinsics live in meta but the VM dispatches them — they
         // don't appear in the NativeRegistry. Filter them out before the

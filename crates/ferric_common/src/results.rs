@@ -168,6 +168,16 @@ impl ResolveResult {
     pub fn def(&self, id: DefId) -> Option<&DefInfo> {
         self.defs.get(&id)
     }
+
+    /// Reverse lookup: returns the `DefId` of the first definition recorded
+    /// under `name`. Used by stdlib to wire built-in trait impls to the
+    /// internal natives registered before resolver runs.
+    pub fn find_def_by_name(&self, name: crate::Symbol) -> Option<DefId> {
+        self.defs
+            .iter()
+            .find(|(_, info)| info.name == name)
+            .map(|(id, _)| *id)
+    }
 }
 
 /// Result of the exhaustiveness checking stage.
@@ -197,6 +207,13 @@ pub struct TypeResult {
     /// For each `MethodCall` NodeId, the `DefId` of the impl method to invoke.
     /// The compiler reads this to lower a method call to a regular function call.
     pub method_dispatch: HashMap<NodeId, DefId>,
+    /// For each call-argument expression that was implicitly coerced via the
+    /// `To<T>` trait, the `DefId` of the `to` impl method to invoke. The
+    /// compiler reads this to insert a one-hop coercion call before passing
+    /// the argument to the outer call. `#[serde(default)]` keeps older
+    /// serialised `TypeResult` values loadable.
+    #[serde(default)]
+    pub coercions: HashMap<NodeId, DefId>,
     /// Any errors encountered during type checking
     pub errors: Vec<TypeError>,
 }
@@ -207,6 +224,7 @@ impl TypeResult {
         Self {
             node_types,
             method_dispatch: HashMap::new(),
+            coercions: HashMap::new(),
             errors,
         }
     }

@@ -3,7 +3,7 @@
 //! CRITICAL: Every error type MUST carry a Span field (Rule 5).
 //! This enables precise error reporting and future renderer replacement.
 
-use crate::{EffectRef, Interner, Span, Symbol, TokenKind, Ty, TyVar};
+use crate::{DefId, EffectRef, Interner, Span, Symbol, TokenKind, Ty, TyVar};
 use serde::{Deserialize, Serialize};
 
 /// Errors that can occur during lexing.
@@ -326,6 +326,20 @@ pub enum ResolveError {
         path: String,
         span: Span,
     },
+    /// A trait `impl` violated the orphan rule: neither the source type nor
+    /// the target type parameter is owned by the crate that declared the impl.
+    /// Coercion task 1; emitted by `ferric_traits` orphan-rule enforcement
+    /// added in coercion task 2.
+    OrphanImpl {
+        /// The trait being implemented (e.g. `To`).
+        trait_name: Symbol,
+        /// The source type the impl is `for`.
+        source: Ty,
+        /// The trait's type parameter (e.g. `T` in `To<T>`).
+        target: Ty,
+        /// Location of the offending `impl` block.
+        span: Span,
+    },
 }
 
 impl ResolveError {
@@ -347,6 +361,7 @@ impl ResolveError {
             ResolveError::UnknownVariant { span, .. } => *span,
             ResolveError::VariantArity { span, .. } => *span,
             ResolveError::PrivateImport { span, .. } => *span,
+            ResolveError::OrphanImpl { span, .. } => *span,
         }
     }
 
@@ -376,6 +391,7 @@ impl ResolveError {
             ResolveError::PrivateImport { path, .. } => {
                 format!("imported name is not exported from \"{path}\"")
             }
+            ResolveError::OrphanImpl { .. } => "orphan trait impl".to_string(),
         }
     }
 
@@ -450,6 +466,19 @@ impl ResolveError {
             ResolveError::PrivateImport { name: n, path, .. } => {
                 format!("`{}` is not exported from \"{}\"", name(*n), path)
             }
+            ResolveError::OrphanImpl {
+                trait_name,
+                source,
+                target,
+                ..
+            } => format!(
+                "orphan impl: `impl {}<{}> for {}` — neither `{}` nor `{}` is owned by this crate",
+                name(*trait_name),
+                target.description(),
+                source.description(),
+                source.description(),
+                target.description(),
+            ),
         }
     }
 }
@@ -593,6 +622,21 @@ pub enum TypeError {
     /// `resume k with v` had a value whose type does not match the declared
     /// `EffectOp::resume_type` of the handled operation. M9.
     ResumeTypeMismatch { expected: Ty, found: Ty, span: Span },
+    /// More than one `To<T>` impl was eligible to coerce `found` into
+    /// `expected` at a call argument position. The implicit-coercion
+    /// machinery refuses to silently pick one — the user must resolve the
+    /// ambiguity by writing the cast explicitly. Coercion task 1.
+    AmbiguousCoercion {
+        /// The type of the argument expression as written.
+        found: Ty,
+        /// The parameter type the call site expected.
+        expected: Ty,
+        /// `DefId`s of the conflicting `To` impl methods. The renderer can
+        /// resolve these to source locations.
+        candidates: Vec<DefId>,
+        /// Location of the offending argument expression.
+        span: Span,
+    },
 }
 
 impl TypeError {
@@ -628,6 +672,7 @@ impl TypeError {
             TypeError::UnhandledEffect { span, .. } => *span,
             TypeError::EffectRowMismatch { span, .. } => *span,
             TypeError::ResumeTypeMismatch { span, .. } => *span,
+            TypeError::AmbiguousCoercion { span, .. } => *span,
         }
     }
 
@@ -780,6 +825,7 @@ impl TypeError {
                 expected.description(),
                 found.description()
             ),
+            TypeError::AmbiguousCoercion { .. } => "ambiguous implicit coercion".to_string(),
         }
     }
 
@@ -935,6 +981,17 @@ impl TypeError {
                 "`resume` value type mismatch: expected `{}`, found `{}`",
                 expected.description(),
                 found.description()
+            ),
+            TypeError::AmbiguousCoercion {
+                found,
+                expected,
+                candidates,
+                ..
+            } => format!(
+                "ambiguous implicit coercion: cannot decide which `To<{}>` impl to apply to value of type `{}` ({} candidates)",
+                expected.description(),
+                found.description(),
+                candidates.len(),
             ),
         }
     }
