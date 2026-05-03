@@ -45,7 +45,7 @@ let host = handle {
 
 ## Async/Await with Real Parallelism
 
-`async fn`, `async { ... }`, and postfix `.await` are first class (desugared to `Eff<[Async], T>` at parse time). `spawn` moves a deferred async value onto a worker thread; `join` waits on two handles; `block_on` runs an `Async<T>` from sync code. The wall-clock parallelism test in `examples/m8_async_parallel/` proves two 250 ms `sleep` tasks finish in well under 500 ms.
+`async fn`, `async { ... }`, and prefix `await expr` are first class (desugared to `Eff<[Async], T>` at parse time). `spawn` moves a deferred async value onto a worker thread; `join` waits on two handles; `block_on` runs an `Async<T>` from sync code. The wall-clock parallelism test in `examples/m8_async_parallel/` proves two 250 ms `sleep` tasks finish in well under 500 ms.
 
 ## Forever Versions
 

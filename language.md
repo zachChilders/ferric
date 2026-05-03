@@ -596,7 +596,7 @@ async fn fetch(url: Str) -> Str { url }
 
 ### Await
 
-`.await` (postfix) inside an `async fn` or `async { }` block extracts the `T` from `Async<T>`.
+`await expr` (prefix) inside an `async fn` or `async { }` block extracts the `T` from `Async<T>`.
 
 ```ferric
 async fn pipeline() -> Str {
@@ -604,6 +604,10 @@ async fn pipeline() -> Str {
     let b = await step2(x: a)
     int_to_str(n: b)
 }
+
+// await binds like a prefix unary operator — use parens to chain:
+// let s = (await fetch(url: u)).body
+
 ```
 
 `await` is only legal inside `async fn` bodies or `async { ... }` blocks.
@@ -614,6 +618,7 @@ async fn pipeline() -> Str {
 
 ```ferric
 let task: Async<Str> = async { await fetch(url: "hello") }
+
 ```
 
 ### Block_on
