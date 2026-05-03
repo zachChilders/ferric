@@ -1,6 +1,6 @@
 # Ferric Language Reference
 
-Ferric is a statically-typed, expression-oriented scripting language with first-class shell integration, async/await, and a rich standard library. This document describes the complete language as implemented.
+Ferric is a statically-typed, expression-oriented scripting language with first-class shell integration, algebraic effects, async/await (via effects desugaring), generators, and a rich standard library. This document describes the complete language as implemented.
 
 ---
 
@@ -18,10 +18,12 @@ Ferric is a statically-typed, expression-oriented scripting language with first-
 10. [Traits](#traits)
 11. [Shell Integration](#shell-integration)
 12. [Require Assertions](#require-assertions)
-13. [Async/Await](#asyncawait)
-14. [Modules](#modules)
-15. [Type Aliases](#type-aliases)
-16. [Standard Library](#standard-library)
+13. [Algebraic Effects](#algebraic-effects)
+14. [Async/Await](#asyncawait)
+15. [Generators](#generators)
+16. [Modules](#modules)
+17. [Type Aliases](#type-aliases)
+18. [Standard Library](#standard-library)
 
 ---
 
@@ -66,7 +68,8 @@ println(s: message)
 | `(T, U)`         | Tuple of types `T` and `U`             |
 | `Option<T>`      | Built-in: `Option::Some(T)` or `Option::None` |
 | `Result<T, E>`   | Built-in: `Result::Ok(T)` or `Result::Err(E)` |
-| `Async<T>`       | A deferred async computation           |
+| `Eff<[E...], T>` | A computation that may perform effects `E...` and returns `T` |
+| `Async<T>`       | Sugar for `Eff<[Async], T>` — a deferred async computation |
 | `Handle<T>`      | A spawned task handle                  |
 | `ShellOutput`    | Result of a `$` shell expression       |
 | `Json`           | JSON value (stdlib opaque type)        |
@@ -483,11 +486,109 @@ require(warn) y > 0, "y should be positive", set: || { y = -2 }
 
 ---
 
+## Algebraic Effects
+
+Ferric has a built-in algebraic effects system. Effects are first-class, typed, and support one-shot resumable continuations.
+
+### Effect declarations
+
+An `effect` block declares a named effect and its operations:
+
+```ferric
+effect Config {
+    Get(key: Str) -> Str,
+    Set(key: Str, val: Str) -> Unit,
+}
+
+effect Log {
+    Write(msg: Str) -> Unit,
+}
+```
+
+Each operation signature is `OpName(params...) -> ResumeType`. The resume type is the value that `resume` supplies back into the `perform` expression.
+
+### Perform
+
+`perform EffectName::OpName(args...)` suspends the current computation and dispatches to the nearest enclosing handler for that effect:
+
+```ferric
+fn read_config(key: Str) -> Str {
+    perform Config::Get(key: key)
+}
+```
+
+The type of a `perform` expression is the operation's resume type.
+
+### Handle / with
+
+`handle { body } with { clauses... }` installs a handler for one or more effect operations:
+
+```ferric
+let value = handle {
+    read_config(key: "db.host")
+} with {
+    Config::Get(key) => resume k with lookup(key: key),
+    Config::Set(key, val) => {
+        store(key: key, val: val)
+        resume k with ()
+    },
+}
+```
+
+Each clause matches an operation by name and binds its arguments. `k` is the captured continuation.
+
+### Resume
+
+`resume k with value` resumes the continuation `k` with the given value. The result is the value the `handle` block produces.
+
+Continuations are **one-shot**: resuming the same continuation twice is a runtime error (`RuntimeError::ResumedTwice`).
+
+### Effect-row types
+
+Functions that perform effects carry them in their return type:
+
+```ferric
+fn fetch_host() -> Eff<[Config], Str> {
+    perform Config::Get(key: "db.host")
+}
+```
+
+The effect row `[Config]` is inferred automatically — explicit annotation is optional. A function with an empty row `Eff<[], T>` is equivalent to a plain `T` return.
+
+### Full dependency-injection example
+
+```ferric
+effect Config {
+    Get(key: Str) -> Str,
+}
+
+fn app() -> Str {
+    let host = perform Config::Get(key: "db.host")
+    let port = perform Config::Get(key: "db.port")
+    host + ":" + port
+}
+
+// Inject a test config
+let conn = handle {
+    app()
+} with {
+    Config::Get(key) =>
+        if key == "db.host" { resume k with "localhost" }
+        else { resume k with "5432" },
+}
+
+println(s: conn)   // localhost:5432
+```
+
+---
+
 ## Async/Await
+
+Async/await is syntactic sugar over the algebraic effects system. `async fn` desugars to a function returning `Eff<[Async], T>`, and `.await` desugars to `perform Async::Suspend`. You never write the effect mechanics by hand — the desugaring is transparent.
 
 ### Async functions
 
-`async fn` returns `Async<T>` instead of `T`. The body is not executed until the value is awaited or spawned.
+`async fn` returns `Async<T>` (i.e. `Eff<[Async], T>`) instead of `T`. The body is not executed until the value is awaited or spawned.
 
 ```ferric
 async fn fetch(url: Str) -> Str { url }
@@ -555,6 +656,43 @@ async fn delayed() -> Int {
 | `sleep(ms: Int) -> Async<Unit>`                  | Non-blocking delay                     |
 | `block_on(task: Async<T>) -> T`                  | Drive async from sync context          |
 | `shell_run_async(cmd: Str) -> Async<ShellOutput>`| Non-blocking shell execution           |
+
+---
+
+## Generators
+
+Generators are syntactic sugar over the effects system. A `gen fn` desugars to a function returning `Eff<[Gen<T>], Unit>`, and `yield` desugars to `perform Gen::Yield`. Like async/await, the desugaring is fully transparent.
+
+### Generator functions
+
+```ferric
+gen fn integers_from(start: Int) {
+    let mut n = start
+    loop {
+        yield n
+        n = n + 1
+    }
+}
+```
+
+A `gen fn` implicitly returns `Unit`. The `yield` expression suspends the generator and sends a value to the consumer.
+
+### Consuming a generator
+
+Generators are consumed via `handle ... with` or through stdlib helpers:
+
+```ferric
+let gen = integers_from(start: 1)
+
+let first_five = handle {
+    gen
+} with {
+    Gen::Yield(val) => {
+        collect(val: val)
+        resume k with ()
+    },
+}
+```
 
 ---
 
