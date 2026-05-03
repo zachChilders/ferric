@@ -4,6 +4,7 @@ use ferric_common::{
     ParseResult, ResolveResult, Symbol, TypeResult,
 };
 use ferric_diagnostics::Renderer;
+use ferric_effects::lower_effects;
 use ferric_exhaust::check_exhaustiveness;
 use ferric_infer::typecheck;
 use ferric_lexer::lex;
@@ -73,6 +74,7 @@ fn dump_ast(filename: &str) {
 
     let mut interner = Interner::new();
     let lex_result = lex(&source, &mut interner);
+    ferric_parser::pre_intern_desugar_names(&mut interner);
     let parse_result = parse_with_interner(&lex_result, &interner);
 
     match ferric_common::ast_to_json(&parse_result) {
@@ -105,7 +107,9 @@ fn run_file(filename: &str) {
     // Lex
     let lex_result = lex(&source, &mut interner);
 
-    // Parse
+    // Parse — pre-intern desugar names so the parser can build effect
+    // AST nodes with stable `Symbol` identities.
+    ferric_parser::pre_intern_desugar_names(&mut interner);
     let parse_result = parse_with_interner(&lex_result, &interner);
 
     // M7: load manifest (script mode if absent), then resolve imports.
@@ -172,9 +176,34 @@ fn run_file(filename: &str) {
         }
     }
 
+    // M9 Task 4: run the effects analysis pass alongside lower_async.
+    // For pure M1–M7 sync programs this is a no-op (no effect AST nodes
+    // anywhere). For programs that use `perform`/`handle`/`resume` (or
+    // their `await`/`yield` desugarings), it assigns numeric tags the
+    // compiler embeds into `Op::Perform(effect_tag, op_tag, arg_count)`.
+    let effect_result = lower_effects(&async_result.ast, &type_result);
+    if !effect_result.errors.is_empty() {
+        let renderer = Renderer::with_interner(source.clone(), &interner);
+        for err in &effect_result.errors {
+            eprint!("{}", renderer.render_effect_error(err));
+        }
+        process::exit(1);
+    }
+    if !effect_result.warnings.is_empty() {
+        let renderer = Renderer::with_interner(source.clone(), &interner);
+        for warn in &effect_result.warnings {
+            eprint!("{}", renderer.render_effect_warning(warn));
+        }
+    }
+
     // Compile to bytecode.
-    let program =
-        ferric_compiler::compile(&async_result.ast, &resolve_result, &type_result, &interner);
+    let program = ferric_compiler::compile_with_effects(
+        &effect_result.ast,
+        &resolve_result,
+        &type_result,
+        &interner,
+        &effect_result.tags,
+    );
 
     // Create VM
     let mut vm: Box<dyn Executor> = Box::new(BytecodeVM::new());
@@ -341,8 +370,29 @@ fn run_session(source: &str) -> Result<(), String> {
         eprint!("{}", r.render_async_warning(warn));
     }
 
-    let program =
-        ferric_compiler::compile(&async_result.ast, &resolve_result, &type_result, &interner);
+    // M9 Task 4: effects analysis pass. See `run_file` for details.
+    let effect_result = lower_effects(&async_result.ast, &type_result);
+    if !effect_result.errors.is_empty() {
+        let r = Renderer::with_interner(source.to_string(), &interner);
+        return Err(effect_result
+            .errors
+            .iter()
+            .map(|e| r.render_effect_error(e))
+            .collect::<Vec<_>>()
+            .join("\n"));
+    }
+    for warn in &effect_result.warnings {
+        let r = Renderer::with_interner(source.to_string(), &interner);
+        eprint!("{}", r.render_effect_warning(warn));
+    }
+
+    let program = ferric_compiler::compile_with_effects(
+        &effect_result.ast,
+        &resolve_result,
+        &type_result,
+        &interner,
+        &effect_result.tags,
+    );
     let mut vm: Box<dyn Executor> = Box::new(BytecodeVM::new());
     match vm.run(program, natives, &interner) {
         Ok(value) => {
@@ -377,6 +427,7 @@ fn print_repl_value(value: &Value) {
         Value::Closure { .. } => println!("<closure>"),
         Value::Async(inner) => println!("Async({inner:?})"),
         Value::Handle(id) => println!("Handle({id})"),
+        Value::Continuation(id) => println!("Continuation({id})"),
     }
 }
 

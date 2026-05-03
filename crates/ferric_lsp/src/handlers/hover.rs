@@ -99,4 +99,36 @@ mod tests {
         assert_eq!(r.end.line, 1);
         assert_eq!(r.end.character, 1);
     }
+
+    /// M9 effect AST nodes (`Expr::Perform`, `Expr::Handle`, `Expr::Resume`)
+    /// must not panic the hover handler — `find_ident_at_byte` ignores them
+    /// (they're not `Expr::Variable`), but a hover *inside* their bodies on
+    /// an actual variable should still return the variable's hover.
+    #[test]
+    fn hover_inside_perform_args_resolves_argument_variable() {
+        // `let key = "db.host"\nperform Config::Get(key: key)`
+        // Cursor on the trailing `key` identifier (the argument value).
+        let src = "effect Config { Get(key: Str) -> Str, }\nfn f() -> Str { let key = \"db.host\"\nperform Config::Get(key: key) }";
+        // Locate the trailing `key` — it's the second `key` *after* `(key: `.
+        let trailing = src.rfind("key)").expect("trailing `key)` in fixture");
+        let h = hover_at(src, trailing as u32).expect("hover should resolve argument");
+        let body = body(&h);
+        assert!(
+            body.contains("**key**"),
+            "hover should mention the argument variable `key`, got {body:?}"
+        );
+    }
+
+    #[test]
+    fn hover_inside_handle_body_does_not_panic() {
+        // The handler clause body has a `resume k with v` site. Cursor on
+        // the `v` identifier (a parameter introduced by the clause). Even
+        // if the LSP can't render a meaningful type for `v` yet, hover
+        // must not panic on the surrounding `Expr::Handle` / `Expr::Resume`.
+        let src = "effect E { Op(x: Int) -> Int, }\nfn f() -> Int { handle { perform E::Op(x: 1) } with { E::Op(v) => resume k with v } }";
+        // Find the `v` after `with `. Use the unique `with v` substring.
+        let idx = src.find("with v").expect("fixture contains `with v`");
+        let v_byte = (idx + "with ".len()) as u32;
+        let _ = hover_at(src, v_byte); // must not panic
+    }
 }

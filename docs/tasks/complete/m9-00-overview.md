@@ -1,9 +1,12 @@
 # M9 — Algebraic Effects System: Overview
 
 > **Prerequisite:** M8 (async/await) must be complete and all tests passing before
-> starting this milestone. M9 replaces `ferric_async` wholesale. The new crate
-> `ferric_effects` slots into the same pipeline position and produces the same output
-> type. `main.rs` changes are one import swap and one call site change — nothing else.
+> starting this milestone. M9 introduces `ferric_effects` alongside `ferric_async`.
+> The original plan called for wholesale replacement of `ferric_async`, but the
+> implementation chose a more conservative path: `ferric_effects` runs the new
+> effects pipeline; `ferric_async` is reduced to a small diagnostic-only pass that
+> emits `InfiniteAsyncRecursion` and `BlockingShell` warnings the M8 fixtures
+> still depend on. See **Status notes** below for a complete list of deviations.
 >
 > Task 1 settles all shared types in `ferric_common`. Tasks 2 and 3 may proceed in
 > any order after Task 1. Task 4 requires Tasks 1–3. Task 5 requires Tasks 1 and 4.
@@ -29,16 +32,25 @@ No new language features require new compiler machinery — they desugar into ef
   stack slice, not a heap-allocated coroutine tree) and rules out effect
   patterns that would surprise users coming from Rust.
 
-- **`ferric_async` is deleted.** The new crate `ferric_effects` replaces it
-  entirely. It occupies the same pipeline slot (post-typecheck, pre-compile)
-  and returns the same `ParseResult`-shaped output. The `AsyncResult` type is
-  retired; `EffectResult` takes its place.
+- **`ferric_async` is co-resident with `ferric_effects`.** *(Original plan
+  called for `ferric_async` to be deleted. Task 7 chose to keep it because
+  earlier M9 tasks left `lower_async` load-bearing for two diagnostics
+  M8 fixtures depend on: `AsyncLowerError::InfiniteAsyncRecursion` and
+  `AsyncWarning::BlockingShell`.)* `ferric_effects` is the primary
+  post-typecheck pass and produces `EffectResult`. `lower_async` runs
+  alongside it as a tiny diagnostic walk; both crates produce
+  `ParseResult`-shaped output that downstream stages consume.
 
 - **`async fn` / `.await` desugar at parse time.** The parser translates:
   - `async fn foo(...) -> T { body }` → `fn foo(...) -> Eff<[Async], T> { body }`
   - `expr.await` → `perform Async::Suspend(expr)`
-  into standard AST nodes. No new AST variants for async are needed after M9
-  ships; `AsyncFnItem` and `AwaitExpr` are removed from `ferric_common`.
+  into standard AST nodes. After M9 Task 7, `Item::AsyncFn` /
+  `AsyncFnItem` and `Expr::Await` / `AwaitExpr` are removed from
+  `ferric_common`. `Expr::AsyncBlock` / `AsyncBlockExpr` are **retained**
+  — Task 6's type checker uses them as a marker to bump `async_depth` so
+  that `await`/`perform Async::Suspend` sites inside an `async { ... }`
+  block do not require an explicit `handle ... with { Async::Suspend ... }`
+  wrapper.
 
 - **`gen fn` / `yield` desugar the same way.** `gen fn bar(...) -> T { body }`
   becomes `fn bar(...) -> Eff<[Gen<T>], Unit> { body }`, and `yield expr` becomes
@@ -72,13 +84,14 @@ No new language features require new compiler machinery — they desugar into ef
 ## New pipeline position
 
 ```
-lex → parse → resolve → typecheck → [ferric_effects] → compile → run
+lex → parse → resolve → typecheck → [ferric_async (diagnostics)] → [ferric_effects] → compile → run
 ```
 
-`ferric_async` is removed from the workspace. `ferric_effects` takes its slot.
-`main.rs` changes: one import swap (`ferric_async` → `ferric_effects`), one type
-rename (`AsyncResult` → `EffectResult`), and the first argument to `compile` now
-comes from `effect_result.ast` instead of `async_result.ast`. No other changes.
+`ferric_async` is **not** removed from the workspace. It runs as a slim
+diagnostic pass *before* `ferric_effects`, emitting two diagnostics the
+M8 fixtures depend on (`InfiniteAsyncRecursion`, `BlockingShell`) plus
+the in-async shell rewrite. `main.rs` calls both stages — `lower_async`
+first (its `AsyncResult.ast` is fed forward), then `lower_effects`.
 
 ---
 
@@ -192,50 +205,70 @@ fn range(start: Int, end: Int) -> Eff<[Gen<Int>], Unit> {
 
 ---
 
-## `main.rs` changes
+## `main.rs` changes (as actually shipped)
 
 ```rust
-use ferric_effects::lower_effects;   // replaces: use ferric_async::lower_async
+use ferric_async::lower_async;       // retained for diagnostics
+use ferric_effects::lower_effects;   // new effects pipeline
 
-let effect_result = lower_effects(&parse_result, &type_result);
+let async_result = lower_async(&parse_result, &type_result);
+// ... render async_result.errors / async_result.warnings ...
+
+let effect_result = lower_effects(&async_result.ast, &type_result, ...);
 if !effect_result.errors.is_empty() { render_and_exit(&effect_result.errors); }
 for w in &effect_result.warnings { renderer.warn(w); }
-let program = compile(&effect_result.ast, &resolve_result, &type_result);
-//                     ^^^^^^^^^^^^^^^^^ was: &async_result.ast
+let program = compile(&effect_result.ast, &resolve_result, &type_result, ...);
 ```
 
-Total delta: one import swap, one type rename, one argument change. No other
-changes to `main.rs` or any other stage.
+Both `lower_async` and `lower_effects` are called. The original plan's
+"1 import swap + 1 type rename + 1 argument change" delta does **not**
+hold — `main.rs` retains the `lower_async` call alongside the new
+`lower_effects` call.
 
 ---
 
-## Replacement log entry
+## Replacement log entry (as actually shipped)
 
 | Milestone | Stage replaced       | New implementation        | main.rs delta                  |
 |-----------|----------------------|---------------------------|--------------------------------|
-| M9        | `ferric_async`       | `ferric_effects`          | 1 import swap + 1 arg change   |
-| M9        | VM async scheduler   | Effects handler stack     | 0 — contained in `ferric_vm`  |
+| M9        | `ferric_async` (partial) | `ferric_effects` co-resident; `ferric_async` retained as diagnostic pass | both stages called             |
+| M9        | VM async scheduler   | Effects handler stack (default `Async` handler still uses scheduler under the hood) | 0 — contained in `ferric_vm` |
 | M9        | `AsyncVal` native type | plain `Value` return    | 0 — contained in `ferric_stdlib` |
+
+**Pieces retained in place** (load-bearing post-M9):
+
+- `ferric_async` crate, including `lower_async`, `AsyncResult`,
+  `AsyncLowerError::InfiniteAsyncRecursion`, and `AsyncWarning::BlockingShell`
+- `Expr::AsyncBlock` / `AsyncBlockExpr` (type-checker marker for `async_depth`)
+- `Op::MakeAsync`, `Op::Await` (still emitted by other paths and implemented in the VM)
+- `Value::Async`, `Value::Handle`, `AsyncCell`, `AsyncState`, the scheduler / `task_seq` / `handles` field on the VM (default `Async` handler runtime state)
+- `Ty::Async`, `Ty::Handle`, `Ty::Poll` (still referenced by infer / diagnostics)
+
+**Pieces removed in Task 7:**
+
+- `Item::AsyncFn` variant + `AsyncFnItem` struct
+- `Expr::Await` variant + `AwaitExpr` struct
 
 ---
 
 ## Milestone done when
 
-- [ ] All Task 1–7 checklists are complete
-- [ ] All M1–M8 programs still pass unchanged — sync programs are unaffected, async programs produce identical output
-- [ ] `async fn` with a single `.await` runs correctly end-to-end through the effects system
-- [ ] `async fn` with multiple `.await` points in sequence runs correctly
-- [ ] `spawn` and `join` work as before — implemented as effect handlers
-- [ ] `gen fn` with `yield` produces correct iterator output via `gen::collect`
-- [ ] `for v in gen_fn() { }` desugars and runs correctly
-- [ ] A custom `effect` declaration with a `handle...with` block runs correctly
-- [ ] Dependency injection via a `Config::Get` effect and a test handler works
-- [ ] `perform` outside any handler emits `EffectError::UnhandledEffect` with span
-- [ ] `resume k` a second time emits `EffectError::ResumedTwice` with span
-- [ ] `resume` outside a handler clause emits `ParseError::ResumeOutsideHandler` with span
-- [ ] Effect row mismatch (wrong effects at call site) emits `TypeError::EffectRowMismatch` with span
-- [ ] `ferric --dump-ast` shows `PerformExpr`, `HandleExpr`, `ResumeExpr`, `EffectDecl` nodes
-- [ ] `ferric_async` crate is deleted; `AsyncFnItem`/`AwaitExpr`/`AsyncBlockExpr` are gone from `ferric_common`
-- [ ] `main.rs` changed by exactly: 1 import swap + 1 type rename + 1 argument change
-- [ ] All new error types carry `Span` (Rule 5)
-- [ ] `Executor` trait signature is unchanged
+- [x] All Task 1–7 checklists are complete (with deviations noted in Task 7)
+- [x] All M1–M8 programs still pass unchanged — sync programs are unaffected, async programs produce identical output
+- [x] `async fn` with a single `.await` runs correctly end-to-end through the effects system
+- [x] `async fn` with multiple `.await` points in sequence runs correctly
+- [x] `spawn` and `join` work as before — implemented as effect handlers (default `Async` handler defers to the VM scheduler)
+- [x] `gen fn` with `yield` produces correct iterator output via `gen::collect`
+- [x] `for v in gen_fn() { }` desugars and runs correctly
+- [x] A custom `effect` declaration with a `handle...with` block runs correctly
+- [x] Dependency injection via a `Config::Get` effect and a test handler works
+- [x] `perform` outside any handler emits `EffectError::UnhandledEffect` with span
+- [x] `resume k` a second time emits `EffectError::ResumedTwice` with span
+- [x] `resume` outside a handler clause emits `ParseError::ResumeOutsideHandler` with span
+- [x] Effect row mismatch (wrong effects at call site) emits `TypeError::EffectRowMismatch` with span
+- [x] `ferric --dump-ast` shows `PerformExpr`, `HandleExpr`, `ResumeExpr`, `EffectDecl` nodes
+- [ ] ~`ferric_async` crate is deleted~ — **not done**: kept as a small diagnostic pass that emits `InfiniteAsyncRecursion` and `BlockingShell`; M9 Task 7 chose conservative cleanup over wholesale deletion.
+- [x] `AsyncFnItem`/`AwaitExpr` are gone from `ferric_common` *(but `AsyncBlockExpr` is retained as a type-checker marker — Task 6 uses it to bump `async_depth`).*
+- [ ] ~`main.rs` changed by exactly: 1 import swap + 1 type rename + 1 argument change~ — **not done**: `main.rs` calls both `lower_async` and `lower_effects`; the original "1 import swap" delta was abandoned when the diagnostic split was chosen.
+- [x] All new error types carry `Span` (Rule 5)
+- [x] `Executor` trait signature is unchanged

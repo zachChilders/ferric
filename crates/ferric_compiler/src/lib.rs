@@ -26,9 +26,10 @@
 use std::collections::HashMap;
 
 use ferric_common::{
-    BinOp, Chunk, Constant, DefId, Expr, ImplMethod, Interner, Item, Literal, MatchArm, NamedArg,
-    NodeId, Op, Param, ParseResult, Pattern, Program, RequireMode, RequireStmt, ResolveResult,
-    ShellPart, Stmt, Symbol, Ty, TypeResult, UnOp,
+    BinOp, Chunk, Constant, DefId, EffectTags, Expr, HandleExpr, HandlerClause, HandlerEntry,
+    HandlerTable, ImplMethod, Interner, Item, Literal, MatchArm, NamedArg, NodeId, Op, Param,
+    ParseResult, Pattern, PerformExpr, Program, RequireMode, RequireStmt, ResolveResult,
+    ResumeExpr, ShellPart, Stmt, Symbol, Ty, TypeResult, UnOp,
 };
 
 use ferric_common::SHELL_EXEC_NATIVE;
@@ -48,7 +49,26 @@ pub fn compile(
     types: &TypeResult,
     interner: &Interner,
 ) -> Program {
-    let mut compiler = Compiler::new(ast, resolve, types, interner);
+    compile_with_effects(ast, resolve, types, interner, &EffectTags::default())
+}
+
+/// Like [`compile`] but with explicit effect tag metadata produced by the
+/// `ferric_effects` lowering pass. The compiler uses `tags` to assign
+/// `(effect_tag, op_tag)` pairs to `Expr::Perform` sites; without an entry
+/// the compiler falls back to `(0, 0)` and lets the VM raise a runtime
+/// error.
+///
+/// This entry point is used by `main.rs` after running `lower_effects`;
+/// the legacy `compile` shim is kept for callers (mostly tests) that
+/// don't yet thread the effects pass through.
+pub fn compile_with_effects(
+    ast: &ParseResult,
+    resolve: &ResolveResult,
+    types: &TypeResult,
+    interner: &Interner,
+    tags: &EffectTags,
+) -> Program {
+    let mut compiler = Compiler::new(ast, resolve, types, interner, tags);
     compiler.compile_program()
 }
 
@@ -61,6 +81,9 @@ struct Compiler<'a> {
     resolve: &'a ResolveResult,
     types: &'a TypeResult,
     interner: &'a Interner,
+    /// Effect/op tag table from the `ferric_effects` pass. Used by
+    /// `compile_perform` to look up `(effect_tag, op_tag)` pairs.
+    effect_tags: &'a EffectTags,
 
     /// All compiled chunks. Index 0 is the entry chunk; user functions follow.
     chunks: Vec<Chunk>,
@@ -76,13 +99,6 @@ struct Compiler<'a> {
     /// names, so the compiler must reference them through their `DefId`.
     method_chunks: HashMap<DefId, u16>,
 
-    /// Async fn name → body chunk index. The body chunk is what runs when
-    /// a deferred `Value::Async` is awaited or spawned. The constructor
-    /// chunk (registered under `fn_chunks`) is what runs when the async
-    /// fn is *called* — it just builds the Pending Async wrapping the
-    /// body chunk + the call's args.
-    async_body_chunks: HashMap<Symbol, u16>,
-
     /// Per-function scope stack of `name → local slot`. Reset on each chunk.
     scopes: Vec<HashMap<Symbol, u8>>,
 
@@ -92,6 +108,11 @@ struct Compiler<'a> {
 
     /// Active loop contexts for break/continue patching.
     loop_stack: Vec<LoopContext>,
+
+    /// Handler tables built during `compile_handle`. Each `Op::PushHandler`
+    /// references an entry in this vector by index. The result is moved
+    /// into `Program::handler_tables` at the end of compilation.
+    handler_tables: Vec<HandlerTable>,
 }
 
 struct LoopContext {
@@ -107,20 +128,22 @@ impl<'a> Compiler<'a> {
         resolve: &'a ResolveResult,
         types: &'a TypeResult,
         interner: &'a Interner,
+        effect_tags: &'a EffectTags,
     ) -> Self {
         Self {
             ast,
             resolve,
             types,
             interner,
+            effect_tags,
             chunks: Vec::new(),
             current: 0,
             fn_chunks: HashMap::new(),
             method_chunks: HashMap::new(),
-            async_body_chunks: HashMap::new(),
             scopes: Vec::new(),
             next_local: 0,
             loop_stack: Vec::new(),
+            handler_tables: Vec::new(),
         }
     }
 
@@ -132,27 +155,18 @@ impl<'a> Compiler<'a> {
         let entry_idx: u16 = 0;
 
         // Pre-pass: assign chunk indices to user functions and impl methods.
-        // M8 Task 5 Option A: an `async fn foo` needs *two* chunks: a
-        // constructor (registered under fn_chunks[foo]) that builds the
-        // deferred `Value::Async`, and a body chunk (registered under
-        // async_body_chunks[foo]) that runs the actual code when the async
-        // is awaited or spawned. Lazy semantics — calling foo doesn't
-        // execute the body.
+        // Post-M9: `async fn` is desugared by the parser to an ordinary
+        // `Item::Fn` whose return type is `Eff<[Async], T>`, so every
+        // function gets exactly one chunk — there is no separate
+        // constructor/body split for async fns at the AST level. (`Op::Await`
+        // and `Op::MakeAsync` are still emitted by other paths and remain
+        // implemented in the VM.)
         for item in &self.ast.items {
             match item {
                 Item::Fn(item) => {
                     let chunk_idx = self.chunks.len() as u16;
                     self.chunks.push(Chunk::new(item.name));
                     self.fn_chunks.insert(item.name, chunk_idx);
-                }
-                Item::AsyncFn(decl) => {
-                    let f = &decl.item;
-                    let ctor_idx = self.chunks.len() as u16;
-                    self.chunks.push(Chunk::new(f.name));
-                    self.fn_chunks.insert(f.name, ctor_idx);
-                    let body_idx = self.chunks.len() as u16;
-                    self.chunks.push(Chunk::new(f.name));
-                    self.async_body_chunks.insert(f.name, body_idx);
                 }
                 Item::ImplBlock { methods, .. } => {
                     for m in methods {
@@ -180,42 +194,6 @@ impl<'a> Compiler<'a> {
                         self.bind_local(param.name);
                     }
                     self.compile_expr(&item.body);
-                    self.emit(Op::Return);
-                    self.pop_scope();
-                }
-                Item::AsyncFn(decl) => {
-                    let f = &decl.item;
-                    let ctor_idx = self.fn_chunks[&f.name] as usize;
-                    let body_idx = self.async_body_chunks[&f.name];
-                    let n_params =
-                        u8::try_from(f.params.len()).expect("async fn has too many params for u8");
-
-                    // Body chunk: compile body with params bound as locals,
-                    // then Return. This chunk is what the VM runs when the
-                    // async is awaited or spawned.
-                    self.enter_chunk(body_idx as usize);
-                    self.push_scope();
-                    for param in &f.params {
-                        self.bind_local(param.name);
-                    }
-                    self.compile_expr(&f.body);
-                    self.emit(Op::Return);
-                    self.pop_scope();
-
-                    // Constructor chunk: load each param onto the stack as
-                    // a "capture" of the body chunk, then MakeAsync. Calling
-                    // foo() enters this chunk and immediately returns a
-                    // Pending Async — body never runs at call time.
-                    self.enter_chunk(ctor_idx);
-                    self.push_scope();
-                    for (i, param) in f.params.iter().enumerate() {
-                        self.bind_local(param.name);
-                        let _ = i;
-                    }
-                    for i in 0..n_params {
-                        self.emit(Op::LoadSlot(i));
-                    }
-                    self.emit(Op::MakeAsync(body_idx, n_params));
                     self.emit(Op::Return);
                     self.pop_scope();
                 }
@@ -258,7 +236,12 @@ impl<'a> Compiler<'a> {
         self.emit(Op::Return);
         self.pop_scope();
 
-        Program::new(std::mem::take(&mut self.chunks), entry_idx)
+        Program::with_effects(
+            std::mem::take(&mut self.chunks),
+            entry_idx,
+            std::mem::take(&mut self.handler_tables),
+            self.effect_tags.clone(),
+        )
     }
 
     // ---- Chunk management ---------------------------------------------------
@@ -713,21 +696,31 @@ impl<'a> Compiler<'a> {
                 // artifact only. Just compile the underlying expression.
                 self.compile_expr(&c.expr);
             }
-            // M8 Task 5 (Option A — lazy/threaded async): `async { body }` is
-            // hoisted to its own chunk and emitted as a deferred
-            // `MakeAsync(chunk_idx, n_captures)` value. The body runs only
-            // when the value is awaited (in this thread, via Op::Await) or
-            // spawned (on an OS thread, via the spawn intrinsic). This
-            // deferral is what lets `spawn(task: foo(x))` actually run
-            // `foo(x)` in parallel — the body has not yet executed when
-            // spawn receives the value.
-            Expr::AsyncBlock(b) => {
-                self.compile_async_block(b.id, &b.block);
-            }
-            Expr::Await(a) => {
-                self.compile_expr(&a.operand);
-                self.emit(Op::Await);
-            }
+            // M9: `async { body }` is treated as a marker for the type
+            // checker (so it can bump `async_depth` and accept `await`
+            // sites inside) but emits the body inline at compile time —
+            // the M9 default `Async` handler resolves perform sites
+            // directly, so there is no longer a `MakeAsync` deferral. If
+            // a future task needs explicit deferral (e.g. `spawn(async {
+            // ... })` building an Async cell without running the body),
+            // re-introduce the `compile_async_block` path here.
+            Expr::AsyncBlock(b) => self.compile_expr(&b.block),
+            // M9: `perform Effect::Op(args...)` — push each arg in
+            // declaration order, then emit `Op::Perform(effect_tag,
+            // op_tag, arg_count)`. The VM (Task 5) walks the handler
+            // stack and dispatches to the matching clause; the value
+            // it ultimately pushes back becomes the result of the
+            // perform expression.
+            Expr::Perform(p) => self.compile_perform(p),
+            // M9: `handle { body } with { Op(args) => clause, ... }`.
+            // Each clause body is hoisted into its own chunk so the VM
+            // can re-enter it at perform time. The outer chunk emits
+            // `Op::PushHandler` (with constants describing the handler
+            // table), evaluates `body`, then emits `Op::PopHandler`.
+            Expr::Handle(h) => self.compile_handle(h),
+            // M9: `resume k with value` — push the continuation handle
+            // and the resume value, then emit `Op::Resume`.
+            Expr::Resume(r) => self.compile_resume(r),
         }
     }
 
@@ -804,6 +797,13 @@ impl<'a> Compiler<'a> {
     /// — occupy the leading slots of that chunk's frame; the outer chunk
     /// pushes them onto the stack just before `Op::MakeAsync` so the VM
     /// can copy them into the deferred state.
+    ///
+    /// Currently unused: M9 Task 6 inlines `Expr::AsyncBlock` rather than
+    /// deferring it, since the default `Async` handler resolves perform
+    /// sites directly. Kept for the case where a future task needs an
+    /// explicit deferral (e.g. `spawn(async { ... })` building an Async
+    /// cell without running the body immediately).
+    #[allow(dead_code)]
     fn compile_async_block(&mut self, async_id: NodeId, body: &Expr) {
         let captures: Vec<(DefId, Symbol)> = self
             .resolve
@@ -851,6 +851,146 @@ impl<'a> Compiler<'a> {
         // 5. Construct the deferred Async value.
         let n = u8::try_from(captures.len()).expect("too many async-block captures");
         self.emit(Op::MakeAsync(chunk_idx, n));
+    }
+
+    /// Compiles a `perform Effect::Op(args)` expression.
+    ///
+    /// Pushes each arg value onto the stack (declaration order), then
+    /// emits `Op::Perform(effect_tag, op_tag, arg_count)`. The VM (Task 5)
+    /// walks the handler stack and transfers control to the matching
+    /// clause. The clause is responsible for ultimately pushing a value
+    /// back onto the stack via `Op::Resume`.
+    fn compile_perform(&mut self, p: &PerformExpr) {
+        for (_, arg_expr) in &p.args {
+            self.compile_expr(arg_expr);
+        }
+        let arg_count = u8::try_from(p.args.len()).expect("perform: too many args");
+        let (effect_tag, op_tag) = self
+            .effect_tags
+            .lookup(p.effect, p.op)
+            .unwrap_or((0, 0));
+        self.emit(Op::Perform(effect_tag, op_tag, arg_count));
+    }
+
+    /// Compiles a `handle { body } with { Op(args) => clause; ... }`
+    /// expression.
+    ///
+    /// The outer chunk:
+    ///   1. Emits `Op::PushHandler` with handler-table metadata.
+    ///   2. Evaluates `body`, leaving its value on the stack.
+    ///   3. Emits `Op::PopHandler`.
+    ///
+    /// Each clause body is hoisted into its own chunk so the VM can
+    /// re-enter it whenever a matching `perform` site fires. Clause
+    /// chunks bind the operation's parameters as the leading slots,
+    /// followed by the continuation symbol.
+    ///
+    /// Each handler block compiles to:
+    ///   - one [`HandlerTable`] entry registered in `self.handler_tables`
+    ///   - one `Op::PushHandler(table_idx, body_end_offset)` followed by
+    ///     the body bytecode
+    ///   - one `Op::PopHandler` after the body
+    ///
+    /// At runtime, `Op::PushHandler` reads the table from
+    /// `Program::handler_tables[table_idx]` and pushes a `HandlerFrame`
+    /// onto the VM's handler stack. The `body_end_offset` tells the VM
+    /// where to land the body frame's IP if a `Perform` matches and the
+    /// matching clause completes without ever resuming — in that case the
+    /// suspended body is discarded and execution jumps past `PopHandler`
+    /// (still leaving the clause's return value on the stack as the
+    /// handle expression's result).
+    fn compile_handle(&mut self, h: &HandleExpr) {
+        // Compile each clause body into its own chunk and look up
+        // (effect_tag, op_tag) so the VM can dispatch by tag.
+        let mut entries: Vec<HandlerEntry> = Vec::with_capacity(h.clauses.len());
+        for clause in &h.clauses {
+            let chunk_idx = self.compile_handler_clause(clause);
+            let (effect_tag, op_tag) = self
+                .effect_tags
+                .lookup(clause.effect, clause.op)
+                .unwrap_or((0, 0));
+            entries.push(HandlerEntry {
+                effect_tag,
+                op_tag,
+                clause_chunk_idx: chunk_idx,
+            });
+        }
+
+        // Register the handler table; the assigned index is what the
+        // VM looks up at PushHandler time.
+        let table_idx = self.handler_tables.len() as u16;
+        self.handler_tables.push(HandlerTable { entries });
+
+        // Emit PushHandler with a placeholder offset; patched after the
+        // body and PopHandler are known.
+        let push_idx = self.current_chunk_mut().code.len();
+        self.emit(Op::PushHandler(table_idx, 0));
+        self.compile_expr(&h.body);
+        self.emit(Op::PopHandler);
+        let after_pop = self.current_chunk_mut().code.len();
+        // Patch: body_end_offset is the distance in instructions from
+        // the slot *after* the PushHandler instruction to `after_pop`.
+        // `push_idx + 1` is the IP that the dispatch loop advances to
+        // immediately after fetching PushHandler. We add the offset to
+        // that to land at `after_pop`.
+        let offset = (after_pop - (push_idx + 1)) as u16;
+        if let Op::PushHandler(_, slot) = &mut self.current_chunk_mut().code[push_idx] {
+            *slot = offset;
+        }
+    }
+
+    /// Compiles a single handler clause body into its own chunk.
+    /// Returns the chunk index. The chunk's leading slots hold the
+    /// operation's argument values (in declaration order), followed by
+    /// the continuation symbol.
+    fn compile_handler_clause(&mut self, clause: &HandlerClause) -> u16 {
+        let chunk_idx = self.chunks.len() as u16;
+        self.chunks.push(Chunk::new(Symbol::new(0)));
+
+        let saved_current = self.current;
+        let saved_scopes = std::mem::take(&mut self.scopes);
+        let saved_next_local = self.next_local;
+        let saved_loop_stack = std::mem::take(&mut self.loop_stack);
+
+        self.enter_chunk(chunk_idx as usize);
+        self.push_scope();
+
+        // Bind clause params as the leading locals.
+        for param in &clause.params {
+            self.bind_local(*param);
+        }
+        // Bind the continuation last, by convention.
+        self.bind_local(clause.cont);
+
+        self.compile_expr(&clause.handler);
+        self.emit(Op::Return);
+        self.pop_scope();
+
+        self.current = saved_current;
+        self.scopes = saved_scopes;
+        self.next_local = saved_next_local;
+        self.loop_stack = saved_loop_stack;
+
+        chunk_idx
+    }
+
+    /// Compiles a `resume k with value` expression.
+    ///
+    /// Pushes the continuation `k` (resolved as an ordinary local) and
+    /// the resume value, then emits `Op::Resume`. The VM (Task 5)
+    /// transfers control back to the suspended computation.
+    fn compile_resume(&mut self, r: &ResumeExpr) {
+        // Load the continuation value from its local slot.
+        if let Some(slot) = self.lookup_local(r.cont) {
+            self.emit(Op::LoadSlot(slot));
+        } else {
+            // Resolver failed to bind the continuation — this is a bug
+            // in an earlier stage, but we keep going so the rest of the
+            // chunk stays well-formed.
+            self.emit(Op::Unit);
+        }
+        self.compile_expr(&r.value);
+        self.emit(Op::Resume);
     }
 
     /// Compiles a method call by looking up the resolved impl-method DefId

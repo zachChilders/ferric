@@ -170,9 +170,10 @@ pub struct CastExpr {
 
 /// A plain (synchronous) function definition.
 ///
-/// Extracted as a struct so `AsyncFnItem` (M8) can wrap the same shape without
-/// duplicating fields. `Item::Fn` and `Item::AsyncFn(AsyncFnItem)` are the two
-/// shapes a function definition can take at the top level.
+/// `async fn` once had its own `Item::AsyncFn(AsyncFnItem)` variant, but as of
+/// M9 the parser desugars `async fn foo() -> T` into an ordinary `Item::Fn`
+/// whose return type is `Eff<[Async], T>`. Both `AsyncFnItem` and the
+/// corresponding `Item::AsyncFn` variant were removed in M9 Task 7.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FnItem {
     /// Unique identifier for this node
@@ -191,29 +192,13 @@ pub struct FnItem {
     pub span: Span,
 }
 
-/// An `async fn` definition. The inner `FnItem` is structurally identical to a
-/// synchronous function definition — `async` is a modifier, not a structural
-/// rewrite. Wrapping (rather than adding a boolean flag to `FnItem`) keeps the
-/// two forms distinct under exhaustive `match`.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct AsyncFnItem {
-    pub span: Span,
-    /// The inner fn — params, return type, and body are unchanged from the
-    /// synchronous form. The lowering pass (M8 Task 4) reads this and replaces
-    /// the enclosing `Item::AsyncFn` with an ordinary `Item::Fn` whose body
-    /// builds and returns the lowered state machine.
-    pub item: Box<FnItem>,
-}
-
 /// Top-level item in a Ferric program.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Item {
-    /// Function definition
+    /// Function definition. As of M9, `async fn` is desugared by the parser
+    /// to `Item::Fn` with an `Eff<[Async], T>` return type — there is no
+    /// dedicated `AsyncFn` variant.
     Fn(FnItem),
-    /// `async fn` definition. The inner `FnItem` is the same shape as `Fn`;
-    /// the lowering pass rewrites this into an `Item::Fn` whose body returns
-    /// an `Async<T>` value built from the lowered state machine.
-    AsyncFn(AsyncFnItem),
     /// Struct definition
     StructDef {
         id: NodeId,
@@ -263,6 +248,10 @@ pub enum Item {
     Export(ExportDecl),
     /// A `type` alias definition.
     TypeAlias(TypeAliasItem),
+    /// An `effect` declaration. The effect name and its operations live at
+    /// module scope; downstream stages turn `perform` calls into handler
+    /// dispatches against this declaration.
+    EffectDecl(EffectDecl),
 }
 
 /// A function inside an `impl` block. Same shape as a top-level FnDef, but
@@ -282,7 +271,6 @@ impl Item {
     pub fn id(&self) -> NodeId {
         match self {
             Item::Fn(item) => item.id,
-            Item::AsyncFn(decl) => decl.item.id,
             Item::StructDef { id, .. } => *id,
             Item::EnumDef { id, .. } => *id,
             Item::TraitDef { id, .. } => *id,
@@ -291,6 +279,12 @@ impl Item {
             Item::Import(decl) => decl.id,
             Item::Export(decl) => decl.id,
             Item::TypeAlias(decl) => decl.id,
+            // Effect declarations have no `NodeId` of their own — the parser
+            // doesn't attach metadata at this granularity yet. Use the
+            // span-derived sentinel `NodeId::new(0)` so callers that only need
+            // an Item-keyed identity still work; resolver/typecheck never read
+            // this id for effect decls.
+            Item::EffectDecl(_) => NodeId::new(0),
         }
     }
 
@@ -298,7 +292,6 @@ impl Item {
     pub fn span(&self) -> Span {
         match self {
             Item::Fn(item) => item.span,
-            Item::AsyncFn(decl) => decl.span,
             Item::StructDef { span, .. } => *span,
             Item::EnumDef { span, .. } => *span,
             Item::TraitDef { span, .. } => *span,
@@ -307,20 +300,9 @@ impl Item {
             Item::Import(decl) => decl.span,
             Item::Export(decl) => decl.span,
             Item::TypeAlias(decl) => decl.span,
+            Item::EffectDecl(decl) => decl.span,
         }
     }
-}
-
-/// A `.await` postfix expression. The operand is any expression evaluating to
-/// an `Async<T>` value (the type checker rejects awaits on non-async types).
-/// `.await` is legal only inside an `async fn` or `async { ... }` block — both
-/// the parser and type checker enforce this.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct AwaitExpr {
-    pub id: NodeId,
-    pub span: Span,
-    /// The `Async<T>` value being awaited.
-    pub operand: Box<Expr>,
 }
 
 /// An `async { ... }` block expression. Lifts a synchronous block into an
@@ -331,6 +313,87 @@ pub struct AsyncBlockExpr {
     pub span: Span,
     /// The block being lifted. The parser guarantees this is `Expr::Block`.
     pub block: Box<Expr>,
+}
+
+/// One operation in an `effect` declaration.
+///
+/// `Op(name: ParamTy, ...) -> ResumeTy` — the parameters describe what the
+/// `perform` site supplies, and `resume_type` is what `perform Op(...)`
+/// evaluates to (i.e. the type the handler `resume k with v` passes back).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EffectOp {
+    pub span: Span,
+    pub name: Symbol,
+    pub params: Vec<(Symbol, crate::Ty)>,
+    /// What `perform Op(...)` evaluates to.
+    pub resume_type: crate::Ty,
+}
+
+/// An `effect` declaration at module scope.
+///
+/// ```text
+/// effect Async {
+///     Suspend(future: Async<Str>) -> Str,
+/// }
+/// ```
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EffectDecl {
+    pub span: Span,
+    pub name: Symbol,
+    /// Generic type parameters, e.g. `T` in `effect Gen<T>`.
+    pub type_params: Vec<Symbol>,
+    pub ops: Vec<EffectOp>,
+}
+
+/// A `perform Effect::Op(name: value, ...)` expression.
+///
+/// Evaluates by suspending the current computation and invoking the nearest
+/// enclosing handler clause for `effect::op`. The result of the expression is
+/// whatever the handler resumes with.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PerformExpr {
+    pub id: NodeId,
+    pub span: Span,
+    pub effect: Symbol,
+    pub op: Symbol,
+    /// Named arguments, matching the corresponding `EffectOp::params`.
+    pub args: Vec<(Symbol, Expr)>,
+}
+
+/// One clause inside a `handle ... with { ... }` block, matching a single
+/// `Effect::Op` and binding a continuation variable that can be resumed
+/// exactly once.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct HandlerClause {
+    pub span: Span,
+    pub effect: Symbol,
+    pub op: Symbol,
+    /// Names bound to the operation's argument values (one per `EffectOp::params`).
+    pub params: Vec<Symbol>,
+    /// The continuation variable name (defaults to `k`).
+    pub cont: Symbol,
+    pub handler: Box<Expr>,
+}
+
+/// A `handle { body } with { Op(...) => clause, ... }` expression.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct HandleExpr {
+    pub id: NodeId,
+    pub span: Span,
+    pub body: Box<Expr>,
+    pub clauses: Vec<HandlerClause>,
+}
+
+/// A `resume k with value` expression. Legal only inside a `HandlerClause`'s
+/// handler body. Resumes the captured continuation `k` with `value` exactly
+/// once; resuming twice is an error caught by the effects pass.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ResumeExpr {
+    pub id: NodeId,
+    pub span: Span,
+    /// Must refer to the enclosing `HandlerClause::cont`.
+    pub cont: Symbol,
+    pub value: Box<Expr>,
 }
 
 /// Expression in Ferric.
@@ -484,10 +547,22 @@ pub enum Expr {
     /// Cast expression: `expr as TypeExpr`. At runtime, this is a no-op;
     /// at type-check time, it wraps or unwraps an opaque type alias.
     Cast(CastExpr),
-    /// `expr.await` — postfix await on an `Async<T>` operand.
-    Await(AwaitExpr),
     /// `async { ... }` — lifts a block into an `Async<T>` value.
+    ///
+    /// The user-facing `await expr` syntax is desugared at parse time to
+    /// `perform Async::Suspend(future: expr)`, so there is no longer an
+    /// `Expr::Await` variant. `Expr::AsyncBlock` is retained because the
+    /// type checker uses it as a marker to bump `async_depth`.
     AsyncBlock(AsyncBlockExpr),
+    /// `perform Effect::Op(name: value, ...)` — invokes the nearest enclosing
+    /// handler clause for the named effect operation.
+    Perform(PerformExpr),
+    /// `handle { body } with { Op(...) => ... }` — installs handler clauses
+    /// for the dynamic extent of `body`.
+    Handle(HandleExpr),
+    /// `resume k with value` — resumes the continuation captured by an
+    /// enclosing `HandlerClause`. Legal only inside a handler clause body.
+    Resume(ResumeExpr),
 }
 
 /// A single arm of a `match` expression.
@@ -570,8 +645,10 @@ impl Expr {
             Expr::ArrayLit { id, .. } => *id,
             Expr::Index { id, .. } => *id,
             Expr::Cast(c) => c.id,
-            Expr::Await(a) => a.id,
             Expr::AsyncBlock(b) => b.id,
+            Expr::Perform(p) => p.id,
+            Expr::Handle(h) => h.id,
+            Expr::Resume(r) => r.id,
         }
     }
 
@@ -601,8 +678,10 @@ impl Expr {
             Expr::ArrayLit { span, .. } => *span,
             Expr::Index { span, .. } => *span,
             Expr::Cast(c) => c.span,
-            Expr::Await(a) => a.span,
             Expr::AsyncBlock(b) => b.span,
+            Expr::Perform(p) => p.span,
+            Expr::Handle(h) => h.span,
+            Expr::Resume(r) => r.span,
         }
     }
 }
@@ -726,6 +805,15 @@ pub enum Literal {
     Unit,
 }
 
+/// One reference to an effect in an effect-row type annotation. Carries the
+/// effect's name and any type arguments (e.g. `Gen<Int>`). Mirrors the
+/// runtime `EffectRef` but in TypeAnnotation form so it survives parsing.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EffectAnnotation {
+    pub name: Symbol,
+    pub args: Vec<TypeAnnotation>,
+}
+
 /// Type annotation in source code.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TypeAnnotation {
@@ -739,6 +827,13 @@ pub enum TypeAnnotation {
     Generic {
         head: Symbol,
         args: Vec<TypeAnnotation>,
+    },
+    /// `Eff<[E1, E2, ...], T>` — an effect-row return type. The parser
+    /// produces this as the desugared return-type of `async fn`/`gen fn`
+    /// and as the explicit user-written form `Eff<[..], T>`.
+    Eff {
+        row: Vec<EffectAnnotation>,
+        result: Box<TypeAnnotation>,
     },
     /// Placeholder for an annotation that should be inferred (used by closure
     /// params that omit an explicit type).

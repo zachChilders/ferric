@@ -12,11 +12,12 @@
 //! All other implementation details are private.
 
 use ferric_common::{
-    AsyncBlockExpr, AsyncFnItem, AwaitExpr, BinOp, CastExpr, ExportDecl, Expr, FnItem, ImplMethod,
-    ImportDecl, ImportItem, ImportItems, ImportPath, Interner, Item, LexResult, Literal, MatchArm,
-    NamedArg, NodeId, Param, ParseError, ParseResult, Pattern, RequireMode, RequireStmt, ShellPart,
-    ShellTokenPart, Span, Stmt, Symbol, Token, TokenKind, TraitMethod, TypeAliasItem,
-    TypeAnnotation, TypeParam, UnOp,
+    AsyncBlockExpr, BinOp, CastExpr, EffectAnnotation, EffectDecl, EffectOp,
+    ExportDecl, Expr, FnItem, HandleExpr, HandlerClause, ImplMethod, ImportDecl, ImportItem,
+    ImportItems, ImportPath, Interner, Item, LexResult, Literal, MatchArm, NamedArg, NodeId,
+    Param, ParseError, ParseResult, ParseWarning, Pattern, PerformExpr, RequireMode, RequireStmt,
+    ResumeExpr, ShellPart, ShellTokenPart, Span, Stmt, Symbol, Token, TokenKind, TraitMethod, Ty,
+    TypeAliasItem, TypeAnnotation, TypeParam, UnOp,
 };
 
 /// Generates unique NodeIds for AST nodes.
@@ -38,6 +39,21 @@ impl NodeIdGen {
     }
 }
 
+/// Pre-interned symbols for desugaring `async`/`gen` syntax. The parser
+/// needs these well-known names to construct `Expr::Perform` and the
+/// effect-row return-type annotations without a mutable interner during
+/// parsing.
+#[derive(Debug, Clone, Copy)]
+struct DesugarSyms {
+    async_eff: Symbol,
+    suspend_op: Symbol,
+    future_param: Symbol,
+    gen_eff: Symbol,
+    yield_op: Symbol,
+    value_param: Symbol,
+    cont_default: Symbol,
+}
+
 /// Recursive descent parser for Ferric.
 struct Parser<'a> {
     /// Input tokens
@@ -48,11 +64,20 @@ struct Parser<'a> {
     node_id_gen: NodeIdGen,
     /// Accumulated errors
     errors: Vec<ParseError>,
+    /// Accumulated warnings (non-fatal diagnostics)
+    warnings: Vec<ParseWarning>,
     /// Interner — needed to classify `import "..."` path strings at parse time.
     /// Optional so unit tests that construct tokens directly can omit it; when
     /// `None`, the parser cannot classify import paths (they emit a
     /// `ParseError::InvalidImportPath` for safety).
     interner: Option<&'a Interner>,
+    /// Pre-interned symbols used by `async`/`gen`/effects desugaring. `None`
+    /// when the parser is constructed without an interner (legacy test path);
+    /// in that case async/gen desugaring falls back to constructing
+    /// AST without proper symbol identity, which downstream stages won't
+    /// resolve. This is acceptable for unit tests that construct tokens
+    /// directly and don't exercise async/gen forms.
+    desugar: Option<DesugarSyms>,
     /// When true, an `Ident { ... }` expression is NOT parsed as a struct
     /// literal — it's left for an outer construct (e.g. `if cond { ... }`,
     /// `while cond { ... }`, `match scrutinee { ... }`) to consume the `{`.
@@ -63,6 +88,10 @@ struct Parser<'a> {
     /// `await` at file top level (depth 0) is rejected immediately. Inside
     /// any function-shaped scope, we defer to the type checker (Task 3).
     fn_depth: u32,
+    /// Stack of continuation variable names — pushed on entering a handler
+    /// clause body, popped on leaving. `resume k with v` is only legal when
+    /// `k` matches the symbol on the top of this stack.
+    cont_stack: Vec<Symbol>,
 }
 
 impl<'a> Parser<'a> {
@@ -73,22 +102,41 @@ impl<'a> Parser<'a> {
             current: 0,
             node_id_gen: NodeIdGen::new(),
             errors: Vec::new(),
+            warnings: Vec::new(),
             interner: None,
+            desugar: None,
             no_struct_literal: false,
             fn_depth: 0,
+            cont_stack: Vec::new(),
         }
     }
 
-    /// Creates a new parser that has access to the interner for path classification.
+    /// Creates a new parser that has access to the interner for path
+    /// classification and effect-syntax desugaring. The well-known names
+    /// (`Async`, `Suspend`, etc.) used by desugaring must already be present
+    /// in `interner`; callers should pre-intern them via
+    /// `Interner::pre_intern_desugar_names` before invoking the parser.
     fn new_with_interner(tokens: &'a [Token], interner: &'a Interner) -> Self {
+        let desugar = Some(DesugarSyms {
+            async_eff: interner.lookup("Async").unwrap_or(Symbol::new(0)),
+            suspend_op: interner.lookup("Suspend").unwrap_or(Symbol::new(0)),
+            future_param: interner.lookup("future").unwrap_or(Symbol::new(0)),
+            gen_eff: interner.lookup("Gen").unwrap_or(Symbol::new(0)),
+            yield_op: interner.lookup("Yield").unwrap_or(Symbol::new(0)),
+            value_param: interner.lookup("value").unwrap_or(Symbol::new(0)),
+            cont_default: interner.lookup("k").unwrap_or(Symbol::new(0)),
+        });
         Self {
             tokens,
             current: 0,
             node_id_gen: NodeIdGen::new(),
             errors: Vec::new(),
+            warnings: Vec::new(),
             interner: Some(interner),
+            desugar,
             no_struct_literal: false,
             fn_depth: 0,
+            cont_stack: Vec::new(),
         }
     }
 
@@ -259,6 +307,7 @@ impl<'a> Parser<'a> {
                 self.peek().kind,
                 TokenKind::Fn
                     | TokenKind::Async
+                    | TokenKind::Gen
                     | TokenKind::Struct
                     | TokenKind::Enum
                     | TokenKind::Trait
@@ -266,6 +315,7 @@ impl<'a> Parser<'a> {
                     | TokenKind::Import
                     | TokenKind::Export
                     | TokenKind::Type
+                    | TokenKind::Effect
             ) {
                 return;
             }
@@ -278,6 +328,8 @@ impl<'a> Parser<'a> {
         match self.peek().kind {
             TokenKind::Fn => self.parse_fn_def(),
             TokenKind::Async => self.parse_async_item(),
+            TokenKind::Gen => self.parse_gen_item(),
+            TokenKind::Effect => self.parse_effect_decl(),
             TokenKind::Struct => self.parse_struct_def(),
             TokenKind::Enum => self.parse_enum_def(),
             TokenKind::Trait => self.parse_trait_def(),
@@ -978,6 +1030,12 @@ impl<'a> Parser<'a> {
     /// item level is `async fn ...`; anything else (e.g. `async let`,
     /// `async struct`) produces `ParseError::AsyncOnNonFn`.
     ///
+    /// **M9 desugaring (parse-time):** `async fn name(params) -> T { body }`
+    /// is rewritten to a plain `Item::Fn` whose return type is
+    /// `Eff<[Async], T>`. Every `await expr` in the body is rewritten to
+    /// `perform Async::Suspend(future: expr)` by the `await` parser arm —
+    /// this function only rewrites the wrapping fn shape.
+    ///
     /// `async { ... }` blocks are expressions, not items, and never reach
     /// here — they are handled in `parse_primary` via `parse_script_expr`.
     fn parse_async_item(&mut self) -> Option<Item> {
@@ -987,15 +1045,23 @@ impl<'a> Parser<'a> {
         match self.peek().kind {
             TokenKind::Fn => {
                 let inner = self.parse_fn_def()?;
-                let item = match inner {
+                let mut item = match inner {
                     Item::Fn(item) => item,
                     other => return Some(other), // parse_fn_def always returns Item::Fn — be defensive
                 };
-                let span = async_span.to(item.span);
-                Some(Item::AsyncFn(AsyncFnItem {
-                    span,
-                    item: Box::new(item),
-                }))
+                // Desugar: wrap the return type in `Eff<[Async], T>`.
+                if let Some(syms) = self.desugar {
+                    let inner_ret = std::mem::replace(&mut item.ret_ty, TypeAnnotation::Infer);
+                    item.ret_ty = TypeAnnotation::Eff {
+                        row: vec![EffectAnnotation {
+                            name: syms.async_eff,
+                            args: vec![],
+                        }],
+                        result: Box::new(inner_ret),
+                    };
+                }
+                item.span = async_span.to(item.span);
+                Some(Item::Fn(item))
             }
             TokenKind::LBrace => {
                 // `async {` at the top level: parse the async block as a
@@ -1014,6 +1080,275 @@ impl<'a> Parser<'a> {
                 // whatever follows as a normal item.
                 self.parse_item()
             }
+        }
+    }
+
+    /// Parses a `gen`-prefixed item. Only `gen fn ...` is legal.
+    ///
+    /// **M9 desugaring (parse-time):** `gen fn name(params) -> T { body }`
+    /// is rewritten to a plain `Item::Fn` whose return type is
+    /// `Eff<[Gen<T>], Unit>`. Every `yield expr` in the body is rewritten
+    /// to `perform Gen::Yield(value: expr)` by the `yield` parser arm.
+    fn parse_gen_item(&mut self) -> Option<Item> {
+        let gen_span = self.peek().span;
+        self.advance(); // consume 'gen'
+
+        if !matches!(self.peek().kind, TokenKind::Fn) {
+            let bad = self.peek().clone();
+            let span = gen_span.to(bad.span);
+            self.errors.push(ParseError::UnexpectedToken {
+                expected: "`fn` after `gen`".to_string(),
+                found: bad.kind,
+                span,
+            });
+            return self.parse_item();
+        }
+
+        let inner = self.parse_fn_def()?;
+        let mut item = match inner {
+            Item::Fn(item) => item,
+            other => return Some(other),
+        };
+
+        // Desugar: wrap the return type as `Eff<[Gen<T>], Unit>`.
+        // The inner item's `ret_ty` becomes the type argument to `Gen<...>`.
+        if let Some(syms) = self.desugar {
+            let inner_ret = std::mem::replace(&mut item.ret_ty, TypeAnnotation::Infer);
+            // The "Unit" name is special — represented as `TypeAnnotation::Named`
+            // with the symbol for "Unit" if we have it interned, otherwise a
+            // sentinel. The downstream resolver treats Symbol(0)→"Unit" but
+            // safer to look it up.
+            let unit_sym = self
+                .interner
+                .and_then(|i| i.lookup("Unit"))
+                .unwrap_or(Symbol::new(0));
+            item.ret_ty = TypeAnnotation::Eff {
+                row: vec![EffectAnnotation {
+                    name: syms.gen_eff,
+                    args: vec![inner_ret],
+                }],
+                result: Box::new(TypeAnnotation::Named(unit_sym)),
+            };
+        }
+        item.span = gen_span.to(item.span);
+        Some(Item::Fn(item))
+    }
+
+    /// Parses an `effect` declaration:
+    ///
+    /// ```text
+    /// effect Name<TypeParams>? {
+    ///     OpName(param: Type, ...) -> ResumeType,
+    ///     ...
+    /// }
+    /// ```
+    ///
+    /// Effect declarations are only legal at module scope; the block-level
+    /// parser emits `ParseError::EffectDeclInsideFn` if one appears inside a
+    /// function body.
+    fn parse_effect_decl(&mut self) -> Option<Item> {
+        let start_span = self.peek().span;
+        self.advance(); // consume 'effect'
+
+        let name = match self.peek().kind {
+            TokenKind::Ident(s) => {
+                self.advance();
+                s
+            }
+            _ => {
+                let tok = self.peek().clone();
+                self.errors.push(ParseError::UnexpectedToken {
+                    expected: "effect name".to_string(),
+                    found: tok.kind,
+                    span: tok.span,
+                });
+                return None;
+            }
+        };
+
+        // Optional generic type parameters: `<T, U>`. Effect-level type
+        // params are simple symbols (no bounds in M9).
+        let mut type_params: Vec<Symbol> = Vec::new();
+        if self.match_token(&TokenKind::Lt) {
+            while !self.check(&TokenKind::Gt) && !self.is_at_end() {
+                let tp_name = match self.peek().kind {
+                    TokenKind::Ident(s) => {
+                        self.advance();
+                        s
+                    }
+                    _ => {
+                        let tok = self.peek().clone();
+                        self.errors.push(ParseError::UnexpectedToken {
+                            expected: "type parameter name".to_string(),
+                            found: tok.kind,
+                            span: tok.span,
+                        });
+                        break;
+                    }
+                };
+                type_params.push(tp_name);
+                if !self.match_token(&TokenKind::Comma) {
+                    break;
+                }
+            }
+            let _ = self.expect(TokenKind::Gt, "'>'");
+        }
+
+        if self.expect(TokenKind::LBrace, "'{'").is_err() {
+            return None;
+        }
+
+        let mut ops: Vec<EffectOp> = Vec::new();
+        while !self.check(&TokenKind::RBrace) && !self.is_at_end() {
+            let op_start = self.peek().span;
+            let op_name = match self.peek().kind {
+                TokenKind::Ident(s) => {
+                    self.advance();
+                    s
+                }
+                _ => {
+                    let tok = self.peek().clone();
+                    self.errors.push(ParseError::UnexpectedToken {
+                        expected: "effect operation name".to_string(),
+                        found: tok.kind,
+                        span: tok.span,
+                    });
+                    break;
+                }
+            };
+
+            if self.expect(TokenKind::LParen, "'('").is_err() {
+                break;
+            }
+
+            let mut params: Vec<(Symbol, Ty)> = Vec::new();
+            if !self.check(&TokenKind::RParen) {
+                loop {
+                    let pname = match self.peek().kind {
+                        TokenKind::Ident(s) => {
+                            self.advance();
+                            s
+                        }
+                        _ => {
+                            let tok = self.peek().clone();
+                            self.errors.push(ParseError::UnexpectedToken {
+                                expected: "parameter name".to_string(),
+                                found: tok.kind,
+                                span: tok.span,
+                            });
+                            break;
+                        }
+                    };
+                    if self.expect(TokenKind::Colon, "':'").is_err() {
+                        break;
+                    }
+                    let pty_ann = match self.parse_type() {
+                        Some(t) => t,
+                        None => break,
+                    };
+                    let pty = self.lower_type_annotation(&pty_ann);
+                    params.push((pname, pty));
+                    if !self.match_token(&TokenKind::Comma) {
+                        break;
+                    }
+                }
+            }
+            let _ = self.expect(TokenKind::RParen, "')'");
+
+            // Resume type: `-> Type` (required).
+            let resume_type = if self.match_token(&TokenKind::Arrow) {
+                match self.parse_type() {
+                    Some(t) => self.lower_type_annotation(&t),
+                    None => Ty::Unit,
+                }
+            } else {
+                Ty::Unit
+            };
+
+            let op_end = self.tokens[self.current.saturating_sub(1)].span;
+            ops.push(EffectOp {
+                span: op_start.to(op_end),
+                name: op_name,
+                params,
+                resume_type,
+            });
+
+            if !self.match_token(&TokenKind::Comma) {
+                break;
+            }
+        }
+
+        let end_span = if let Ok(tok) = self.expect(TokenKind::RBrace, "'}'") {
+            tok.span
+        } else {
+            self.peek().span
+        };
+
+        Some(Item::EffectDecl(EffectDecl {
+            span: start_span.to(end_span),
+            name,
+            type_params,
+            ops,
+        }))
+    }
+
+    /// Lowers a `TypeAnnotation` into a concrete `Ty` for use in
+    /// `EffectOp::params`/`resume_type`. The parser produces a syntactic
+    /// approximation; the typechecker will refine effect-decl types in
+    /// Task 3. For now this maps the well-known primitives and falls back
+    /// to a `Ty::Unknown`-style sentinel via `Ty::Var(0)`.
+    fn lower_type_annotation(&self, ann: &TypeAnnotation) -> Ty {
+        match ann {
+            TypeAnnotation::Named(sym) => {
+                let name = self
+                    .interner
+                    .map(|i| i.resolve(*sym).to_string())
+                    .unwrap_or_default();
+                match name.as_str() {
+                    "Int" => Ty::Int,
+                    "Float" => Ty::Float,
+                    "Bool" => Ty::Bool,
+                    "Str" => Ty::Str,
+                    "Unit" | "" => Ty::Unit,
+                    "ShellOutput" => Ty::ShellOutput,
+                    _ => Ty::Var(ferric_common::TyVar(0)),
+                }
+            }
+            TypeAnnotation::Array(inner) => {
+                Ty::Array(Box::new(self.lower_type_annotation(inner)))
+            }
+            TypeAnnotation::Generic { head, args } => {
+                let name = self
+                    .interner
+                    .map(|i| i.resolve(*head).to_string())
+                    .unwrap_or_default();
+                match (name.as_str(), args.as_slice()) {
+                    ("Option", [t]) => Ty::Option(Box::new(self.lower_type_annotation(t))),
+                    ("Result", [t, e]) => Ty::Result(
+                        Box::new(self.lower_type_annotation(t)),
+                        Box::new(self.lower_type_annotation(e)),
+                    ),
+                    ("Async", [t]) => Ty::Async(Box::new(self.lower_type_annotation(t))),
+                    ("Handle", [t]) => Ty::Handle(Box::new(self.lower_type_annotation(t))),
+                    ("Poll", [t]) => Ty::Poll(Box::new(self.lower_type_annotation(t))),
+                    _ => Ty::Var(ferric_common::TyVar(0)),
+                }
+            }
+            TypeAnnotation::Eff { row, result } => {
+                let effects = row
+                    .iter()
+                    .map(|e| ferric_common::EffectRef {
+                        name: e.name,
+                        args: e
+                            .args
+                            .iter()
+                            .map(|a| self.lower_type_annotation(a))
+                            .collect(),
+                    })
+                    .collect();
+                Ty::Eff(effects, Box::new(self.lower_type_annotation(result)))
+            }
+            TypeAnnotation::Infer => Ty::Var(ferric_common::TyVar(0)),
         }
     }
 
@@ -1462,6 +1797,14 @@ impl<'a> Parser<'a> {
                 let _ = self.skip_import_decl_remainder();
                 continue;
             }
+            // `effect` declarations are only legal at module scope. Skip the
+            // entire effect declaration on recovery so we don't cascade.
+            if self.check(&TokenKind::Effect) {
+                let span = self.peek().span;
+                self.errors.push(ParseError::EffectDeclInsideFn { span });
+                let _ = self.parse_effect_decl();
+                continue;
+            }
 
             // Parse what looks like an expression
             if !self.is_expr_start() {
@@ -1555,7 +1898,11 @@ impl<'a> Parser<'a> {
                 | TokenKind::LBracket  // array literal: [1, 2]
                 | TokenKind::ShellLine(_)
                 | TokenKind::Async     // async { ... } block expression
-                | TokenKind::Await // prefix `await expr`
+                | TokenKind::Await     // prefix `await expr`
+                | TokenKind::Yield     // prefix `yield expr`
+                | TokenKind::Perform   // `perform Effect::Op(...)`
+                | TokenKind::Handle    // `handle { ... } with { ... }`
+                | TokenKind::Resume    // `resume k with v`
         )
     }
 
@@ -2259,19 +2606,72 @@ impl<'a> Parser<'a> {
             // tighter than binary operators, looser than postfix. Use parens
             // to chain into a method call: `(await fetch(url: u)).body`.
             //
-            // Parser fast-path: top-level `.await` (file scope, depth 0) is
+            // **M9 desugaring (parse-time):** `await expr` is rewritten to
+            // `perform Async::Suspend(future: expr)` here. No `Expr::Await`
+            // node ever leaves the parser.
+            //
+            // Parser fast-path: top-level `await` (file scope, depth 0) is
             // rejected immediately. Inside any function body the type
-            // checker takes over (see m8-02-lexer-parser.md).
+            // checker takes over.
             TokenKind::Await => {
                 let start_span = self.peek().span;
                 self.advance();
-                let operand = Box::new(self.parse_unary_expr());
+                let operand = self.parse_unary_expr();
                 let span = start_span.to(operand.span());
                 if self.fn_depth == 0 {
                     self.errors.push(ParseError::AwaitOutsideAsync { span });
                 }
                 let id = self.node_id_gen.next();
-                Expr::Await(AwaitExpr { id, span, operand })
+                if let Some(syms) = self.desugar {
+                    Expr::Perform(PerformExpr {
+                        id,
+                        span,
+                        effect: syms.async_eff,
+                        op: syms.suspend_op,
+                        args: vec![(syms.future_param, operand)],
+                    })
+                } else {
+                    // No interner — emit a unit literal placeholder so
+                    // unit tests that don't provide an interner don't
+                    // panic. The legacy `Expr::Await` shape was removed
+                    // in M9 Task 7.
+                    let _ = operand; // suppress unused warning
+                    Expr::Literal {
+                        value: Literal::Unit,
+                        id,
+                        span,
+                    }
+                }
+            }
+            // Prefix `yield expr`. Desugars at parse time to
+            // `perform Gen::Yield(value: expr)`. Same fast-path rule as
+            // `await`: a `yield` outside any fn body is a parse error.
+            TokenKind::Yield => {
+                let start_span = self.peek().span;
+                self.advance();
+                let value = self.parse_unary_expr();
+                let span = start_span.to(value.span());
+                if self.fn_depth == 0 {
+                    self.errors.push(ParseError::AwaitOutsideAsync { span });
+                }
+                let id = self.node_id_gen.next();
+                if let Some(syms) = self.desugar {
+                    Expr::Perform(PerformExpr {
+                        id,
+                        span,
+                        effect: syms.gen_eff,
+                        op: syms.yield_op,
+                        args: vec![(syms.value_param, value)],
+                    })
+                } else {
+                    // No interner — emit a unit literal as a placeholder so
+                    // unit tests that don't provide an interner don't panic.
+                    Expr::Literal {
+                        value: Literal::Unit,
+                        id,
+                        span,
+                    }
+                }
             }
             _ => self.parse_call_expr(),
         }
@@ -2684,9 +3084,16 @@ impl<'a> Parser<'a> {
             }
             TokenKind::LBrace => self.parse_block(),
             // `async { ... }` block expression. The next token must be `{`;
-            // anything else is `AsyncOnNonFn`. (`async fn` at the item level
-            // is dispatched in `parse_item` / `parse_async_item` and never
-            // reaches here.)
+            // anything else is `AsyncOnNonFn`.
+            //
+            // **M9 desugaring (parse-time):** `async { body }` desugars to
+            // the block itself — its `await`s have already been rewritten
+            // to `perform Async::Suspend(...)` by the prefix-`await` parser
+            // arm. The implicit `Eff<[Async], T>` wrapping is recovered by
+            // the type checker via row inference (Task 3); the parser does
+            // NOT emit a closure-IIFE here because closures don't yet carry
+            // explicit effect annotations. This is a documented deviation
+            // from the m9-02 spec and is acceptable for M8 fixtures.
             TokenKind::Async => {
                 let start_span = token.span;
                 self.advance(); // consume 'async'
@@ -2706,6 +3113,13 @@ impl<'a> Parser<'a> {
                 self.fn_depth += 1;
                 let block = self.parse_block();
                 self.fn_depth -= 1;
+                // Keep `Expr::AsyncBlock` even after parser desugaring: the
+                // type checker uses it as a marker to bump `async_depth`,
+                // which gates the M8 `AwaitOutsideAsync` diagnostic on a
+                // sync-context `await`. The compiler simply unwraps it
+                // back into its inner block — `Op::MakeAsync` is no longer
+                // emitted around it because the M9 default `Async` handler
+                // resolves the `perform Async::Suspend` sites directly.
                 let span = start_span.to(block.span());
                 Expr::AsyncBlock(AsyncBlockExpr {
                     id,
@@ -2834,6 +3248,12 @@ impl<'a> Parser<'a> {
                     span: token.span,
                 }
             }
+            // `perform Effect::Op(name: value, ...)`
+            TokenKind::Perform => self.parse_perform_expr(id),
+            // `handle { body } with { Effect::Op(args) => clause, ... }`
+            TokenKind::Handle => self.parse_handle_expr(id),
+            // `resume k with v`
+            TokenKind::Resume => self.parse_resume_expr(id),
             _ => {
                 self.errors.push(ParseError::ExpectedExpression {
                     found: token.kind,
@@ -2965,6 +3385,334 @@ impl<'a> Parser<'a> {
             && matches!(self.tokens[self.current + 1].kind, TokenKind::Colon)
     }
 
+    /// Parses a `perform Effect::Op(name: value, ...)` expression. The
+    /// caller has already determined that the next token is `Perform` and
+    /// allocated a `NodeId`.
+    fn parse_perform_expr(&mut self, id: NodeId) -> Expr {
+        let start_span = self.peek().span;
+        self.advance(); // consume 'perform'
+
+        // Effect name (identifier).
+        let effect = match self.peek().kind {
+            TokenKind::Ident(s) => {
+                self.advance();
+                s
+            }
+            _ => {
+                let tok = self.peek().clone();
+                self.errors.push(ParseError::UnexpectedToken {
+                    expected: "effect name".to_string(),
+                    found: tok.kind,
+                    span: tok.span,
+                });
+                return Expr::Literal {
+                    value: Literal::Unit,
+                    id,
+                    span: start_span,
+                };
+            }
+        };
+
+        // `::Op` separator + op name.
+        if self.expect(TokenKind::ColonColon, "'::'").is_err() {
+            return Expr::Literal {
+                value: Literal::Unit,
+                id,
+                span: start_span,
+            };
+        }
+        let op = match self.peek().kind {
+            TokenKind::Ident(s) => {
+                self.advance();
+                s
+            }
+            _ => {
+                let tok = self.peek().clone();
+                self.errors.push(ParseError::UnexpectedToken {
+                    expected: "operation name".to_string(),
+                    found: tok.kind,
+                    span: tok.span,
+                });
+                return Expr::Literal {
+                    value: Literal::Unit,
+                    id,
+                    span: start_span,
+                };
+            }
+        };
+
+        // Argument list: `(name: value, ...)`. Like regular calls, args are
+        // named; a positional arg is reported as `PositionalArg`.
+        if self.expect(TokenKind::LParen, "'('").is_err() {
+            return Expr::Literal {
+                value: Literal::Unit,
+                id,
+                span: start_span,
+            };
+        }
+
+        let mut args: Vec<(Symbol, Expr)> = Vec::new();
+        if !self.check(&TokenKind::RParen) {
+            loop {
+                let arg_start = self.peek().span;
+                if self.is_named_arg_start() {
+                    let name = if let TokenKind::Ident(s) = self.peek().kind {
+                        self.advance(); // name
+                        self.advance(); // ':'
+                        s
+                    } else {
+                        unreachable!()
+                    };
+                    let value = self.with_struct_literal_allowed(|p| p.parse_expr());
+                    args.push((name, value));
+                } else {
+                    self.errors
+                        .push(ParseError::PositionalArg { span: arg_start });
+                    let value = self.with_struct_literal_allowed(|p| p.parse_expr());
+                    args.push((Symbol::new(0), value));
+                }
+                if !self.match_token(&TokenKind::Comma) {
+                    break;
+                }
+            }
+        }
+        let end_span = if let Ok(tok) = self.expect(TokenKind::RParen, "')'") {
+            tok.span
+        } else {
+            self.peek().span
+        };
+
+        Expr::Perform(PerformExpr {
+            id,
+            span: start_span.to(end_span),
+            effect,
+            op,
+            args,
+        })
+    }
+
+    /// Parses a `handle { body } with { Effect::Op(arg, ...) => body, ... }`
+    /// expression. The continuation variable `k` is implicitly bound inside
+    /// each clause body; users may rename it by naming a parameter `k`
+    /// (which produces a `ShadowsContinuation` warning).
+    fn parse_handle_expr(&mut self, id: NodeId) -> Expr {
+        let start_span = self.peek().span;
+        self.advance(); // consume 'handle'
+
+        // The body must be a `{ ... }` block.
+        let body = if self.check(&TokenKind::LBrace) {
+            self.parse_block()
+        } else {
+            let tok = self.peek().clone();
+            self.errors.push(ParseError::UnexpectedToken {
+                expected: "'{' to start the handle body".to_string(),
+                found: tok.kind,
+                span: tok.span,
+            });
+            Expr::Literal {
+                value: Literal::Unit,
+                id: self.node_id_gen.next(),
+                span: start_span,
+            }
+        };
+
+        // `with` keyword.
+        if self.expect(TokenKind::With, "'with'").is_err() {
+            return Expr::Literal {
+                value: Literal::Unit,
+                id,
+                span: start_span,
+            };
+        }
+
+        if self.expect(TokenKind::LBrace, "'{'").is_err() {
+            return Expr::Literal {
+                value: Literal::Unit,
+                id,
+                span: start_span,
+            };
+        }
+
+        let cont_default = self
+            .desugar
+            .map(|d| d.cont_default)
+            .unwrap_or(Symbol::new(0));
+
+        let mut clauses: Vec<HandlerClause> = Vec::new();
+        while !self.check(&TokenKind::RBrace) && !self.is_at_end() {
+            let clause_start = self.peek().span;
+
+            // Effect name.
+            let effect = match self.peek().kind {
+                TokenKind::Ident(s) => {
+                    self.advance();
+                    s
+                }
+                _ => {
+                    let tok = self.peek().clone();
+                    self.errors.push(ParseError::UnexpectedToken {
+                        expected: "effect name".to_string(),
+                        found: tok.kind,
+                        span: tok.span,
+                    });
+                    break;
+                }
+            };
+
+            if self.expect(TokenKind::ColonColon, "'::'").is_err() {
+                break;
+            }
+
+            let op = match self.peek().kind {
+                TokenKind::Ident(s) => {
+                    self.advance();
+                    s
+                }
+                _ => {
+                    let tok = self.peek().clone();
+                    self.errors.push(ParseError::UnexpectedToken {
+                        expected: "operation name".to_string(),
+                        found: tok.kind,
+                        span: tok.span,
+                    });
+                    break;
+                }
+            };
+
+            // Parameter list: `(p1, p2, ...)` — bare names that bind the
+            // operation's argument values.
+            if self.expect(TokenKind::LParen, "'('").is_err() {
+                break;
+            }
+            let mut params: Vec<Symbol> = Vec::new();
+            if !self.check(&TokenKind::RParen) {
+                loop {
+                    let pspan = self.peek().span;
+                    let pname = match self.peek().kind {
+                        TokenKind::Ident(s) => {
+                            self.advance();
+                            s
+                        }
+                        _ => {
+                            let tok = self.peek().clone();
+                            self.errors.push(ParseError::UnexpectedToken {
+                                expected: "parameter binding name".to_string(),
+                                found: tok.kind,
+                                span: tok.span,
+                            });
+                            break;
+                        }
+                    };
+                    if pname == cont_default {
+                        self.warnings
+                            .push(ParseWarning::ShadowsContinuation { span: pspan });
+                    }
+                    params.push(pname);
+                    if !self.match_token(&TokenKind::Comma) {
+                        break;
+                    }
+                }
+            }
+            let _ = self.expect(TokenKind::RParen, "')'");
+
+            // `=>` then handler body expression.
+            if self.expect(TokenKind::FatArrow, "'=>'").is_err() {
+                break;
+            }
+
+            // Track that we're inside a handler clause body — `resume k`
+            // requires this scope.
+            self.cont_stack.push(cont_default);
+            let handler = self.parse_expr();
+            self.cont_stack.pop();
+
+            // Optional trailing comma between clauses.
+            self.match_token(&TokenKind::Comma);
+
+            clauses.push(HandlerClause {
+                span: clause_start.to(handler.span()),
+                effect,
+                op,
+                params,
+                cont: cont_default,
+                handler: Box::new(handler),
+            });
+        }
+
+        let end_span = if let Ok(tok) = self.expect(TokenKind::RBrace, "'}'") {
+            tok.span
+        } else {
+            self.peek().span
+        };
+
+        Expr::Handle(HandleExpr {
+            id,
+            span: start_span.to(end_span),
+            body: Box::new(body),
+            clauses,
+        })
+    }
+
+    /// Parses a `resume k with value` expression. Validates that `resume`
+    /// appears inside a handler clause body (`cont_stack` non-empty); emits
+    /// `ParseError::ResumeOutsideHandler` otherwise.
+    fn parse_resume_expr(&mut self, id: NodeId) -> Expr {
+        let start_span = self.peek().span;
+        self.advance(); // consume 'resume'
+
+        let cont = match self.peek().kind {
+            TokenKind::Ident(s) => {
+                self.advance();
+                s
+            }
+            _ => {
+                let tok = self.peek().clone();
+                self.errors.push(ParseError::UnexpectedToken {
+                    expected: "continuation variable name".to_string(),
+                    found: tok.kind,
+                    span: tok.span,
+                });
+                return Expr::Literal {
+                    value: Literal::Unit,
+                    id,
+                    span: start_span,
+                };
+            }
+        };
+
+        // `with` keyword.
+        if !matches!(self.peek().kind, TokenKind::With) {
+            let tok = self.peek().clone();
+            self.errors.push(ParseError::UnexpectedToken {
+                expected: "'with'".to_string(),
+                found: tok.kind,
+                span: tok.span,
+            });
+            return Expr::Literal {
+                value: Literal::Unit,
+                id,
+                span: start_span,
+            };
+        }
+        self.advance(); // consume 'with'
+
+        let value = self.parse_expr();
+        let span = start_span.to(value.span());
+
+        // Validate that we're inside a handler clause.
+        if self.cont_stack.is_empty() {
+            self.errors
+                .push(ParseError::ResumeOutsideHandler { span });
+        }
+
+        Expr::Resume(ResumeExpr {
+            id,
+            span,
+            cont,
+            value: Box::new(value),
+        })
+    }
+
     /// Parses `set ":" closure_expr` and returns the closure expression.
     fn parse_set_clause(&mut self) -> Option<Box<Expr>> {
         // consume "set" ident and ":"
@@ -2984,6 +3732,25 @@ impl<'a> Parser<'a> {
     }
 }
 
+/// Pre-interns the well-known names the parser needs for `async`/`gen`/
+/// effects desugaring (e.g. `Async`, `Suspend`, `Gen`, `Yield`, `value`,
+/// `future`, `k`). Callers that use [`parse_with_interner`] should call
+/// this once on the interner before parsing so that the desugared AST
+/// references the correct `Symbol` identities.
+pub fn pre_intern_desugar_names(interner: &mut Interner) {
+    interner.intern("Async");
+    interner.intern("Suspend");
+    interner.intern("future");
+    interner.intern("Gen");
+    interner.intern("Yield");
+    interner.intern("value");
+    interner.intern("k");
+    // `Unit` is the inner result type of `gen fn` after desugaring. The
+    // resolver/typechecker recognise it by name, so interning it here ensures
+    // the parser-emitted `TypeAnnotation::Named(Symbol("Unit"))` round-trips.
+    interner.intern("Unit");
+}
+
 /// Parses a LexResult into a ParseResult.
 ///
 /// This is the only public entry point to the parser.
@@ -2998,16 +3765,21 @@ impl<'a> Parser<'a> {
 pub fn parse(lex: &LexResult) -> ParseResult {
     let mut parser = Parser::new(&lex.tokens);
     let items = parser.parse_program();
-    ParseResult::new(items, parser.errors)
+    ParseResult::with_warnings(items, parser.errors, parser.warnings)
 }
 
 /// Like [`parse`], but with access to the interner so that import-path strings
 /// can be classified at parse time. M7+ programs that use `import` declarations
 /// must call this entry point.
+///
+/// **Note:** the parser also uses the interner to look up well-known names
+/// for `async`/`gen` desugaring. Callers that have a freshly constructed
+/// interner should call [`pre_intern_desugar_names`] first to guarantee
+/// those symbols are present.
 pub fn parse_with_interner(lex: &LexResult, interner: &Interner) -> ParseResult {
     let mut parser = Parser::new_with_interner(&lex.tokens, interner);
     let items = parser.parse_program();
-    ParseResult::new(items, parser.errors)
+    ParseResult::with_warnings(items, parser.errors, parser.warnings)
 }
 
 /// Convenience wrapper that runs `parse` and serialises the result as JSON.
@@ -3470,6 +4242,7 @@ mod tests {
     fn lex_parse(src: &str) -> (Interner, ParseResult) {
         let mut interner = Interner::new();
         let lex_result = ferric_lexer::lex(src, &mut interner);
+        pre_intern_desugar_names(&mut interner);
         let parsed = parse_with_interner(&lex_result, &interner);
         (interner, parsed)
     }
@@ -3725,14 +4498,27 @@ mod tests {
 
     #[test]
     fn test_async_fn_top_level() {
+        // M9: `async fn` desugars to a plain `Item::Fn` with return type
+        // `Eff<[Async], T>`. No `Item::AsyncFn` ever appears in the AST.
         let (interner, result) = lex_parse("async fn fetch(url: Str) -> Str { url }");
         assert_eq!(result.errors.len(), 0, "errors: {:?}", result.errors);
         match &result.items[0] {
-            Item::AsyncFn(decl) => {
-                assert_eq!(interner.resolve(decl.item.name), "fetch");
-                assert_eq!(decl.item.params.len(), 1);
+            Item::Fn(item) => {
+                assert_eq!(interner.resolve(item.name), "fetch");
+                assert_eq!(item.params.len(), 1);
+                match &item.ret_ty {
+                    TypeAnnotation::Eff { row, result: inner } => {
+                        assert_eq!(row.len(), 1);
+                        assert_eq!(interner.resolve(row[0].name), "Async");
+                        assert!(matches!(
+                            inner.as_ref(),
+                            TypeAnnotation::Named(_)
+                        ));
+                    }
+                    other => panic!("expected Eff return type, got {other:?}"),
+                }
             }
-            other => panic!("expected Item::AsyncFn, got {other:?}"),
+            other => panic!("expected Item::Fn after async desugaring, got {other:?}"),
         }
     }
 
@@ -3764,21 +4550,26 @@ mod tests {
 
     #[test]
     fn test_await_prefix_inside_async_fn() {
-        let (_, result) = lex_parse("async fn f() -> Int { await foo() }");
+        // M9: `await expr` desugars to `perform Async::Suspend(future: expr)`.
+        // The wrapping `async fn` desugars to `Item::Fn` with `Eff<[Async], T>`.
+        let (interner, result) = lex_parse("async fn f() -> Int { await foo() }");
         assert_eq!(result.errors.len(), 0, "errors: {:?}", result.errors);
         match &result.items[0] {
-            Item::AsyncFn(decl) => match &decl.item.body {
+            Item::Fn(item) => match &item.body {
                 Expr::Block {
                     expr: Some(tail), ..
-                } => {
-                    assert!(
-                        matches!(tail.as_ref(), Expr::Await(_)),
-                        "tail expr should be Await, got {tail:?}"
-                    );
-                }
+                } => match tail.as_ref() {
+                    Expr::Perform(p) => {
+                        assert_eq!(interner.resolve(p.effect), "Async");
+                        assert_eq!(interner.resolve(p.op), "Suspend");
+                        assert_eq!(p.args.len(), 1);
+                        assert_eq!(interner.resolve(p.args[0].0), "future");
+                    }
+                    other => panic!("tail expr should be Perform, got {other:?}"),
+                },
                 other => panic!("expected block body, got {other:?}"),
             },
-            other => panic!("expected AsyncFn, got {other:?}"),
+            other => panic!("expected Item::Fn after desugaring, got {other:?}"),
         }
     }
 
@@ -3837,6 +4628,13 @@ mod tests {
 
     #[test]
     fn test_async_block_expression() {
+        // M9 Task 6: `async { ... }` survives the parser as
+        // `Expr::AsyncBlock(...)`. The marker is what the type checker
+        // reads to bump `async_depth` (so awaits inside accept the
+        // parser's `perform Async::Suspend` desugaring) and what the
+        // compiler reads to inline-emit the body — there is no longer a
+        // `MakeAsync` deferral around it. The inner `await`s have
+        // already been rewritten to `perform`.
         let (_, result) = lex_parse("let task = async { 42 }");
         assert_eq!(result.errors.len(), 0, "errors: {:?}", result.errors);
         match &result.items[0] {
@@ -3846,7 +4644,7 @@ mod tests {
             } => {
                 assert!(
                     matches!(init, Expr::AsyncBlock(_)),
-                    "init should be AsyncBlock, got {init:?}"
+                    "init should be `Expr::AsyncBlock`, got {init:?}"
                 );
             }
             other => panic!("expected let, got {other:?}"),
@@ -3908,4 +4706,189 @@ mod tests {
             other => panic!("expected fn, got {other:?}"),
         }
     }
+
+    // =============== M9 — effects: declarations, perform, handle, resume ===============
+
+    #[test]
+    fn test_effect_decl_parses() {
+        let (interner, result) = lex_parse(
+            "effect Counter { Inc(amount: Int) -> Int, Reset() -> Unit }",
+        );
+        assert_eq!(result.errors.len(), 0, "errors: {:?}", result.errors);
+        match &result.items[0] {
+            Item::EffectDecl(decl) => {
+                assert_eq!(interner.resolve(decl.name), "Counter");
+                assert_eq!(decl.ops.len(), 2);
+                assert_eq!(interner.resolve(decl.ops[0].name), "Inc");
+                assert_eq!(decl.ops[0].params.len(), 1);
+                assert_eq!(interner.resolve(decl.ops[0].params[0].0), "amount");
+                assert_eq!(decl.ops[0].resume_type, Ty::Int);
+                assert_eq!(interner.resolve(decl.ops[1].name), "Reset");
+                assert_eq!(decl.ops[1].params.len(), 0);
+                assert_eq!(decl.ops[1].resume_type, Ty::Unit);
+            }
+            other => panic!("expected EffectDecl, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_effect_decl_with_type_params() {
+        let (interner, result) = lex_parse(
+            "effect Gen<T> { Yield(value: T) -> Unit }",
+        );
+        assert_eq!(result.errors.len(), 0, "errors: {:?}", result.errors);
+        match &result.items[0] {
+            Item::EffectDecl(decl) => {
+                assert_eq!(interner.resolve(decl.name), "Gen");
+                assert_eq!(decl.type_params.len(), 1);
+                assert_eq!(interner.resolve(decl.type_params[0]), "T");
+            }
+            other => panic!("expected EffectDecl, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_effect_decl_inside_fn_is_error() {
+        let (_, result) = lex_parse(
+            "fn outer() -> Unit { effect Inner { Op() -> Unit } }",
+        );
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|e| matches!(e, ParseError::EffectDeclInsideFn { .. })),
+            "errors: {:?}",
+            result.errors,
+        );
+    }
+
+    #[test]
+    fn test_perform_expression() {
+        let (interner, result) = lex_parse(
+            "fn use_eff() -> Int { perform Counter::Inc(amount: 1) }",
+        );
+        assert_eq!(result.errors.len(), 0, "errors: {:?}", result.errors);
+        match &result.items[0] {
+            Item::Fn(item) => match &item.body {
+                Expr::Block { expr: Some(tail), .. } => match tail.as_ref() {
+                    Expr::Perform(p) => {
+                        assert_eq!(interner.resolve(p.effect), "Counter");
+                        assert_eq!(interner.resolve(p.op), "Inc");
+                        assert_eq!(p.args.len(), 1);
+                        assert_eq!(interner.resolve(p.args[0].0), "amount");
+                    }
+                    other => panic!("expected Perform tail, got {other:?}"),
+                },
+                other => panic!("expected block body, got {other:?}"),
+            },
+            other => panic!("expected fn, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_handle_with_clauses() {
+        let (interner, result) = lex_parse(
+            "fn run() -> Int { handle { 1 } with { Counter::Inc(n) => resume k with n } }",
+        );
+        assert_eq!(result.errors.len(), 0, "errors: {:?}", result.errors);
+        match &result.items[0] {
+            Item::Fn(item) => match &item.body {
+                Expr::Block { expr: Some(tail), .. } => match tail.as_ref() {
+                    Expr::Handle(h) => {
+                        assert_eq!(h.clauses.len(), 1);
+                        let cl = &h.clauses[0];
+                        assert_eq!(interner.resolve(cl.effect), "Counter");
+                        assert_eq!(interner.resolve(cl.op), "Inc");
+                        assert_eq!(cl.params.len(), 1);
+                        assert_eq!(interner.resolve(cl.cont), "k");
+                        // Inside handler clause, `resume k with n` is legal
+                        // and parses as Expr::Resume.
+                        match cl.handler.as_ref() {
+                            Expr::Resume(r) => {
+                                assert_eq!(interner.resolve(r.cont), "k");
+                            }
+                            other => panic!("expected Resume, got {other:?}"),
+                        }
+                    }
+                    other => panic!("expected Handle tail, got {other:?}"),
+                },
+                other => panic!("expected block body, got {other:?}"),
+            },
+            other => panic!("expected fn, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_resume_outside_handler_is_error() {
+        let (_, result) = lex_parse(
+            "fn bad() -> Int { resume k with 1 }",
+        );
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|e| matches!(e, ParseError::ResumeOutsideHandler { .. })),
+            "errors: {:?}",
+            result.errors,
+        );
+    }
+
+    #[test]
+    fn test_handler_param_named_k_warns_shadows_continuation() {
+        let (_, result) = lex_parse(
+            "fn run() -> Int { handle { 1 } with { Foo::Bar(k) => 0 } }",
+        );
+        assert!(
+            result
+                .warnings
+                .iter()
+                .any(|w| matches!(w, ParseWarning::ShadowsContinuation { .. })),
+            "warnings: {:?}",
+            result.warnings,
+        );
+    }
+
+    #[test]
+    fn test_gen_fn_desugars_to_eff_gen_unit() {
+        let (interner, result) = lex_parse(
+            "gen fn iter() -> Int { yield 42 }",
+        );
+        assert_eq!(result.errors.len(), 0, "errors: {:?}", result.errors);
+        match &result.items[0] {
+            Item::Fn(item) => {
+                match &item.ret_ty {
+                    TypeAnnotation::Eff { row, result: inner } => {
+                        assert_eq!(row.len(), 1);
+                        assert_eq!(interner.resolve(row[0].name), "Gen");
+                        assert_eq!(row[0].args.len(), 1);
+                        // Inner result should be Unit.
+                        match inner.as_ref() {
+                            TypeAnnotation::Named(s) => {
+                                assert_eq!(interner.resolve(*s), "Unit");
+                            }
+                            other => panic!("expected Unit return, got {other:?}"),
+                        }
+                    }
+                    other => panic!("expected Eff return, got {other:?}"),
+                }
+                // Body's tail expr should be Perform(Gen::Yield).
+                match &item.body {
+                    Expr::Block { expr: Some(tail), .. } => match tail.as_ref() {
+                        Expr::Perform(p) => {
+                            assert_eq!(interner.resolve(p.effect), "Gen");
+                            assert_eq!(interner.resolve(p.op), "Yield");
+                            assert_eq!(interner.resolve(p.args[0].0), "value");
+                        }
+                        other => panic!("expected Perform tail, got {other:?}"),
+                    },
+                    other => panic!("expected block body, got {other:?}"),
+                }
+            }
+            other => panic!("expected Item::Fn, got {other:?}"),
+        }
+    }
+
+    // The legacy `Item::AsyncFn` / `Expr::Await` survival test that lived
+    // here was removed in M9 Task 7 along with the variants themselves —
+    // the parser cannot construct shapes that no longer exist in the AST.
 }

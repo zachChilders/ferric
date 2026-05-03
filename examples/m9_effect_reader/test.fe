@@ -1,0 +1,28 @@
+// M9 — custom effect with `handle...with` block.
+//
+// Demonstrates a `Config::Get` reader effect: the handler intercepts
+// `perform Config::Get(key:)` and returns a hard-coded value, exactly like
+// a reader monad in pure FP. The host code runs unchanged whether the
+// "config" comes from a file, an env var, or this test handler.
+//
+// Until M9 Task 5 lands the VM-side `Op::PushHandler` / `Op::Perform` /
+// `Op::Resume` implementations, this fixture is intentionally missing
+// `expected.txt` and `exit` so the harness skips it (a directory missing
+// `expected.txt` is silently dropped from the test discovery — see
+// CLAUDE.md).
+
+effect Config {
+    Get(key: Str) -> Str,
+}
+
+fn read_host() -> Str {
+    perform Config::Get(key: "db.host")
+}
+
+let host = handle {
+    read_host()
+} with {
+    Config::Get(key) => resume k with "localhost"
+}
+
+println(s: host)

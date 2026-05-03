@@ -54,7 +54,9 @@ impl ImplTy {
             | Ty::Result(_, _)
             | Ty::Async(_)
             | Ty::Handle(_)
-            | Ty::Poll(_) => return None,
+            | Ty::Poll(_)
+            | Ty::Eff(_, _)
+            | Ty::EffVar(_) => return None,
         })
     }
 }

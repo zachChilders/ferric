@@ -16,6 +16,7 @@ members = [
     "crates/ferric_manifest",
     "crates/ferric_module",
     "crates/ferric_async",
+    "crates/ferric_effects",
     "crates/ferric_lsp",
 ]
 
@@ -39,3 +40,4 @@ ferric_stdlib = { path = "crates/ferric_stdlib" }
 ferric_manifest = { path = "crates/ferric_manifest" }
 ferric_module = { path = "crates/ferric_module" }
 ferric_async = { path = "crates/ferric_async" }
+ferric_effects = { path = "crates/ferric_effects" }

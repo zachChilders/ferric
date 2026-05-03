@@ -1,8 +1,9 @@
 //! Output types for each compiler stage.
 
 use crate::{
-    AsyncLowerError, AsyncWarning, Chunk, DefId, ExhaustivenessError, Item, LexError, NamedArg,
-    NodeId, ParseError, ResolveError, Span, Symbol, Token, Ty, TypeError,
+    AsyncLowerError, AsyncWarning, Chunk, DefId, EffectError, EffectWarning, ExhaustivenessError,
+    Item, LexError, NamedArg, NodeId, ParseError, ParseWarning, ResolveError, Span, Symbol, Token,
+    Ty, TypeError,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -34,19 +35,40 @@ impl LexResult {
 /// Result of the parsing stage.
 ///
 /// Contains the abstract syntax tree (as a collection of top-level items)
-/// along with any parsing errors encountered.
+/// along with any parsing errors and warnings encountered.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ParseResult {
     /// Top-level items (functions, variable declarations, etc.)
     pub items: Vec<Item>,
     /// Any errors encountered during parsing
     pub errors: Vec<ParseError>,
+    /// Non-fatal diagnostics emitted during parsing. Defaults to empty for
+    /// parsers/tests that don't emit warnings.
+    #[serde(default)]
+    pub warnings: Vec<ParseWarning>,
 }
 
 impl ParseResult {
-    /// Creates a new ParseResult.
+    /// Creates a new ParseResult with no warnings.
     pub fn new(items: Vec<Item>, errors: Vec<ParseError>) -> Self {
-        Self { items, errors }
+        Self {
+            items,
+            errors,
+            warnings: Vec::new(),
+        }
+    }
+
+    /// Creates a new ParseResult including parse warnings.
+    pub fn with_warnings(
+        items: Vec<Item>,
+        errors: Vec<ParseError>,
+        warnings: Vec<ParseWarning>,
+    ) -> Self {
+        Self {
+            items,
+            errors,
+            warnings,
+        }
     }
 
     /// Returns true if there were any errors during parsing.
@@ -234,6 +256,119 @@ impl AsyncResult {
     }
 }
 
+/// Numeric tag tables assigned by the effects lowering pass.
+///
+/// The compiler emits `Op::Perform(effect_tag, op_tag, arg_count)` and the
+/// VM's handler stack dispatches by these tags. The lowering pass assigns
+/// stable tags up front (built-ins first, then user-declared effects) and
+/// publishes them here so the compiler can do the lookup without re-walking
+/// the AST.
+///
+/// Built-in tags: `Async = 0`, `Gen = 1`. User-declared effects get tags
+/// starting at 2. Within an effect, ops are tagged in declaration order
+/// (also: built-in ops `Async::Suspend = 0`, `Async::Spawn = 1`,
+/// `Async::Join = 2`, `Gen::Yield = 0`).
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct EffectTags {
+    /// `effect_name -> u16 tag`.
+    pub effect_tags: HashMap<Symbol, u16>,
+    /// `(effect_name, op_name) -> u8 tag`.
+    pub op_tags: HashMap<(Symbol, Symbol), u8>,
+}
+
+impl EffectTags {
+    /// Looks up the tag pair for a `(effect, op)`. Returns `None` if the
+    /// effect or op isn't registered.
+    pub fn lookup(&self, effect: Symbol, op: Symbol) -> Option<(u16, u8)> {
+        let e = *self.effect_tags.get(&effect)?;
+        let o = *self.op_tags.get(&(effect, op))?;
+        Some((e, o))
+    }
+}
+
+/// Result of the `ferric_effects` lowering / checking stage.
+///
+/// Slots in between the type checker and the compiler — same pipeline position
+/// as `AsyncResult`, which it replaces in M9. The `ast` field is a rewritten
+/// `ParseResult` (same type as the parser's output) with `effect`/`perform`/
+/// `handle`/`resume` desugared to the bytecode primitives the compiler emits.
+/// Downstream stages accept the rewritten `ParseResult` unchanged.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EffectResult {
+    /// The rewritten AST. For programs with no effect machinery, this is
+    /// structurally equivalent to the input `ParseResult`.
+    pub ast: ParseResult,
+    /// Effect / op tag table the compiler reads to lower
+    /// `Expr::Perform`/`Handle`/`Resume` to opcodes.
+    #[serde(default)]
+    pub tags: EffectTags,
+    /// Errors discovered during effect checking / lowering.
+    pub errors: Vec<EffectError>,
+    /// Non-fatal diagnostics.
+    pub warnings: Vec<EffectWarning>,
+}
+
+impl EffectResult {
+    /// Creates a new `EffectResult`.
+    pub fn new(
+        ast: ParseResult,
+        errors: Vec<EffectError>,
+        warnings: Vec<EffectWarning>,
+    ) -> Self {
+        Self {
+            ast,
+            tags: EffectTags::default(),
+            errors,
+            warnings,
+        }
+    }
+
+    /// Creates a new `EffectResult` with an explicit tag table.
+    pub fn with_tags(
+        ast: ParseResult,
+        tags: EffectTags,
+        errors: Vec<EffectError>,
+        warnings: Vec<EffectWarning>,
+    ) -> Self {
+        Self {
+            ast,
+            tags,
+            errors,
+            warnings,
+        }
+    }
+
+    /// Returns true if any effect errors were recorded.
+    pub fn has_errors(&self) -> bool {
+        !self.errors.is_empty()
+    }
+}
+
+/// A single entry in a [`HandlerTable`]. Maps a `(effect_tag, op_tag)` pair
+/// to the chunk index that holds the compiled handler clause body. The VM
+/// reads this when an `Op::Perform` walks the handler stack.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct HandlerEntry {
+    /// Effect tag from [`EffectTags::effect_tags`].
+    pub effect_tag: u16,
+    /// Op tag from [`EffectTags::op_tags`].
+    pub op_tag: u8,
+    /// Chunk index of the compiled handler clause body. The clause's
+    /// leading slots are bound to the operation's argument values
+    /// (declaration order), followed by the continuation as the last
+    /// leading slot.
+    pub clause_chunk_idx: u16,
+}
+
+/// A list of handler clauses associated with one `handle ... with { ... }`
+/// expression. Indexed from `Op::PushHandler(handler_table_idx)`.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct HandlerTable {
+    /// Clauses in source order. Lookup is linear; tables are small (typically
+    /// 1–3 clauses).
+    pub entries: Vec<HandlerEntry>,
+}
+
 /// A compiled Ferric program ready for execution.
 ///
 /// A `Program` is pure bytecode: a list of `Chunk`s (one per user function,
@@ -244,11 +379,57 @@ pub struct Program {
     pub chunks: Vec<Chunk>,
     /// Index into `chunks` of the entry point.
     pub entry: u16,
+    /// Handler-clause tables, one per `handle ... with { ... }` expression
+    /// the compiler encountered. `Op::PushHandler(idx)` references an entry
+    /// in this list. Empty for programs that have no handler blocks.
+    #[serde(default)]
+    pub handler_tables: Vec<HandlerTable>,
+    /// Effect/op tag table assigned by the effects pass. Forwarded into the
+    /// VM so it can recognise built-in effects (e.g. `Async::Suspend`) for
+    /// special-case handling. Empty for programs with no effects.
+    #[serde(default)]
+    pub effect_tags: EffectTags,
 }
 
 impl Program {
-    /// Creates a Program from the given chunks and entry index.
+    /// Creates a Program from the given chunks and entry index. No handler
+    /// tables are registered; programs that compile `handle` expressions
+    /// must build the program with [`Program::with_handler_tables`].
     pub fn new(chunks: Vec<Chunk>, entry: u16) -> Self {
-        Self { chunks, entry }
+        Self {
+            chunks,
+            entry,
+            handler_tables: Vec::new(),
+            effect_tags: EffectTags::default(),
+        }
+    }
+
+    /// Creates a Program with explicit handler tables.
+    pub fn with_handler_tables(
+        chunks: Vec<Chunk>,
+        entry: u16,
+        handler_tables: Vec<HandlerTable>,
+    ) -> Self {
+        Self {
+            chunks,
+            entry,
+            handler_tables,
+            effect_tags: EffectTags::default(),
+        }
+    }
+
+    /// Creates a Program with explicit handler tables and effect tag table.
+    pub fn with_effects(
+        chunks: Vec<Chunk>,
+        entry: u16,
+        handler_tables: Vec<HandlerTable>,
+        effect_tags: EffectTags,
+    ) -> Self {
+        Self {
+            chunks,
+            entry,
+            handler_tables,
+            effect_tags,
+        }
     }
 }

@@ -1,46 +1,34 @@
-//! # `ferric_async` — async/await preparation pass.
+//! # `ferric_async` — async-aware diagnostic / shell-rewrite pass.
 //!
-//! Slots into the pipeline between `ferric_typecheck` and `ferric_compiler`.
-//! Reads a parsed AST plus type information, returns an `AsyncResult` whose
-//! `ast` field is a rewritten `ParseResult` with one structural change:
+//! Originally (M8) this crate performed a full async lowering: it turned
+//! `Item::AsyncFn` into a state-machine-shaped `Item::Fn`, wrapped bodies
+//! in `AsyncBlock`, and rewrote `await` sites. The M9 effects redesign
+//! moved that work into the parser (`async fn` → `fn` returning
+//! `Eff<[Async], T>`; `await expr` → `perform Async::Suspend(future:
+//! expr)`) and into the unified effects pipeline (`ferric_effects`).
 //!
-//! - `Item::AsyncFn(decl)` → `Item::Fn` whose return type is wrapped in
-//!   `Async<T>` and whose body is wrapped in `AsyncBlock(original_body)`.
-//!   This is a uniform representation: every async-producing function — named
-//!   or anonymous — becomes "a regular fn whose body is an async block."
+//! What remains here is two diagnostics that the M9 fixtures still
+//! depend on:
 //!
-//! Other transformations:
+//! - [`AsyncLowerError::InfiniteAsyncRecursion`] for the direct
+//!   self-recursive case where an `async fn`'s tail is the desugared
+//!   `perform Async::Suspend(future: foo(...))` calling itself.
+//! - [`AsyncWarning::BlockingShell`] for any `$ ...` shell expression
+//!   that lives outside an async context in a program that does use
+//!   async/effects elsewhere. Inside an async context the shell is
+//!   rewritten into an `await shell_run_async(...)` form so subprocess
+//!   work participates in the runtime.
 //!
-//! - `Expr::Await` and `Expr::AsyncBlock` pass through unchanged. The compiler
-//!   handles them directly via new `Op::MakeAsync` and `Op::Await` instructions.
-//! - `Expr::Shell` inside an async context is rewritten to
-//!   `await shell_run_async(cmd: <literal>)` so that subprocess execution
-//!   participates in the async runtime. Outside an async context, a
-//!   `BlockingShell` warning is emitted (if the program also uses async
-//!   syntax, otherwise suppressed as noise).
-//!
-//! - `AsyncLowerError::InfiniteAsyncRecursion` fires for direct self-recursive
-//!   async fns whose body is, syntactically, `await foo(...)` where `foo` is
-//!   the enclosing fn — only the simplest case; mutual or branching recursion
-//!   is detected at runtime by the scheduler's deadlock check.
-//!
-//! ## Architectural note
-//!
-//! An earlier draft of this stage (M8 Task 4 v1) emitted full state machines
-//! per spec — state enum + poll fn + constructor fn — modelled on Rust's
-//! async lowering. That approach forces every async value through a chain
-//! of compile-time-erased coroutine state, which is the right design for a
-//! language that compiles to machine code with no resumable VM state. Ferric
-//! has a heap-allocated frame stack (M3+) that *can* hold paused state, so
-//! the simpler model (Lua/Python-style coroutines) is a better fit. Path B,
-//! the current architecture, was adopted in M8 Task 5 to unblock end-to-end
-//! execution of async programs. See `docs/tasks/m8-04-lowering.md` and
-//! `docs/tasks/m8-05-vm-stdlib.md` for the full design discussion.
+//! The crate is still load-bearing — `lower_async` runs in
+//! `main.rs`/`pipeline.rs` after typecheck and produces the diagnostics
+//! M8 fixtures observe. M9 Task 7 explicitly chose to keep this stage in
+//! place rather than merge it into another crate; see
+//! `docs/tasks/m9-00-overview.md` for the rationale.
 
 use ferric_common::{
-    AsyncBlockExpr, AsyncFnItem, AsyncLowerError, AsyncResult, AsyncWarning, AsyncWarningKind,
-    AwaitExpr, CastExpr, ExportDecl, Expr, FnItem, ImplMethod, Item, Literal, MatchArm, NamedArg,
-    NodeId, ParseResult, RequireStmt, ShellPart, Span, Stmt, Symbol, TypeResult,
+    AsyncBlockExpr, AsyncLowerError, AsyncResult, AsyncWarning, AsyncWarningKind,
+    CastExpr, ExportDecl, Expr, FnItem, ImplMethod, Item, Literal, MatchArm, NamedArg,
+    NodeId, ParseResult, PerformExpr, RequireStmt, ShellPart, Span, Stmt, Symbol, TypeResult,
 };
 
 /// Single public entry point for the async preparation stage.
@@ -60,13 +48,11 @@ pub fn lower_async(ast: &ParseResult, _types: &TypeResult) -> AsyncResult {
     let new_ast = ParseResult::new(new_items, ast.errors.clone());
 
     // Output invariant: lower_async preserves all original NodeIds for
-    // structures it walks, so the resolver tables remain valid. The
-    // architectural shift in M8 Task 5 Option A means `Item::AsyncFn`,
-    // `Expr::Await`, and `Expr::AsyncBlock` all survive lowering — the
-    // compiler handles them via dedicated emission paths (MakeAsync,
-    // Await opcodes) rather than the original spec's state-machine
-    // codegen. Lower_async's job is now mostly to detect lowering errors
-    // and rewrite shell expressions inside async contexts.
+    // structures it walks, so the resolver tables remain valid. Post-M9
+    // the parser's desugaring means there is no `Item::AsyncFn` or
+    // `Expr::Await` to lower — this pass walks the tree to detect the
+    // remaining diagnostics and to rewrite in-async shell expressions
+    // into `perform Async::Suspend(future: shell_run_async(...))` calls.
 
     // BlockingShell is only useful when the program also uses async syntax —
     // for a pure M1–M7 program with no async at all, the warning is noise.
@@ -132,11 +118,40 @@ impl Lowerer {
 impl Lowerer {
     fn lower_top_item(&mut self, item: &Item) -> Item {
         match item {
-            Item::Fn(f) => Item::Fn(FnItem {
-                body: self.lower_expr(&f.body),
-                ..f.clone()
-            }),
-            Item::AsyncFn(decl) => self.lower_async_fn(decl),
+            Item::Fn(f) => {
+                // A post-M9 `async fn` survives the parser as `Item::Fn`
+                // with `ret_ty = Eff<[Async], T>`. Bump `async_depth`
+                // around its body so any `$ ...` shell expression inside
+                // is correctly recognised as in-async (and rewritten to
+                // `await shell_run_async(...)`), and so `has_async_syntax`
+                // is set even when the body itself is empty.
+                let body_async = fn_is_async(&f.ret_ty);
+                if body_async {
+                    self.async_depth += 1;
+                    self.has_async_syntax = true;
+                }
+                let body = self.lower_expr(&f.body);
+                if body_async {
+                    self.async_depth -= 1;
+                }
+                // Re-implement the M8 direct self-recursion check post-M9:
+                // the body's tail expression is
+                // `perform Async::Suspend(future: foo(...))` where `foo`
+                // is the enclosing fn. Detecting it here keeps the
+                // diagnostic alive even though `Item::AsyncFn` no longer
+                // survives parsing.
+                if body_async && body_directly_self_awaits_via_perform(&body, f.name)
+                {
+                    self.errors.push(AsyncLowerError::InfiniteAsyncRecursion {
+                        fn_name: f.name,
+                        span: f.span,
+                    });
+                }
+                Item::Fn(FnItem {
+                    body,
+                    ..f.clone()
+                })
+            }
             Item::ImplBlock {
                 id,
                 trait_name,
@@ -179,46 +194,13 @@ impl Lowerer {
             | Item::TraitDef { .. }
             | Item::Import(_)
             | Item::TypeAlias(_) => item.clone(),
+            // M9 Task 1: AST type added but parser does not yet emit it.
+            // `ferric_async` does not handle effect declarations — they pass
+            // through unchanged. (`ferric_async` is removed in M9 Task 7.)
+            Item::EffectDecl(_) => item.clone(),
         }
     }
 
-    /// Walks the body of an async fn (lowering shell exprs etc.) but
-    /// **leaves it as `Item::AsyncFn`**. The compiler handles the lazy
-    /// wrapping directly at the `Item::AsyncFn` site, where it has full
-    /// access to the fn's params and so can emit `MakeAsync(body_chunk,
-    /// n_params)` correctly. Doing the wrap here in the lowering pass
-    /// would require the resolver (which runs before this stage) to know
-    /// about a node that doesn't yet exist — which it can't.
-    fn lower_async_fn(&mut self, decl: &AsyncFnItem) -> Item {
-        let f = &decl.item;
-        let span = decl.span;
-        self.has_async_syntax = true;
-
-        self.async_depth += 1;
-        let lowered_body = self.lower_expr(&f.body);
-        let recurses = body_directly_self_awaits(&lowered_body, f.name);
-        self.async_depth -= 1;
-
-        if recurses {
-            self.errors.push(AsyncLowerError::InfiniteAsyncRecursion {
-                fn_name: f.name,
-                span,
-            });
-        }
-
-        Item::AsyncFn(AsyncFnItem {
-            span,
-            item: Box::new(FnItem {
-                id: f.id,
-                name: f.name,
-                type_params: f.type_params.clone(),
-                params: f.params.clone(),
-                ret_ty: f.ret_ty.clone(),
-                body: lowered_body,
-                span: f.span,
-            }),
-        })
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -284,8 +266,58 @@ impl Lowerer {
 
     fn lower_expr(&mut self, expr: &Expr) -> Expr {
         match expr {
-            Expr::Await(a) => self.lower_await(a),
             Expr::AsyncBlock(b) => self.lower_async_block(b),
+            // M9: parser now emits `perform`/`handle`/`resume` (it desugars
+            // `await` and `yield` to perform sites at parse time). Walk
+            // the children but otherwise leave the nodes intact so the
+            // downstream effects pass / compiler can lower them. This
+            // crate is removed in M9 Task 7; until then it just needs to
+            // be transparent to effect AST shapes.
+            Expr::Perform(p) => {
+                self.has_async_syntax = true;
+                Expr::Perform(ferric_common::PerformExpr {
+                    id: p.id,
+                    span: p.span,
+                    effect: p.effect,
+                    op: p.op,
+                    args: p
+                        .args
+                        .iter()
+                        .map(|(name, value)| (*name, self.lower_expr(value)))
+                        .collect(),
+                })
+            }
+            Expr::Handle(h) => {
+                self.has_async_syntax = true;
+                let body = Box::new(self.lower_expr(&h.body));
+                let clauses = h
+                    .clauses
+                    .iter()
+                    .map(|c| ferric_common::HandlerClause {
+                        span: c.span,
+                        effect: c.effect,
+                        op: c.op,
+                        params: c.params.clone(),
+                        cont: c.cont,
+                        handler: Box::new(self.lower_expr(&c.handler)),
+                    })
+                    .collect();
+                Expr::Handle(ferric_common::HandleExpr {
+                    id: h.id,
+                    span: h.span,
+                    body,
+                    clauses,
+                })
+            }
+            Expr::Resume(r) => {
+                self.has_async_syntax = true;
+                Expr::Resume(ferric_common::ResumeExpr {
+                    id: r.id,
+                    span: r.span,
+                    cont: r.cont,
+                    value: Box::new(self.lower_expr(&r.value)),
+                })
+            }
             Expr::Shell { parts, id, span } => self.lower_shell(parts, *id, *span),
 
             Expr::Literal { .. }
@@ -497,15 +529,6 @@ impl Lowerer {
         }
     }
 
-    fn lower_await(&mut self, a: &AwaitExpr) -> Expr {
-        self.has_async_syntax = true;
-        Expr::Await(AwaitExpr {
-            id: a.id,
-            span: a.span,
-            operand: Box::new(self.lower_expr(&a.operand)),
-        })
-    }
-
     fn lower_async_block(&mut self, b: &AsyncBlockExpr) -> Expr {
         self.has_async_syntax = true;
         self.async_depth += 1;
@@ -540,11 +563,13 @@ impl Lowerer {
             };
         }
 
-        // Inside an async context: rewrite to `await shell_run_async(cmd: <s>)`.
-        // The synthetic call literal carries a placeholder string; the real
-        // lowering of shell-with-interpolation lands when interpolation gets
-        // wired through the async runtime. For now this is enough to satisfy
-        // the spec contract that shell-in-async goes through shell_run_async.
+        // Inside an async context: rewrite to
+        // `perform Async::Suspend(future: shell_run_async(cmd: <s>))`.
+        // The synthetic call literal carries a placeholder string; the
+        // real lowering of shell-with-interpolation lands when
+        // interpolation gets wired through the async runtime. For now
+        // this is enough to satisfy the spec contract that shell-in-async
+        // goes through `shell_run_async`.
         let cmd_literal = Expr::Literal {
             value: Literal::Str(synth_symbol("<shell-cmd>")),
             id: self.fresh_id(),
@@ -564,10 +589,12 @@ impl Lowerer {
             id: self.fresh_id(),
             span,
         };
-        Expr::Await(AwaitExpr {
+        Expr::Perform(PerformExpr {
             id: self.fresh_id(),
             span,
-            operand: Box::new(call),
+            effect: synth_symbol("Async"),
+            op: synth_symbol("Suspend"),
+            args: vec![(synth_symbol("future"), call)],
         })
     }
 }
@@ -591,18 +618,33 @@ fn synth_symbol(name: &str) -> Symbol {
     Symbol::new(h | 0x8000_0000)
 }
 
-/// Best-effort direct self-recursion check: returns true if `body`'s tail
-/// expression is `await foo(...)` where `foo` is the enclosing fn name.
-fn body_directly_self_awaits(body: &Expr, fn_name: Symbol) -> bool {
+/// Detects the post-M9 desugared form of direct self-recursion: the tail
+/// expression is `perform Async::Suspend(future: foo(...))` where `foo` is
+/// the enclosing fn name. Used by [`Lowerer::lower_top_item`] on an
+/// `Item::Fn` whose declared return type is `Eff<[Async], _>`.
+fn body_directly_self_awaits_via_perform(body: &Expr, fn_name: Symbol) -> bool {
     let tail = unwrap_block_tail(body);
-    let Expr::Await(a) = tail else { return false };
-    let Expr::Call { callee, .. } = a.operand.as_ref() else {
+    let Expr::Perform(p) = tail else { return false };
+    let Some((_, arg)) = p.args.first() else {
+        return false;
+    };
+    let Expr::Call { callee, .. } = arg else {
         return false;
     };
     matches!(
         callee.as_ref(),
         Expr::Variable { name, .. } if *name == fn_name,
     )
+}
+
+/// Returns true if `ty` annotates an `Eff<row, _>` with at least one effect.
+/// Best-effort: in M9 the parser only emits non-empty `Eff` rows for
+/// `async fn` (and `gen fn`, but that's `Eff<[Gen<T>], Unit>` which has a
+/// type-arg — not the shape this check fires on). User-written `Eff` rows
+/// could in principle match, but that's acceptable for an InfiniteAsyncRecursion
+/// best-effort detection.
+fn fn_is_async(ty: &ferric_common::TypeAnnotation) -> bool {
+    matches!(ty, ferric_common::TypeAnnotation::Eff { row, .. } if !row.is_empty() && row[0].args.is_empty())
 }
 
 fn unwrap_block_tail(expr: &Expr) -> &Expr {
@@ -639,7 +681,6 @@ fn walk_node_ids_item(item: &Item, f: &mut impl FnMut(NodeId)) {
     f(item.id());
     match item {
         Item::Fn(fi) => walk_node_ids_expr(&fi.body, f),
-        Item::AsyncFn(decl) => walk_node_ids_expr(&decl.item.body, f),
         Item::ImplBlock { methods, .. } => {
             for m in methods {
                 f(m.id);
@@ -654,6 +695,8 @@ fn walk_node_ids_item(item: &Item, f: &mut impl FnMut(NodeId)) {
             }
         }
         Item::StructDef { .. } | Item::EnumDef { .. } | Item::Import(_) | Item::TypeAlias(_) => {}
+        // M9 Task 1: AST type added but parser does not yet emit it.
+        Item::EffectDecl(_) => {}
     }
 }
 
@@ -776,7 +819,18 @@ fn walk_node_ids_expr(expr: &Expr, f: &mut impl FnMut(NodeId)) {
             }
         }
         Expr::Cast(c) => walk_node_ids_expr(&c.expr, f),
-        Expr::Await(a) => walk_node_ids_expr(&a.operand, f),
         Expr::AsyncBlock(b) => walk_node_ids_expr(&b.block, f),
+        Expr::Perform(p) => {
+            for (_, e) in &p.args {
+                walk_node_ids_expr(e, f);
+            }
+        }
+        Expr::Handle(h) => {
+            walk_node_ids_expr(&h.body, f);
+            for c in &h.clauses {
+                walk_node_ids_expr(&c.handler, f);
+            }
+        }
+        Expr::Resume(r) => walk_node_ids_expr(&r.value, f),
     }
 }

@@ -1,0 +1,40 @@
+// M9 — explicit `handle { ... } with { ... }` exercising both clause shapes:
+//
+//   1. The `Log::Info` clause RESUMES the continuation — the value passed to
+//      `resume k with ...` flows back to the `perform Log::Info(...)` call
+//      site as the expression's value (here, Unit). The body keeps running.
+//
+//   2. The `Log::Bail` clause does NOT resume — it returns a value (`"aborted"`)
+//      directly as the result of the whole `handle ... with` expression,
+//      cutting off any further work in the body.
+//
+// Together these illustrate the two halves of an effect handler's contract:
+// resuming threads control back through the perform site; not resuming
+// abandons the continuation and yields a final value to the handler block.
+
+effect Log {
+    Info(msg: Str) -> Unit,
+    Bail(reason: Str) -> Unit,
+}
+
+fn work() -> Str {
+    perform Log::Info(msg: "starting")
+    perform Log::Bail(reason: "stop now")
+    perform Log::Info(msg: "unreachable")
+    "completed"
+}
+
+let outcome = handle {
+    work()
+} with {
+    Log::Info(msg) => {
+        println(s: "[info] " + msg)
+        resume k with ()
+    },
+    Log::Bail(reason) => {
+        println(s: "[bail] " + reason)
+        "aborted"
+    },
+}
+
+println(s: "result: " + outcome)

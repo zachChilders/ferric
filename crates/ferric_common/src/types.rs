@@ -18,6 +18,14 @@ impl TyVar {
     }
 }
 
+/// A reference to an effect in an effect row, possibly applied to type
+/// arguments. For example, `Async` carries no args; `Gen<Int>` carries one.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct EffectRef {
+    pub name: Symbol,
+    pub args: Vec<Ty>,
+}
+
 /// Ferric type representation.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Ty {
@@ -79,6 +87,13 @@ pub enum Ty {
     /// `Poll<T>` — the result of one step of a state machine: `Ready(T)` or
     /// `Pending`. Surfaces in the lowered output of `ferric_async`.
     Poll(Box<Ty>),
+    /// `Eff<[E1, E2, ...], T>` — a function-result type carrying an effect
+    /// row. The list of `EffectRef`s is the (unordered, set-like) effect row;
+    /// `T` is the value the function ultimately returns.
+    Eff(Vec<EffectRef>, Box<Ty>),
+    /// Effect-row unification variable. Like `Ty::Var`, but ranges over effect
+    /// rows rather than ordinary types. Names are interned via `Symbol`.
+    EffVar(Symbol),
 }
 
 impl Ty {
@@ -142,6 +157,27 @@ impl Ty {
             Ty::Async(inner) => format!("Async<{}>", inner.description()),
             Ty::Handle(inner) => format!("Handle<{}>", inner.description()),
             Ty::Poll(inner) => format!("Poll<{}>", inner.description()),
+            Ty::Eff(row, t) => {
+                let row_str = row
+                    .iter()
+                    .map(|e| {
+                        if e.args.is_empty() {
+                            format!("Eff#{}", e.name.0)
+                        } else {
+                            let args = e
+                                .args
+                                .iter()
+                                .map(|a| a.description())
+                                .collect::<Vec<_>>()
+                                .join(", ");
+                            format!("Eff#{}<{}>", e.name.0, args)
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("Eff<[{}], {}>", row_str, t.description())
+            }
+            Ty::EffVar(name) => format!("?eff#{}", name.0),
         }
     }
 
@@ -204,6 +240,31 @@ impl std::fmt::Display for Ty {
             Ty::Async(inner) => write!(f, "Async<{inner}>"),
             Ty::Handle(inner) => write!(f, "Handle<{inner}>"),
             Ty::Poll(inner) => write!(f, "Poll<{inner}>"),
+            Ty::Eff(row, t) => {
+                write!(f, "Eff<[")?;
+                for (i, e) in row.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    // Like `Ty::Struct`, we don't have an interner here, so
+                    // render the name as a symbol-id sentinel. Higher-level
+                    // tooling that needs the user-facing name formats with
+                    // interner access instead.
+                    write!(f, "E#{}", e.name.0)?;
+                    if !e.args.is_empty() {
+                        write!(f, "<")?;
+                        for (j, a) in e.args.iter().enumerate() {
+                            if j > 0 {
+                                write!(f, ", ")?;
+                            }
+                            write!(f, "{a}")?;
+                        }
+                        write!(f, ">")?;
+                    }
+                }
+                write!(f, "], {t}>")
+            }
+            Ty::EffVar(name) => write!(f, "?{}", name.0),
         }
     }
 }

@@ -18,12 +18,15 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
-use ferric_common::{Chunk, Constant, Interner, Op, Program, ShellOutput, Span, Symbol};
+use ferric_common::{
+    Chunk, Constant, EffectTags, HandlerTable, Interner, Op, Program, ShellOutput, Span, Symbol,
+};
 use ferric_stdlib::{NativeRegistry, NativeValue};
 
 use crate::{AsyncCell, AsyncState, Executor, RuntimeError, Value};
 
 /// Call frame for a single Ferric function invocation.
+#[derive(Clone)]
 struct CallFrame {
     /// Index into `Program.chunks` of the code we're executing.
     chunk_idx: u16,
@@ -32,6 +35,74 @@ struct CallFrame {
     /// Local slots, indexed by the `u8` operand of `LoadSlot`/`StoreSlot`.
     /// Grown on demand by `StoreSlot` (see the opcode handler).
     slots: Vec<Value>,
+}
+
+/// One frame on the VM's handler stack. Installed by `Op::PushHandler` and
+/// removed by `Op::PopHandler` (or stolen by `Op::Perform` when one of its
+/// op handlers is dispatched).
+#[derive(Clone)]
+struct HandlerFrame {
+    /// Effect-tag this frame handles. Multiple frames for the same effect
+    /// can coexist; the top-most match wins.
+    effect_tag: u16,
+    /// `op_tag → clause chunk index`. The clause chunk's leading slots are
+    /// bound to the operation's argument values (declaration order),
+    /// followed by the continuation as the last leading slot.
+    op_handlers: HashMap<u8, u16>,
+    /// Index of the call frame that pushed this handler in the call_stack
+    /// at PushHandler time (i.e. `call_stack.len() - 1`). When a `Perform`
+    /// matches this handler, this frame is *kept in place* (its IP is
+    /// fast-forwarded past `PopHandler`) and any frames *above* it are
+    /// captured into the continuation.
+    frame_depth: usize,
+    /// Length of the value stack at the moment this frame was installed.
+    /// Operands above this depth are part of the suspended computation
+    /// when a `Perform` matches this frame.
+    stack_depth: usize,
+    /// Length of the handler_stack *below* this frame (i.e. its own index
+    /// before insertion). Handlers above this depth are nested inside the
+    /// suspended computation and are captured into the continuation.
+    handler_depth: usize,
+    /// IP within the handler-installing frame's chunk to fast-forward
+    /// to when a `Perform` against this handler is captured. Computed
+    /// at compile time as the instruction immediately after the matching
+    /// `PopHandler`. If the matched clause never resumes, the
+    /// handler-installing frame continues from this IP — the clause's
+    /// return value flows out as the handle expression's result.
+    body_end_ip: usize,
+}
+
+/// Captured suspended state from an `Op::Perform` match. The id this is
+/// stored under is wrapped in a `Value::Continuation` and handed to the
+/// matched handler clause; running `Op::Resume` on that id restores the
+/// state and continues from the perform site. One-shot only — slot is
+/// `None` after consumption.
+#[derive(Clone)]
+struct Continuation {
+    /// Operand-stack slice that lived above the handler frame at perform
+    /// time. Restored verbatim on resume.
+    stack_above: Vec<Value>,
+    /// Call frames that lived strictly *above* the handler-installing
+    /// frame at perform time (i.e. nested calls made during body
+    /// evaluation). Restored on resume so the suspended body can
+    /// continue. The handler-installing frame itself is **not** in this
+    /// vector — it stays in place on the call_stack and has its IP
+    /// swapped between `body_end_ip` (suspended) and
+    /// `handler_frame_ip` (resumed).
+    frames_above: Vec<CallFrame>,
+    /// Handler frames that were nested above the matching handler at
+    /// perform time. Restored on resume — they protect re-emitted effects
+    /// inside the resumed body.
+    handlers_above: Vec<HandlerFrame>,
+    /// The handler frame that matched. Re-installed on resume so the
+    /// resumed body can re-perform the same effect against the same
+    /// handler.
+    matched_frame: HandlerFrame,
+    /// IP within the handler-installing frame at perform time (the
+    /// instruction immediately after the `Op::Perform`). On resume this
+    /// is swapped back into the handler-installing frame's `ip`,
+    /// replacing the `body_end_ip` that `op_perform` set.
+    handler_frame_ip: usize,
 }
 
 /// One spawned task's status as held in `Scheduler::handles`.
@@ -94,6 +165,33 @@ impl AsyncIntrinsics {
     }
 }
 
+/// Pre-resolved tag pairs for built-in effects. Populated at the start of
+/// [`Executor::run`] from the program's [`EffectTags`] table — the effects
+/// pass assigns these tags lazily, so they are not stable across programs.
+///
+/// Built-in effects are dispatched directly by the VM rather than through a
+/// user-installed handler clause, because their semantics depend on runtime
+/// state (the async scheduler, generator collectors) that lives outside the
+/// bytecode model. Each `Op::Perform` site checks these tag pairs first and
+/// short-circuits to the matching VM-side handler when one matches; otherwise
+/// it falls through to the regular handler-stack walk.
+#[derive(Default, Clone, Copy)]
+struct BuiltinEffectTags {
+    /// `(effect_tag, op_tag)` for `Async::Suspend`. `None` if the program
+    /// never references it (pure M1–M7 sync programs).
+    async_suspend: Option<(u16, u8)>,
+}
+
+impl BuiltinEffectTags {
+    fn from_tags(tags: &EffectTags, interner: &Interner) -> Self {
+        let async_suspend = match (interner.lookup("Async"), interner.lookup("Suspend")) {
+            (Some(eff), Some(op)) => tags.lookup(eff, op),
+            _ => None,
+        };
+        Self { async_suspend }
+    }
+}
+
 /// Bytecode interpreter.
 ///
 /// The execution loop is driven by [`run_chunk_to_completion`] — a re-entrant
@@ -105,15 +203,28 @@ impl AsyncIntrinsics {
 pub struct BytecodeVM {
     stack: Vec<Value>,
     call_stack: Vec<CallFrame>,
+    /// M9 algebraic-effects handler stack. Separate from the call stack;
+    /// `Op::PushHandler` adds a frame, `Op::PopHandler` removes one, and
+    /// `Op::Perform` walks it top-to-bottom to find a matching clause.
+    handler_stack: Vec<HandlerFrame>,
+    /// Slab of one-shot continuations indexed by `u32`. `None` slots
+    /// represent consumed continuations — resuming one is `ResumedTwice`.
+    continuations: Vec<Option<Continuation>>,
 
     /// Program chunks, shared with worker threads.
     chunks: Arc<Vec<Chunk>>,
+    /// Handler tables compiled into the program; one per `handle ... with`
+    /// expression. `Op::PushHandler(table_idx)` reads from this list.
+    handler_tables: Arc<Vec<HandlerTable>>,
     /// Native function registry, shared with worker threads.
     natives: Arc<NativeRegistry>,
     /// Interner, shared with worker threads (read-only after compilation).
     interner: Arc<Interner>,
     /// Cached Symbols for VM-internal stdlib intrinsics.
     intrinsics: AsyncIntrinsics,
+    /// Cached tag pairs for built-in effects (`Async::Suspend`). Populated
+    /// from the program's `EffectTags` table at the start of `run`.
+    builtin_effect_tags: BuiltinEffectTags,
     /// Cooperative scheduler shared across all VMs.
     scheduler: Arc<Scheduler>,
 }
@@ -125,10 +236,14 @@ impl BytecodeVM {
         Self {
             stack: Vec::new(),
             call_stack: Vec::new(),
+            handler_stack: Vec::new(),
+            continuations: Vec::new(),
             chunks: Arc::new(Vec::new()),
+            handler_tables: Arc::new(Vec::new()),
             natives: Arc::new(NativeRegistry::new()),
             interner: Arc::new(Interner::new()),
             intrinsics: AsyncIntrinsics::default(),
+            builtin_effect_tags: BuiltinEffectTags::default(),
             scheduler: Arc::new(Scheduler::new()),
         }
     }
@@ -137,18 +252,24 @@ impl BytecodeVM {
     /// its own stack and call_stack. Used by the `spawn` intrinsic.
     fn worker(
         chunks: Arc<Vec<Chunk>>,
+        handler_tables: Arc<Vec<HandlerTable>>,
         natives: Arc<NativeRegistry>,
         interner: Arc<Interner>,
         intrinsics: AsyncIntrinsics,
+        builtin_effect_tags: BuiltinEffectTags,
         scheduler: Arc<Scheduler>,
     ) -> Self {
         Self {
             stack: Vec::new(),
             call_stack: Vec::new(),
+            handler_stack: Vec::new(),
+            continuations: Vec::new(),
             chunks,
+            handler_tables,
             natives,
             interner,
             intrinsics,
+            builtin_effect_tags,
             scheduler,
         }
     }
@@ -169,13 +290,17 @@ impl Executor for BytecodeVM {
     ) -> Result<Value, RuntimeError> {
         self.stack.clear();
         self.call_stack.clear();
+        self.handler_stack.clear();
+        self.continuations.clear();
         self.chunks = Arc::new(program.chunks);
+        self.handler_tables = Arc::new(program.handler_tables);
         self.natives = Arc::new(natives);
         // Cloning the interner here keeps the public `&Interner` signature
         // intact while still letting worker threads hold an Arc<Interner>
         // for symbol lookups.
         self.interner = Arc::new(interner.clone());
         self.intrinsics = AsyncIntrinsics::from_interner(interner);
+        self.builtin_effect_tags = BuiltinEffectTags::from_tags(&program.effect_tags, interner);
         self.scheduler = Arc::new(Scheduler::new());
 
         self.run_chunk_to_completion(program.entry, Vec::new())
@@ -718,6 +843,29 @@ impl BytecodeVM {
                     let resolved = self.drive_to_value(v)?;
                     self.stack.push(resolved);
                 }
+
+                // ---------------- M9: algebraic effects ------------------
+                Op::PushHandler(table_idx, body_end_offset) => {
+                    self.op_push_handler(table_idx, body_end_offset)?;
+                }
+                Op::PopHandler => {
+                    // Falling out of a `handle { body } with` body normally:
+                    // simply drop the top handler frame. The body's value is
+                    // already on the value stack and becomes the result of
+                    // the handle expression.
+                    self.handler_stack.pop().ok_or_else(|| {
+                        RuntimeError::InvalidOperation {
+                            op: "PopHandler with empty handler stack".to_string(),
+                            span: dummy_span(),
+                        }
+                    })?;
+                }
+                Op::Perform(effect_tag, op_tag, argc) => {
+                    self.op_perform(effect_tag, op_tag, argc)?;
+                }
+                Op::Resume => {
+                    self.op_resume()?;
+                }
             }
         }
 
@@ -865,9 +1013,25 @@ impl BytecodeVM {
         // Take the Pending state out of the Async cell so the worker thread
         // owns it. If the cell was already Ready (e.g. spawn(async{42})),
         // we just stash the resolved value and skip the thread.
+        //
+        // M9 fallthrough: after the parser strips `Item::AsyncFn`, async fn
+        // calls produce plain values (`Value::Str("...")`) rather than
+        // `Value::Async(Pending(...))`. In that case the work is already
+        // complete, so we just box it as an immediately-Ready handle —
+        // matching the behaviour of `spawn(async { 42 })` where the body
+        // had already evaluated.
         let cell = match arg {
             Value::Async(cell) => cell,
-            other => return Err(type_mismatch("Async", &other)),
+            other => {
+                let id = self.scheduler.next_id();
+                self.scheduler
+                    .handles
+                    .lock()
+                    .expect("scheduler poisoned")
+                    .insert(id, TaskState::Ready(other));
+                self.stack.push(Value::new_handle(id));
+                return Ok(());
+            }
         };
 
         let id = self.scheduler.next_id();
@@ -895,13 +1059,23 @@ impl BytecodeVM {
 
         let (chunk_idx, captures) = pending;
         let chunks = Arc::clone(&self.chunks);
+        let handler_tables = Arc::clone(&self.handler_tables);
         let natives = Arc::clone(&self.natives);
         let interner = Arc::clone(&self.interner);
         let intrinsics = self.intrinsics;
+        let builtin_effect_tags = self.builtin_effect_tags;
         let scheduler = Arc::clone(&self.scheduler);
 
         let join_handle = thread::spawn(move || {
-            let mut worker = BytecodeVM::worker(chunks, natives, interner, intrinsics, scheduler);
+            let mut worker = BytecodeVM::worker(
+                chunks,
+                handler_tables,
+                natives,
+                interner,
+                intrinsics,
+                builtin_effect_tags,
+                scheduler,
+            );
             worker.run_chunk_to_completion(chunk_idx, captures)
         });
 
@@ -987,6 +1161,278 @@ impl BytecodeVM {
             .push(Value::new_async_ready(Value::ShellOutput(output)));
         Ok(())
     }
+
+    // ---------------- M9 algebraic-effects opcodes -----------------------
+
+    /// Builds a `HandlerFrame` from the program's `handler_tables[idx]` and
+    /// pushes it onto the handler stack. Records the current call_stack /
+    /// value-stack / handler-stack depths so a later `Op::Perform` knows
+    /// which slice of state to capture, and the post-handle IP so the
+    /// no-resume path can fast-forward past `PopHandler`.
+    fn op_push_handler(
+        &mut self,
+        table_idx: u16,
+        body_end_offset: u16,
+    ) -> Result<(), RuntimeError> {
+        let table = self
+            .handler_tables
+            .get(table_idx as usize)
+            .ok_or_else(|| RuntimeError::InvalidOperation {
+                op: format!("PushHandler({table_idx}) out of range"),
+                span: dummy_span(),
+            })?;
+
+        // All entries in one `handle ... with { ... }` share one effect
+        // (the parser/effects pass already enforces that all clauses
+        // belong to the same effect). We still defensively pull the
+        // effect tag from the first entry. If the table is empty, treat
+        // it as a no-op handler (effect tag 0 with no ops); a perform
+        // through it will fall through to enclosing handlers.
+        let effect_tag = table.entries.first().map(|e| e.effect_tag).unwrap_or(0);
+        let mut op_handlers: HashMap<u8, u16> = HashMap::with_capacity(table.entries.len());
+        for entry in &table.entries {
+            op_handlers.insert(entry.op_tag, entry.clause_chunk_idx);
+        }
+
+        // PushHandler always runs inside a call frame, so the call_stack
+        // is non-empty here. The "handler-installing" frame is the
+        // top-most frame at this moment; record its index so a later
+        // Perform can capture it (and any frames above it that opened
+        // during body evaluation).
+        let frame_idx = self
+            .call_stack
+            .len()
+            .checked_sub(1)
+            .ok_or_else(|| RuntimeError::InvalidOperation {
+                op: "PushHandler outside any call frame".to_string(),
+                span: dummy_span(),
+            })?;
+
+        // The dispatch loop advanced the IP to "next instruction after
+        // PushHandler" before invoking this opcode. Adding the compile-
+        // time offset gives the IP after the matching `PopHandler`.
+        let body_end_ip = self.call_stack[frame_idx].ip + body_end_offset as usize;
+
+        let frame = HandlerFrame {
+            effect_tag,
+            op_handlers,
+            frame_depth: frame_idx,
+            stack_depth: self.stack.len(),
+            handler_depth: self.handler_stack.len(),
+            body_end_ip,
+        };
+        self.handler_stack.push(frame);
+        Ok(())
+    }
+
+    /// Pops `argc` arguments off the value stack, walks the handler stack
+    /// top-to-bottom for a frame matching `(effect_tag, op_tag)`, captures
+    /// the suspended computation as a continuation, and transfers control
+    /// to the matched clause chunk.
+    ///
+    /// If no handler matches, raises `RuntimeError::UnhandledEffect`.
+    fn op_perform(
+        &mut self,
+        effect_tag: u16,
+        op_tag: u8,
+        argc: u8,
+    ) -> Result<(), RuntimeError> {
+        let argc = argc as usize;
+        if self.stack.len() < argc {
+            return Err(underflow());
+        }
+
+        // Pop args (declaration order — leftmost is at start of vec).
+        let args_start = self.stack.len() - argc;
+        let args: Vec<Value> = self.stack.drain(args_start..).collect();
+
+        // Walk the handler stack top-to-bottom for a matching frame. If a
+        // user-installed handler matches, prefer it over the built-in
+        // semantics (lexical handlers always win — the built-in handler
+        // is only the implicit fall-through when no user handler is in
+        // scope).
+        let matched_idx = self
+            .handler_stack
+            .iter()
+            .rposition(|f| f.effect_tag == effect_tag && f.op_handlers.contains_key(&op_tag));
+
+        let matched_idx = match matched_idx {
+            Some(i) => i,
+            None => {
+                // No user handler — see if this is a built-in effect we
+                // dispatch directly. The default `Async::Suspend` handler
+                // drives the `Async<T>` operand to its inner value and
+                // pushes the result, mirroring the M8 scheduler semantics.
+                if self.builtin_effect_tags.async_suspend == Some((effect_tag, op_tag)) {
+                    return self.builtin_async_suspend(args);
+                }
+                return Err(RuntimeError::UnhandledEffect {
+                    effect_tag,
+                    op_tag,
+                    span: dummy_span(),
+                });
+            }
+        };
+
+        // Take the matching frame off the handler stack — while the
+        // clause runs, this handler is *not* in scope (so the clause
+        // can perform its own effects against the *outer* environment,
+        // not against itself).
+        let matched_frame = self.handler_stack.remove(matched_idx);
+        let clause_chunk_idx = *matched_frame.op_handlers.get(&op_tag).unwrap();
+
+        // Capture suspended state:
+        //
+        //   - operand-stack slice above `stack_depth`
+        //   - call frames *above* the handler-installing frame
+        //   - handler frames above `handler_depth`
+        //   - the handler-installing frame's current IP (the instruction
+        //     after `Op::Perform`), so resume can jump back here
+        //
+        // The handler-installing frame itself stays in `call_stack`. Its
+        // IP is *fast-forwarded* to `body_end_ip`, so if the clause
+        // returns without resuming, control naturally lands past
+        // `PopHandler` with the clause's value as the handle expression's
+        // result.
+        let stack_above: Vec<Value> = self.stack.drain(matched_frame.stack_depth..).collect();
+        let frames_above: Vec<CallFrame> = if self.call_stack.len() > matched_frame.frame_depth + 1
+        {
+            self.call_stack
+                .drain(matched_frame.frame_depth + 1..)
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let handlers_above: Vec<HandlerFrame> =
+            if self.handler_stack.len() > matched_frame.handler_depth {
+                self.handler_stack
+                    .drain(matched_frame.handler_depth..)
+                    .collect()
+            } else {
+                Vec::new()
+            };
+
+        // Snapshot the handler-installing frame's IP, then bump it past
+        // `PopHandler`.
+        let handler_frame_ip = self.call_stack[matched_frame.frame_depth].ip;
+        self.call_stack[matched_frame.frame_depth].ip = matched_frame.body_end_ip;
+
+        let cont = Continuation {
+            stack_above,
+            frames_above,
+            handlers_above,
+            matched_frame,
+            handler_frame_ip,
+        };
+        let cont_id = self.allocate_continuation(cont);
+
+        // The clause chunk's leading slots are: argument values in
+        // declaration order, followed by the continuation as the final
+        // slot. (The compiler binds locals in this exact order — see
+        // `compile_handler_clause`.)
+        let mut clause_slots: Vec<Value> = args;
+        clause_slots.push(Value::new_continuation(cont_id));
+
+        self.call_stack.push(CallFrame {
+            chunk_idx: clause_chunk_idx,
+            ip: 0,
+            slots: clause_slots,
+        });
+        Ok(())
+    }
+
+    /// Resumes a one-shot continuation. Pops `(cont_id, value)` from the
+    /// stack (value on top — see `compile_resume`), restores the
+    /// suspended state, pushes `value` as the result of the original
+    /// `Op::Perform`, and continues execution there. Re-installs the
+    /// handler frame so the resumed body can re-perform the same effect.
+    fn op_resume(&mut self) -> Result<(), RuntimeError> {
+        let value = self.pop()?;
+        let cont_value = self.pop()?;
+        let cont_id = match cont_value {
+            Value::Continuation(id) => id,
+            other => return Err(type_mismatch("Continuation", &other)),
+        };
+
+        let cont = self
+            .continuations
+            .get_mut(cont_id as usize)
+            .and_then(|slot| slot.take())
+            .ok_or(RuntimeError::ResumedTwice { span: dummy_span() })?;
+
+        // The clause's call frame is currently on top of the call stack
+        // (we are running inside it). Resuming transfers control back
+        // into the suspended body — drop the clause frame so the
+        // restored body state takes its place.
+        self.call_stack.pop();
+
+        // The handler-installing frame is now on top. Restore its IP
+        // back to the perform site (`op_perform` set it to
+        // `body_end_ip`).
+        let frame_idx = cont.matched_frame.frame_depth;
+        if let Some(installer) = self.call_stack.get_mut(frame_idx) {
+            installer.ip = cont.handler_frame_ip;
+        }
+
+        // Restore in the same order the perform site captured:
+        //   - reinstall the matched handler frame
+        //   - reinstall any handlers that were nested above it
+        //   - splice the captured call frames back on top
+        //   - splice the operand-stack slice back
+        //   - push the resume value as the result of the perform site
+        self.handler_stack.push(cont.matched_frame);
+        self.handler_stack.extend(cont.handlers_above);
+        self.call_stack.extend(cont.frames_above);
+        self.stack.extend(cont.stack_above);
+        self.stack.push(value);
+
+        Ok(())
+    }
+
+    /// Default handler for `perform Async::Suspend(future: <Async<T> | Handle<T> | T>)`.
+    ///
+    /// Installed implicitly around every program: when an `await` site (which
+    /// the parser desugars to `perform Async::Suspend(future: expr)`) fires
+    /// without a user-installed `Async` handler in scope, this method
+    /// resolves the operand and pushes the result back onto the stack.
+    ///
+    /// Three operand shapes are accepted:
+    ///   - `Value::Async(...)` — drive to its inner value (M8 semantics for
+    ///     `Async` cells produced by `MakeAsync`, `sleep`, `shell_run_async`).
+    ///   - `Value::Handle(...)` — block-join the worker thread.
+    ///   - any other value — pass through unchanged. After the M9 parser
+    ///     strips `Item::AsyncFn`, the compiler no longer emits `MakeAsync`
+    ///     around plain async-fn calls, so the call returns the inner value
+    ///     directly. `await` simply unwraps it.
+    fn builtin_async_suspend(&mut self, args: Vec<Value>) -> Result<(), RuntimeError> {
+        let future = args.into_iter().next().ok_or_else(|| {
+            RuntimeError::WrongArgumentCount {
+                expected: 1,
+                found: 0,
+                span: dummy_span(),
+            }
+        })?;
+        let resolved = match future {
+            Value::Async(_) | Value::Handle(_) => self.drive_to_value(future)?,
+            other => other,
+        };
+        self.stack.push(resolved);
+        Ok(())
+    }
+
+    /// Inserts a continuation into the slab and returns its index. Reuses
+    /// `None` slots to keep ids dense; slots are otherwise append-only.
+    fn allocate_continuation(&mut self, cont: Continuation) -> u32 {
+        for (i, slot) in self.continuations.iter_mut().enumerate() {
+            if slot.is_none() {
+                *slot = Some(cont);
+                return i as u32;
+            }
+        }
+        let id = self.continuations.len() as u32;
+        self.continuations.push(Some(cont));
+        id
+    }
 }
 
 /// Shells out to `/bin/sh -c <cmd>` and returns the captured `ShellOutput`.
@@ -1041,6 +1487,9 @@ fn value_to_native(v: &Value) -> NativeValue {
         // Surface them as Unit if a regular native ever sees one — that
         // would indicate a stdlib registration mistake.
         Value::Async(_) | Value::Handle(_) => NativeValue::Unit,
+        // Continuations are opaque VM-only values; they should never
+        // cross the native boundary.
+        Value::Continuation(_) => NativeValue::Unit,
     }
 }
 
@@ -1126,6 +1575,7 @@ fn type_name(v: &Value) -> &'static str {
         Value::Closure { .. } => "Closure",
         Value::Async(_) => "Async",
         Value::Handle(_) => "Handle",
+        Value::Continuation(_) => "Continuation",
     }
 }
 

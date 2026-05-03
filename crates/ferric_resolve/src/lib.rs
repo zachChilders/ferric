@@ -484,14 +484,6 @@ impl Resolver {
                 Item::Fn(item) => {
                     self.fn_params.insert(item.name, item.params.clone());
                 }
-                Item::AsyncFn(decl) => {
-                    // For resolution / canonical-arg purposes an async fn is
-                    // structurally identical to a sync fn. The lowering pass
-                    // (M8 Task 4) rewraps it as Item::Fn before the compiler
-                    // runs, but the resolver looks at the original AST.
-                    self.fn_params
-                        .insert(decl.item.name, decl.item.params.clone());
-                }
                 Item::StructDef {
                     name, fields, span, ..
                 } => {
@@ -539,6 +531,9 @@ impl Resolver {
                 // Module-system items are emitted starting with M7 Task 2; the
                 // resolver does not yet collect their definitions.
                 Item::Import(_) | Item::Export(_) | Item::TypeAlias(_) => {}
+                // M9 Task 1: AST type added but parser does not yet emit it.
+                // Wired up in M9 Task 2.
+                Item::EffectDecl(_) => {}
             }
         }
 
@@ -554,10 +549,6 @@ impl Resolver {
         match item {
             Item::Fn(item) => {
                 self.resolve_fn_body(item.name, &item.params, &item.body, item.span);
-            }
-            Item::AsyncFn(decl) => {
-                let f = &decl.item;
-                self.resolve_fn_body(f.name, &f.params, &f.body, f.span);
             }
             Item::StructDef { .. } | Item::EnumDef { .. } | Item::TraitDef { .. } => {
                 // Type-level definitions: nothing to resolve in the body. The
@@ -577,6 +568,9 @@ impl Resolver {
             Item::Export(decl) => {
                 self.resolve_item(&decl.item);
             }
+            // M9 Task 1: parser does not yet emit `effect` declarations.
+            // M9 Task 2 wires resolution; for now this arm is unreachable.
+            Item::EffectDecl(_) => {}
         }
     }
 
@@ -1032,11 +1026,6 @@ impl Resolver {
                 // we only need to walk the inner expression.
                 self.resolve_expr(&c.expr);
             }
-            // `await operand` — just walk the operand. The parser's fast-path
-            // catches top-level await; the type checker enforces async context.
-            Expr::Await(a) => {
-                self.resolve_expr(&a.operand);
-            }
             // `async { body }` — captures any locals bound in enclosing scopes,
             // exactly like a closure. The compiler hoists the body into its
             // own chunk (M8 Task 5 Option A); the captures it needs are
@@ -1058,6 +1047,68 @@ impl Resolver {
                 let frame = self.closure_stack.pop().expect("async-block frame popped");
                 self.captures.insert(frame.id, frame.captures);
                 self.pop_scope();
+            }
+            // M9: `perform Effect::Op(args)` — resolve each named arg's
+            // value expression. The effect / op symbols are looked up by
+            // the type checker (via the `effect_ops` table populated from
+            // `Item::EffectDecl`) and the lowering pass (which assigns
+            // numeric tags). The resolver never validates the effect /
+            // op names — they aren't ordinary value bindings.
+            Expr::Perform(p) => {
+                for (_, value) in &p.args {
+                    self.resolve_expr(value);
+                }
+            }
+            // M9: `handle { body } with { Op(args) => clause, ... }`.
+            // The body sees the surrounding scope unchanged. Each clause
+            // body is a fresh nested scope binding the clause's `params`
+            // and continuation symbol `cont` (typically `k`) — all four
+            // get fresh DefIds + variable slots so the compiler can refer
+            // to them as ordinary locals.
+            Expr::Handle(h) => {
+                self.resolve_expr(&h.body);
+                for clause in &h.clauses {
+                    self.push_scope();
+                    for param_sym in &clause.params {
+                        let def_id = self.define(*param_sym, false, clause.span);
+                        let slot = self.next_slot;
+                        self.next_slot += 1;
+                        self.def_slots.insert(def_id, slot);
+                    }
+                    // Bind the continuation. It's an ordinary first-class
+                    // value (a `Value::Continuation` at runtime in M9 Task
+                    // 5); resume sites resolve it through the normal
+                    // variable-lookup path.
+                    let cont_def = self.define(clause.cont, false, clause.span);
+                    let cont_slot = self.next_slot;
+                    self.next_slot += 1;
+                    self.def_slots.insert(cont_def, cont_slot);
+
+                    self.resolve_expr(&clause.handler);
+                    self.pop_scope();
+                }
+            }
+            // M9: `resume k with value` — `k` must be the continuation
+            // symbol bound by the enclosing handler clause. We treat it
+            // as an ordinary lookup: if the symbol isn't in scope, the
+            // user will see an `UndefinedVariable` error. The parser
+            // already emits `ParseError::ResumeOutsideHandler` for the
+            // common case; this is just additional defence.
+            Expr::Resume(r) => {
+                if let Some((binding, scope_idx)) = self.lookup_with_scope(r.cont) {
+                    let def_id = binding.def_id;
+                    self.resolutions.insert(r.id, def_id);
+                    // If `resume` lives inside a closure, the continuation
+                    // has to be captured by that closure — same machinery
+                    // as ordinary variable references.
+                    self.note_capture(def_id, r.cont, scope_idx);
+                } else {
+                    self.errors.push(ResolveError::UndefinedVariable {
+                        name: r.cont,
+                        span: r.span,
+                    });
+                }
+                self.resolve_expr(&r.value);
             }
         }
     }

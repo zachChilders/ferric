@@ -96,6 +96,20 @@ pub enum TokenKind {
     Async,
     /// `await` keyword — postfix suffix following `.` on an awaitable expr
     Await,
+    /// `effect` keyword — declares an algebraic effect at module scope
+    Effect,
+    /// `perform` keyword — invokes the nearest enclosing handler for an op
+    Perform,
+    /// `handle` keyword — installs effect handler clauses for a body expr
+    Handle,
+    /// `with` keyword — separator between handle body and handler clauses
+    With,
+    /// `resume` keyword — resumes a captured continuation (handler-only)
+    Resume,
+    /// `gen` keyword — prefix modifier on `fn` introducing a generator
+    Gen,
+    /// `yield` keyword — generator yield, desugars to `perform Gen::Yield(...)`
+    Yield,
 
     // Identifiers and operators
     /// Identifier (variable/function name)
@@ -211,6 +225,13 @@ impl TokenKind {
             TokenKind::As => "keyword 'as'".to_string(),
             TokenKind::Async => "keyword 'async'".to_string(),
             TokenKind::Await => "keyword 'await'".to_string(),
+            TokenKind::Effect => "keyword 'effect'".to_string(),
+            TokenKind::Perform => "keyword 'perform'".to_string(),
+            TokenKind::Handle => "keyword 'handle'".to_string(),
+            TokenKind::With => "keyword 'with'".to_string(),
+            TokenKind::Resume => "keyword 'resume'".to_string(),
+            TokenKind::Gen => "keyword 'gen'".to_string(),
+            TokenKind::Yield => "keyword 'yield'".to_string(),
             TokenKind::Ident(_) => "identifier".to_string(),
             TokenKind::Plus => "'+'".to_string(),
             TokenKind::Minus => "'-'".to_string(),

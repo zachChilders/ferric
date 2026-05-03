@@ -9,8 +9,9 @@
 use std::collections::{HashMap, HashSet};
 
 use ferric_common::{
-    BinOp, DefId, Expr, FnItem, ImplMethod, Interner, Item, Literal, MatchArm, NamedArg, NodeId,
-    Param, ParseResult, Pattern, RequireStmt, ResolveResult, ShellPart, Span, Stmt, Symbol,
+    BinOp, DefId, EffectDecl, EffectOp, EffectRef, Expr, FnItem, HandleExpr, HandlerClause,
+    ImplMethod, Interner, Item, Literal, MatchArm, NamedArg, NodeId, Param, ParseResult, Pattern,
+    PerformExpr, RequireStmt, ResolveResult, ResumeExpr, ShellPart, Span, Stmt, Symbol,
     TraitRegistry, Ty, TyVar, TypeAnnotation, TypeError, TypeParam, TypeResult, TypeScheme, UnOp,
 };
 
@@ -113,6 +114,15 @@ impl Substitution {
             Ty::Async(inner) => Ty::Async(Box::new(self.apply(inner))),
             Ty::Handle(inner) => Ty::Handle(Box::new(self.apply(inner))),
             Ty::Poll(inner) => Ty::Poll(Box::new(self.apply(inner))),
+            Ty::Eff(row, t) => Ty::Eff(
+                row.iter()
+                    .map(|e| EffectRef {
+                        name: e.name,
+                        args: e.args.iter().map(|a| self.apply(a)).collect(),
+                    })
+                    .collect(),
+                Box::new(self.apply(t)),
+            ),
             other => other.clone(),
         }
     }
@@ -140,6 +150,12 @@ fn occurs_raw(var: TyVar, ty: &Ty) -> bool {
         Ty::Array(inner) | Ty::Option(inner) => occurs_raw(var, inner),
         Ty::Result(ok, err) => occurs_raw(var, ok) || occurs_raw(var, err),
         Ty::Async(inner) | Ty::Handle(inner) | Ty::Poll(inner) => occurs_raw(var, inner),
+        Ty::Eff(row, t) => {
+            occurs_raw(var, t)
+                || row
+                    .iter()
+                    .any(|e| e.args.iter().any(|a| occurs_raw(var, a)))
+        }
         _ => false,
     }
 }
@@ -184,6 +200,14 @@ fn free_vars_raw(ty: &Ty, out: &mut HashSet<TyVar>) {
             free_vars_raw(err, out);
         }
         Ty::Async(inner) | Ty::Handle(inner) | Ty::Poll(inner) => free_vars_raw(inner, out),
+        Ty::Eff(row, t) => {
+            for e in row {
+                for a in &e.args {
+                    free_vars_raw(a, out);
+                }
+            }
+            free_vars_raw(t, out);
+        }
         _ => {}
     }
 }
@@ -319,6 +343,23 @@ struct TypeInfer<'a> {
     /// this counter, only async ones do.
     async_depth: usize,
 
+    /// M9: lookup table for declared `effect` operations, keyed by
+    /// `(effect_name, op_name)`. Populated once per program.
+    effect_ops: HashMap<(Symbol, Symbol), EffectOp>,
+
+    /// M9: enclosing function's declared effect row, when the return type
+    /// was an explicit `Eff<[..], T>` annotation. `None` means the
+    /// enclosing function has no closed row constraint and any `perform`
+    /// will be treated as open / inferred. `Some(row)` means the row is
+    /// closed and `perform` must be checked against it.
+    current_fn_row: Option<Vec<EffectRef>>,
+
+    /// M9: stack of (handled effect name, handled op name, resume_type)
+    /// triples for the handler clauses currently surrounding the
+    /// expression being checked. `resume k with v` looks at the top of
+    /// this stack to type `v`.
+    handler_stack: Vec<(Symbol, Symbol, Ty)>,
+
     /// Stable mapping from a "generic" type-name symbol (e.g. `T`) to a
     /// fresh type variable, scoped to the function being processed.
     generic_aliases: HashMap<Symbol, TyVar>,
@@ -360,6 +401,9 @@ impl<'a> TypeInfer<'a> {
             env: InferEnv::new(),
             current_fn_ret: None,
             async_depth: 0,
+            effect_ops: HashMap::new(),
+            current_fn_row: None,
+            handler_stack: Vec::new(),
             generic_aliases: HashMap::new(),
             bound_constraints: HashMap::new(),
             type_aliases: HashMap::new(),
@@ -416,6 +460,25 @@ impl<'a> TypeInfer<'a> {
         }
     }
 
+    /// M9: walk the AST and collect every `effect` declaration's operations
+    /// into a flat `(effect_name, op_name) -> EffectOp` table. The lookup is
+    /// consulted by `perform` / `handle` typing.
+    fn register_effect_decls(&mut self) {
+        // Walk through both bare items and the inner item of `Export(_)`.
+        for item in &self.ast.items {
+            let item = unwrap_export(item);
+            if let Item::EffectDecl(decl) = item {
+                self.register_effect_decl(decl);
+            }
+        }
+    }
+
+    fn register_effect_decl(&mut self, decl: &EffectDecl) {
+        for op in &decl.ops {
+            self.effect_ops.insert((decl.name, op.name), op.clone());
+        }
+    }
+
     fn infer_program(&mut self) {
         // 1. Register native function signatures so calls to stdlib like
         //    `println(s: ...)` can be checked.
@@ -426,25 +489,25 @@ impl<'a> TypeInfer<'a> {
         //    site, so forward and out-of-order references behave consistently.
         self.register_type_aliases();
 
+        // 2b. M9: collect every `effect` declaration so `perform`/`handle`
+        //     can resolve operations by `(effect_name, op_name)`.
+        self.register_effect_decls();
+
         // 3. Pre-pass: collect every user-defined function's signature so
         //    forward references and recursion type-check correctly.
         // `Export` is treated as transparent — its inner item participates
         // in the pre-pass exactly like a top-level item.
-        // `fn_aliases` parallels iteration over `Item::Fn` and `Item::AsyncFn`
-        // items in source order. The walk pass below uses the same iteration
-        // shape and consumes them in lockstep.
+        // `fn_aliases` parallels iteration over `Item::Fn` items in source
+        // order. The walk pass below uses the same iteration shape and
+        // consumes them in lockstep.
         let mut fn_aliases: Vec<HashMap<Symbol, TyVar>> = Vec::new();
         for item in &self.ast.items {
             let item = unwrap_export(item);
-            // Extract the inner FnItem-shaped fields plus an "async-wrap" flag
-            // so we can register both Fn and AsyncFn through the same path.
-            // For AsyncFn the call-site return type is wrapped in `Async<T>`.
-            let (name, type_params, params, ret_ty, is_async): (
+            let (name, type_params, params, ret_ty): (
                 Symbol,
                 &Vec<TypeParam>,
                 &Vec<Param>,
                 &TypeAnnotation,
-                bool,
             ) = match item {
                 Item::Fn(FnItem {
                     name,
@@ -452,11 +515,7 @@ impl<'a> TypeInfer<'a> {
                     params,
                     ret_ty,
                     ..
-                }) => (*name, type_params, params, ret_ty, false),
-                Item::AsyncFn(decl) => {
-                    let f = &decl.item;
-                    (f.name, &f.type_params, &f.params, &f.ret_ty, true)
-                }
+                }) => (*name, type_params, params, ret_ty),
                 _ => continue,
             };
 
@@ -479,17 +538,9 @@ impl<'a> TypeInfer<'a> {
                 .map(|p| self.resolve_type_annotation(&p.ty, &mut aliases))
                 .collect();
             let ret_ty_resolved = self.resolve_type_annotation(ret_ty, &mut aliases);
-            // For `async fn foo(...) -> T`, the call-site signature is
-            // `fn(...) -> Async<T>`. The body itself still type-checks
-            // against `T` (handled in the walk pass below).
-            let call_site_ret = if is_async {
-                Ty::Async(Box::new(ret_ty_resolved))
-            } else {
-                ret_ty_resolved
-            };
             let fn_ty = Ty::Fn {
                 params: param_tys,
-                ret: Box::new(call_site_ret),
+                ret: Box::new(ret_ty_resolved),
             };
             // Generic functions: do NOT quantify the type parameters.
             // This sidesteps freshening at call sites so the function's
@@ -526,17 +577,6 @@ impl<'a> TypeInfer<'a> {
                     fn_idx += 1;
                     self.check_fn_def(*id, params, ret_ty, body, aliases);
                 }
-                Item::AsyncFn(decl) => {
-                    let aliases = fn_aliases[fn_idx].clone();
-                    fn_idx += 1;
-                    let f = &decl.item;
-                    // The body type-checks against the *inner* T (declared
-                    // ret_ty), not against `Async<T>` — `async fn`'s call-site
-                    // wrapping happens at use sites, not in the body.
-                    self.async_depth += 1;
-                    self.check_fn_def(f.id, &f.params, &f.ret_ty, &f.body, aliases);
-                    self.async_depth -= 1;
-                }
                 Item::StructDef { .. } | Item::EnumDef { .. } | Item::TraitDef { .. } => {
                     // Type-only definitions; bodies (if any) are signatures
                     // only. Trait method signatures are picked up via the
@@ -571,6 +611,9 @@ impl<'a> TypeInfer<'a> {
                 // resolver. `Export` is a transparent wrapper — its inner item
                 // is processed in a second walk below.
                 Item::Import(_) | Item::TypeAlias(_) | Item::Export(_) => {}
+                // M9 Task 1: parser does not yet emit `effect` declarations.
+                // Type-checking for them lands in M9 Task 3.
+                Item::EffectDecl(_) => {}
             }
         }
     }
@@ -638,15 +681,24 @@ impl<'a> TypeInfer<'a> {
                 .define(param.name, TypeScheme::monomorphic(declared.clone()));
         }
 
+        // M9: peel off the effect row from `Eff<R, T>` like check_fn_def.
+        let (body_expected_ty, fn_row): (Ty, Option<Vec<EffectRef>>) = match &ret_ty_resolved {
+            Ty::Eff(row, t) => ((**t).clone(), Some(row.clone())),
+            _ => (ret_ty_resolved.clone(), None),
+        };
+
         let prev_ret = self.current_fn_ret.take();
-        self.current_fn_ret = Some(ret_ty_resolved.clone());
+        self.current_fn_ret = Some(body_expected_ty.clone());
+        let prev_row = self.current_fn_row.take();
+        self.current_fn_row = fn_row;
         let prev_aliases = std::mem::replace(&mut self.generic_aliases, aliases);
 
         let body_ty = self.infer_expr(&m.body);
-        self.unify(&ret_ty_resolved, &body_ty, m.body.span());
+        self.unify(&body_expected_ty, &body_ty, m.body.span());
 
         self.generic_aliases = prev_aliases;
         self.current_fn_ret = prev_ret;
+        self.current_fn_row = prev_row;
         self.env.pop_scope();
 
         let fn_ty = Ty::Fn {
@@ -732,19 +784,32 @@ impl<'a> TypeInfer<'a> {
                 .define(param.name, TypeScheme::monomorphic(declared_ty.clone()));
         }
 
+        // M9: if the user wrote `-> Eff<[..], T>`, peel off the row and
+        // type-check the body against `T`. The row is published via
+        // `current_fn_row` so `perform` sites can be validated against it.
+        let (body_expected_ty, fn_row): (Ty, Option<Vec<EffectRef>>) = match &ret_ty_resolved {
+            Ty::Eff(row, t) => ((**t).clone(), Some(row.clone())),
+            _ => (ret_ty_resolved.clone(), None),
+        };
+
         let prev_ret = self.current_fn_ret.take();
-        self.current_fn_ret = Some(ret_ty_resolved.clone());
+        self.current_fn_ret = Some(body_expected_ty.clone());
+        let prev_row = self.current_fn_row.take();
+        self.current_fn_row = fn_row;
 
         let prev_aliases = std::mem::replace(&mut self.generic_aliases, aliases);
 
         let body_ty = self.infer_expr(body);
-        self.unify(&ret_ty_resolved, &body_ty, body.span());
+        self.unify(&body_expected_ty, &body_ty, body.span());
 
         self.generic_aliases = prev_aliases;
         self.current_fn_ret = prev_ret;
+        self.current_fn_row = prev_row;
         self.env.pop_scope();
 
-        // Record the function definition's own type at its NodeId.
+        // Record the function definition's own type at its NodeId. The
+        // call-site type still includes the effect-row wrapping (if any)
+        // so callers see `fn(...) -> Eff<R, T>`.
         let fn_ty = Ty::Fn {
             params: param_tys,
             ret: Box::new(ret_ty_resolved),
@@ -810,6 +875,25 @@ impl<'a> TypeInfer<'a> {
                         Ty::Poll(Box::new(self.resolve_type_annotation(inner, aliases)))
                     }
                     _ => self.fresh_tyvar(),
+                }
+            }
+            TypeAnnotation::Eff { row, result } => {
+                let effects: Vec<EffectRef> = row
+                    .iter()
+                    .map(|e| EffectRef {
+                        name: e.name,
+                        args: e
+                            .args
+                            .iter()
+                            .map(|a| self.resolve_type_annotation(a, aliases))
+                            .collect(),
+                    })
+                    .collect();
+                let inner = self.resolve_type_annotation(result, aliases);
+                if effects.is_empty() {
+                    inner
+                } else {
+                    Ty::Eff(effects, Box::new(inner))
                 }
             }
             TypeAnnotation::Infer => self.fresh_tyvar(),
@@ -889,6 +973,13 @@ impl<'a> TypeInfer<'a> {
                     // dependent inference proceeds.
                     let init_resolved = self.subst.apply(&init_ty);
                     let declared_resolved = self.subst.apply(&declared);
+                    // Same friendliness extended to the M9 row-consumed
+                    // shape: `let s: Str = fetch(url: "x")` where `fetch`
+                    // is `async fn fetch(...) -> Str` would naively unify
+                    // `Str` with `Str` post-row-consumption. Detect the
+                    // call-of-async-fn pattern and emit the dedicated
+                    // diagnostic in place of letting it slide.
+                    let init_is_unawaited_async = self.expr_returns_async(init);
                     if matches!(&init_resolved, Ty::Async(_))
                         && !matches!(&declared_resolved, Ty::Async(_) | Ty::Var(_))
                     {
@@ -897,6 +988,18 @@ impl<'a> TypeInfer<'a> {
                             expected: declared_resolved,
                             span: init.span(),
                         });
+                    } else if init_is_unawaited_async
+                        && !matches!(&declared_resolved, Ty::Async(_) | Ty::Var(_))
+                    {
+                        // Construct the M8-style "found Async<T>" message
+                        // for the AsyncNotAwaited diagnostic, even though
+                        // post-M9 the call site already unwrapped to T.
+                        self.errors.push(TypeError::AsyncNotAwaited {
+                            found: Ty::Async(Box::new(init_resolved.clone())),
+                            expected: declared_resolved.clone(),
+                            span: init.span(),
+                        });
+                        self.unify(&declared, &init_ty, *span);
                     } else {
                         self.unify(&declared, &init_ty, *span);
                     }
@@ -1091,10 +1194,30 @@ impl<'a> TypeInfer<'a> {
                     Expr::Variable { name, .. } => Some(self.interner.resolve(*name)),
                     _ => None,
                 };
+                // Post-M9 the parser strips `Item::AsyncFn`, so a direct
+                // call to `async fn foo() -> T` now type-checks as `T` —
+                // not `Async<T>`. We retain the dedicated `SpawnNonAsync` /
+                // `JoinNonHandle` diagnostics for *unambiguously* wrong
+                // shapes (a literal `Int` argument), but accept anything
+                // that could be a row-consumed inner value — i.e. a call
+                // to an `async fn` whose row was just consumed at the
+                // call site. The runtime intrinsic was relaxed in M9
+                // Task 6 to accept those values directly.
+                fn is_primitive(t: &Ty) -> bool {
+                    matches!(t, Ty::Int | Ty::Float | Ty::Bool | Ty::ShellOutput | Ty::Unit)
+                }
+                let canon_args = self.resolve.canonical_call_args.get(id).cloned();
+                let arg_exprs: Vec<&Expr> = match &canon_args {
+                    Some(canon) => canon.iter().map(|na| na.value.as_ref()).collect(),
+                    None => args.iter().map(|a| a.value.as_ref()).collect(),
+                };
                 if callee_name == Some("spawn") {
-                    if let Some(arg_ty) = arg_tys.first() {
+                    if let (Some(arg_ty), Some(arg_expr)) =
+                        (arg_tys.first(), arg_exprs.first())
+                    {
                         let resolved = self.subst.apply(arg_ty);
-                        if !matches!(&resolved, Ty::Async(_) | Ty::Var(_)) {
+                        let row_consumed = self.expr_returns_async(arg_expr);
+                        if is_primitive(&resolved) && !row_consumed {
                             self.errors.push(TypeError::SpawnNonAsync {
                                 found: resolved,
                                 span: *span,
@@ -1102,9 +1225,13 @@ impl<'a> TypeInfer<'a> {
                         }
                     }
                 } else if callee_name == Some("join") {
-                    for arg_ty in &arg_tys {
+                    for (idx, arg_ty) in arg_tys.iter().enumerate() {
                         let resolved = self.subst.apply(arg_ty);
-                        if !matches!(&resolved, Ty::Handle(_) | Ty::Var(_)) {
+                        let row_consumed = arg_exprs
+                            .get(idx)
+                            .map(|e| self.expr_returns_async(e))
+                            .unwrap_or(false);
+                        if is_primitive(&resolved) && !row_consumed {
                             self.errors.push(TypeError::JoinNonHandle {
                                 found: resolved,
                                 span: *span,
@@ -1160,8 +1287,24 @@ impl<'a> TypeInfer<'a> {
                     self.check_call_bounds(*name, *span);
                 }
 
-                self.node_types.insert(*id, ret_ty.clone());
-                ret_ty
+                // M9: if the call returns `Eff<R, T>`, the row R must be
+                // satisfied at this call site — i.e. each effect in R is
+                // either in the enclosing function's declared row or
+                // handled by an enclosing `handle` clause. The call's
+                // value type at this site is `T` (the row is consumed by
+                // the surrounding context). For closed rows, missing
+                // effects emit `UnhandledEffect`; for open rows
+                // (unannotated fn), we treat performance as permissive.
+                let resolved_ret = self.subst.apply(&ret_ty);
+                if let Ty::Eff(row, t) = resolved_ret {
+                    self.check_call_effects(&row, *span);
+                    let inner = (*t).clone();
+                    self.node_types.insert(*id, inner.clone());
+                    inner
+                } else {
+                    self.node_types.insert(*id, ret_ty.clone());
+                    ret_ty
+                }
             }
 
             Expr::If {
@@ -1584,48 +1727,462 @@ impl<'a> TypeInfer<'a> {
                 self.node_types.insert(c.id, inner.clone());
                 inner
             }
-            Expr::Await(a) => {
-                let operand_ty = self.infer_expr(&a.operand);
-                if self.async_depth == 0 {
-                    self.errors
-                        .push(TypeError::AwaitOutsideAsync { span: a.span });
-                }
-                // Result is whatever the inner T is. Try unifying with both
-                // `Async<?T>` and `Handle<?T>` — whichever matches, that's
-                // the awaited value's type. If neither matches the operand,
-                // emit AwaitOnNonAsync against the resolved operand type.
-                let inner = self.fresh_tyvar();
-                let async_shape = Ty::Async(Box::new(inner.clone()));
-                let handle_shape = Ty::Handle(Box::new(inner.clone()));
-                let resolved = self.subst.apply(&operand_ty);
-                let unified = match &resolved {
-                    Ty::Async(_) => self.try_unify(&operand_ty, &async_shape).is_ok(),
-                    Ty::Handle(_) => self.try_unify(&operand_ty, &handle_shape).is_ok(),
-                    Ty::Var(_) => {
-                        // Operand still ambiguous — bias toward Async<T>.
-                        self.try_unify(&operand_ty, &async_shape).is_ok()
-                    }
-                    _ => false,
-                };
-                if !unified {
-                    self.errors.push(TypeError::AwaitOnNonAsync {
-                        found: resolved,
-                        span: a.span,
-                    });
-                }
-                let resolved_inner = self.subst.apply(&inner);
-                self.node_types.insert(a.id, resolved_inner.clone());
-                resolved_inner
-            }
             Expr::AsyncBlock(b) => {
+                // M9: an `async { body }` block bumps `async_depth` so any
+                // `await` sites inside accept the parser's desugaring, but
+                // its value type is the body's type — the M9 default
+                // `Async` handler resolves perform sites directly, so
+                // there is no `Async<T>` wrapper anymore. (The compiler
+                // also no longer emits `MakeAsync`, mirroring this.)
                 self.async_depth += 1;
+                // Treat the body as if a `handle { ... } with { Async::Suspend ... }`
+                // surrounded it, so awaits inside don't trigger the
+                // sync-context error from `infer_async_suspend`.
+                let async_eff = self.interner.lookup("Async").unwrap_or(Symbol::new(0));
+                let suspend_op = self.interner.lookup("Suspend").unwrap_or(Symbol::new(0));
+                let placeholder = self.fresh_tyvar();
+                self.handler_stack
+                    .push((async_eff, suspend_op, placeholder));
                 let body_ty = self.infer_expr(&b.block);
+                self.handler_stack.pop();
                 self.async_depth -= 1;
-                let result = Ty::Async(Box::new(body_ty));
-                self.node_types.insert(b.id, result.clone());
-                result
+                self.node_types.insert(b.id, body_ty.clone());
+                body_ty
+            }
+            Expr::Perform(p) => self.infer_perform(p),
+            Expr::Handle(h) => self.infer_handle(h),
+            Expr::Resume(r) => self.infer_resume(r),
+        }
+    }
+
+    /// M9: when a call's return type is `Eff<R, T>`, validate that every
+    /// effect in `R` is either handled by an enclosing handler clause or
+    /// listed in the enclosing function's closed row. Emits
+    /// `UnhandledEffect` per missing effect when the row is closed.
+    fn check_call_effects(&mut self, row: &[EffectRef], span: Span) {
+        for eff in row {
+            let in_handler = self
+                .handler_stack
+                .iter()
+                .any(|(e, _, _)| *e == eff.name);
+            if in_handler {
+                continue;
+            }
+            // `None` means an open row — accept silently. A `Some(fn_row)`
+            // declares a closed row, and any effect missing from it is a
+            // row-level `UnhandledEffect`.
+            if let Some(fn_row) = &self.current_fn_row
+                && !fn_row.iter().any(|e| e.name == eff.name)
+            {
+                // The fn declared a closed row that doesn't cover this
+                // effect. Use a sentinel `op` symbol since the call site
+                // doesn't name a specific op — this is a row-level miss.
+                self.errors.push(TypeError::UnhandledEffect {
+                    effect: eff.name,
+                    op: eff.name, // best-effort; no specific op known
+                    span,
+                });
             }
         }
+    }
+
+    /// Returns true if this perform site references the built-in
+    /// `Async::Suspend` operation. Compares against the interner — the
+    /// parser uses the canonical "Async" / "Suspend" symbols when desugaring
+    /// `await`.
+    fn is_async_suspend(&self, p: &PerformExpr) -> bool {
+        let effect_name = self.interner.resolve(p.effect);
+        let op_name = self.interner.resolve(p.op);
+        effect_name == "Async" && op_name == "Suspend"
+    }
+
+    /// Returns true if this perform site references the built-in
+    /// `Gen::Yield` operation.
+    fn is_gen_yield(&self, p: &PerformExpr) -> bool {
+        let effect_name = self.interner.resolve(p.effect);
+        let op_name = self.interner.resolve(p.op);
+        effect_name == "Gen" && op_name == "Yield"
+    }
+
+    /// Built-in typing for `Async::Suspend(future: ?) -> A`.
+    ///
+    /// The `future:` operand may be:
+    /// - `Async<A>` — the M8 representation; still produced at runtime by
+    ///   `MakeAsync` for legacy async-block forms.
+    /// - `Handle<A>` — `spawn`'s return type.
+    /// - The raw `A` that the call-site of an `async fn` produces after the
+    ///   `Eff<[Async], A>` row has been "consumed" by `infer_call`.
+    /// - A type variable — biased toward `Async<?T>` so unification picks up
+    ///   the inner T when the operand type later resolves.
+    ///
+    /// In all four cases the operation evaluates to `A`. The third case is
+    /// the M9-style "row consumed at call site" pattern: a call to
+    /// `async fn fetch() -> Str` returns `Str` (with the row participating
+    /// in the row-check, not the value type), and `await fetch()` should
+    /// still produce that `Str`.
+    ///
+    /// In all four cases the operation evaluates to `A`. The third case is
+    /// the M9-style "row consumed at call site" pattern: a call to
+    /// `async fn fetch() -> Str` returns `Str` (with the row participating
+    /// in the row-check, not the value type), and `await fetch()` should
+    /// still produce that `Str`.
+    ///
+    /// Validates two M8-style invariants that the parser desugaring would
+    /// otherwise lose:
+    ///   - `await` inside a *sync* fn body emits `AwaitOutsideAsync`
+    ///     (detected via `current_fn_row` — async fns post-M9 declare
+    ///     `Eff<[Async], _>`).
+    ///   - `await x` where `x` is unambiguously a primitive (`Int`, etc.)
+    ///     emits `AwaitOnNonAsync`.
+    fn infer_async_suspend(&mut self, p: &PerformExpr) -> Ty {
+        // Snapshot whether the operand is itself an `Eff<[Async], _>`-bearing
+        // call site (i.e. a call to an `async fn`). The post-M9 call-site
+        // model consumes the row and reports the value type as `T`, so the
+        // perform's operand has the inner type `T` — including primitives
+        // like `Int`. In that case we should NOT emit `AwaitOnNonAsync`,
+        // even though the operand type happens to be a primitive.
+        let operand_is_async_call = p
+            .args
+            .first()
+            .map(|(_, e)| self.expr_returns_async(e))
+            .unwrap_or(false);
+
+        // Find the (only) `future:` arg; type it.
+        let arg_info = if let Some((_, arg_expr)) = p.args.first() {
+            let ty = self.infer_expr(arg_expr);
+            for (_, extra) in p.args.iter().skip(1) {
+                self.infer_expr(extra);
+            }
+            Some((ty, arg_expr.span()))
+        } else {
+            None
+        };
+
+        // Outside-async check: the enclosing fn must declare `Eff<[Async], _>`
+        // (the parser desugars `async fn` to that). If we have no row at
+        // all (`current_fn_row = None`), and the perform isn't covered by
+        // a `handle` clause in scope (or an `async { ... }` block, which
+        // pushes a synthetic frame), it's a sync-context `await`.
+        let in_handler_stack = self
+            .handler_stack
+            .iter()
+            .any(|(eff, op, _)| *eff == p.effect && *op == p.op);
+        let row_has_async = self
+            .current_fn_row
+            .as_ref()
+            .map(|row| {
+                row.iter()
+                    .any(|e| self.interner.resolve(e.name) == "Async")
+            })
+            .unwrap_or(false);
+        if !in_handler_stack && !row_has_async {
+            self.errors
+                .push(TypeError::AwaitOutsideAsync { span: p.span });
+        }
+
+        let (operand_ty, span) = match arg_info {
+            Some(t) => t,
+            None => {
+                let r = self.fresh_tyvar();
+                self.node_types.insert(p.id, r.clone());
+                return r;
+            }
+        };
+
+        let resolved = self.subst.apply(&operand_ty);
+        let inner_ty = match resolved {
+            Ty::Async(t) | Ty::Handle(t) => *t,
+            Ty::Var(_) => {
+                // Bias toward Async<?T>: unify so the inner emerges if the
+                // operand type later resolves.
+                let inner = self.fresh_tyvar();
+                let _ = self.try_unify(&operand_ty, &Ty::Async(Box::new(inner.clone())));
+                self.subst.apply(&inner)
+            }
+            // Primitive operands are unambiguously non-async UNLESS the
+            // operand expression is a call to an `async fn`, in which
+            // case the row was just consumed at the call site and the
+            // primitive type is the legitimate inner T.
+            ref bad @ (Ty::Int | Ty::Float | Ty::Bool | Ty::ShellOutput | Ty::Unit)
+                if !operand_is_async_call =>
+            {
+                let _ = span;
+                self.errors.push(TypeError::AwaitOnNonAsync {
+                    found: bad.clone(),
+                    span: p.span,
+                });
+                bad.clone()
+            }
+            // M9 row-consumed pattern: await on a value whose type is just
+            // `T` (e.g. Str, struct, async-fn-return primitive) because
+            // the call site consumed `Eff<[Async], T>`.
+            other => other,
+        };
+        self.node_types.insert(p.id, inner_ty.clone());
+        inner_ty
+    }
+
+    /// Returns true if `expr` is syntactically a call to a function whose
+    /// declared signature returns `Eff<[Async, ...], _>`. Used by
+    /// `infer_async_suspend` to distinguish a row-consumed primitive
+    /// (legal) from a literal primitive (`AwaitOnNonAsync`).
+    fn expr_returns_async(&mut self, expr: &Expr) -> bool {
+        let callee = match expr {
+            Expr::Call { callee, .. } => callee,
+            _ => return false,
+        };
+        // Resolve the callee's type without applying side-effects.
+        let callee_ty = match callee.as_ref() {
+            Expr::Variable { name, .. } => match self.env.lookup(*name) {
+                Some(scheme) => scheme.ty.clone(),
+                None => return false,
+            },
+            _ => return false,
+        };
+        match callee_ty {
+            Ty::Fn { ret, .. } => {
+                matches!(*ret, Ty::Eff(ref row, _) if row.iter().any(|e| self.interner.resolve(e.name) == "Async"))
+            }
+            _ => false,
+        }
+    }
+
+    /// Built-in typing for `Gen::Yield(value: T) -> Unit`. The `value` arg's
+    /// type flows from the expression and is unconstrained (any `T` is
+    /// acceptable). Resume type is always `Unit`.
+    fn infer_gen_yield(&mut self, p: &PerformExpr) -> Ty {
+        for (_, arg_expr) in &p.args {
+            self.infer_expr(arg_expr);
+        }
+        let result = Ty::Unit;
+        self.node_types.insert(p.id, result.clone());
+        result
+    }
+
+    /// M9: type-check `perform Effect::Op(name: expr, ...)`.
+    ///
+    /// Looks up `(effect, op)` in the effect-decl table, type-checks each
+    /// named arg against the declared parameter type, validates that the
+    /// effect is in scope (via the handler stack or the enclosing fn's
+    /// declared row), and produces the operation's `resume_type` as the
+    /// expression's value type.
+    fn infer_perform(&mut self, p: &PerformExpr) -> Ty {
+        // Built-in `Async::Suspend(future: Async<A>) -> A` is generic and
+        // cannot be modelled by a single concrete `EffectOp`, so we
+        // synthesise its typing inline. The parser desugars `expr.await`
+        // (and `async { ... }` blocks containing `await`) into perform
+        // sites against this effect; without this special case those calls
+        // never unify with their operand, leaving downstream variables
+        // unbound (e.g. the result of `let a = await step1()`).
+        if self.is_async_suspend(p) {
+            return self.infer_async_suspend(p);
+        }
+        // Built-in `Gen::Yield(value: T) -> Unit` similarly: the parser
+        // desugars `yield expr` to it. Resume type is `Unit`; the value
+        // arg has type `T` inferred from the operand.
+        if self.is_gen_yield(p) {
+            return self.infer_gen_yield(p);
+        }
+
+        // Look up the effect operation by (effect, op). Clone to release
+        // the borrow before we type-check argument expressions (which need
+        // `&mut self`).
+        let effect_op = self.effect_ops.get(&(p.effect, p.op)).cloned();
+
+        // Always walk the argument expressions so any nested errors land
+        // even when the operation itself is unknown.
+        match &effect_op {
+            Some(op) => {
+                // Match args by name. The parser supplies named args; we
+                // iterate the declared params in declaration order and find
+                // the matching arg by name. Missing/extra args are flagged
+                // by the resolver upstream — we don't double-report here,
+                // but we still walk every supplied expression for typing.
+                for (param_name, param_ty) in &op.params {
+                    if let Some((_, arg_expr)) = p.args.iter().find(|(n, _)| n == param_name) {
+                        let arg_ty = self.infer_expr(arg_expr);
+                        self.unify(param_ty, &arg_ty, arg_expr.span());
+                    }
+                }
+                // Walk any extra args by name that don't match a param,
+                // so their inner expressions are still typed for diagnostics.
+                for (arg_name, arg_expr) in &p.args {
+                    if !op.params.iter().any(|(n, _)| n == arg_name) {
+                        self.infer_expr(arg_expr);
+                    }
+                }
+            }
+            None => {
+                // Unknown effect/op — still type the arg expressions.
+                for (_, arg_expr) in &p.args {
+                    self.infer_expr(arg_expr);
+                }
+            }
+        }
+
+        // Validate that this effect is in scope.
+        let in_handler_stack = self
+            .handler_stack
+            .iter()
+            .any(|(eff, op, _)| *eff == p.effect && *op == p.op);
+        let in_fn_row = self
+            .current_fn_row
+            .as_ref()
+            .map(|row| row.iter().any(|e| e.name == p.effect));
+        let unhandled = match (in_handler_stack, in_fn_row) {
+            (true, _) => false,
+            // No handler clause is in scope; check the enclosing fn's row.
+            (false, Some(true)) => false,           // declared in row → OK
+            (false, Some(false)) => true,           // closed row, missing → error
+            // No fn row annotation: treat the row as open. We do NOT emit
+            // UnhandledEffect here — the inferred row is permissive.
+            (false, None) => false,
+        };
+        if unhandled {
+            self.errors.push(TypeError::UnhandledEffect {
+                effect: p.effect,
+                op: p.op,
+                span: p.span,
+            });
+        }
+
+        let result_ty = match effect_op {
+            Some(op) => op.resume_type.clone(),
+            None => self.fresh_tyvar(),
+        };
+        self.node_types.insert(p.id, result_ty.clone());
+        result_ty
+    }
+
+    /// M9: type-check `handle { body } with { Effect::Op(p) => clause, ... }`.
+    ///
+    /// The body's value type and the overall handle expression's value type
+    /// agree. Each clause's body must produce that same value type. Inside
+    /// each clause, `cont` is bound to `fn(resume_type) -> T` where `T` is
+    /// the value type. The set of effects handled by these clauses is
+    /// "subtracted" from the body's row — but since M9 doesn't track an
+    /// explicit row variable on expressions, we model this as: the body
+    /// can perform any of the handled effects, and any other perform must
+    /// still satisfy the enclosing context.
+    fn infer_handle(&mut self, h: &HandleExpr) -> Ty {
+        let result_ty = self.fresh_tyvar();
+
+        // 1. Push the handled effects onto the handler stack so `perform`
+        //    sites inside the body see them as "in scope". We push every
+        //    clause up front; the body sees them all simultaneously.
+        let mut pushed: Vec<(Symbol, Symbol, Ty)> = Vec::new();
+        for c in &h.clauses {
+            let resume_ty = self
+                .effect_ops
+                .get(&(c.effect, c.op))
+                .map(|op| op.resume_type.clone())
+                .unwrap_or_else(|| self.fresh_tyvar());
+            self.handler_stack
+                .push((c.effect, c.op, resume_ty.clone()));
+            pushed.push((c.effect, c.op, resume_ty));
+        }
+
+        // 2. Type the body. Its value type must match the overall result.
+        let body_ty = self.infer_expr(&h.body);
+        self.unify(&result_ty, &body_ty, h.body.span());
+
+        // 3. Pop the handler clauses we pushed (in reverse order).
+        for _ in 0..pushed.len() {
+            self.handler_stack.pop();
+        }
+
+        // 4. Type each clause body. For each clause:
+        //    - bind clause params to EffectOp::params types
+        //    - bind `cont` to fn(resume_type) -> T
+        //    - inside the clause body, push (effect, op, resume_type) so
+        //      that `resume k with v` typechecks v against resume_type
+        for (clause, (eff, op_name, resume_ty)) in h.clauses.iter().zip(pushed) {
+            self.check_handler_clause(clause, &result_ty, eff, op_name, resume_ty);
+        }
+
+        self.node_types.insert(h.id, result_ty.clone());
+        result_ty
+    }
+
+    fn check_handler_clause(
+        &mut self,
+        clause: &HandlerClause,
+        result_ty: &Ty,
+        eff: Symbol,
+        op_name: Symbol,
+        resume_ty: Ty,
+    ) {
+        let op_meta = self.effect_ops.get(&(eff, op_name)).cloned();
+
+        self.env.push_scope();
+
+        // Bind each clause param to its declared param type. The number of
+        // params should match the EffectOp; if not, we still bind what we
+        // can with fresh vars to keep the body typeable.
+        if let Some(op) = &op_meta {
+            for (i, sym) in clause.params.iter().enumerate() {
+                let ty = if let Some((_, t)) = op.params.get(i) {
+                    t.clone()
+                } else {
+                    self.fresh_tyvar()
+                };
+                self.env.define(*sym, TypeScheme::monomorphic(ty));
+            }
+        } else {
+            for sym in &clause.params {
+                let v = self.fresh_tyvar();
+                self.env.define(*sym, TypeScheme::monomorphic(v));
+            }
+        }
+
+        // Bind the continuation `cont` (typically `k`) as
+        // `fn(resume_type) -> T` where T = the outer result type.
+        let cont_ty = Ty::Fn {
+            params: vec![resume_ty.clone()],
+            ret: Box::new(result_ty.clone()),
+        };
+        self.env
+            .define(clause.cont, TypeScheme::monomorphic(cont_ty));
+
+        // Push the active resume-type frame so `resume k with v` can find
+        // it when typing v.
+        self.handler_stack.push((eff, op_name, resume_ty));
+
+        let body_ty = self.infer_expr(&clause.handler);
+        self.unify(result_ty, &body_ty, clause.handler.span());
+
+        self.handler_stack.pop();
+        self.env.pop_scope();
+    }
+
+    /// M9: type-check `resume k with v`.
+    ///
+    /// `v` must have the `resume_type` of the enclosing handler clause's
+    /// effect operation. Mismatches produce `TypeError::ResumeTypeMismatch`.
+    /// `resume` itself is divergent — we model its expression type as a
+    /// fresh variable so it composes with whatever surrounding branch
+    /// expects.
+    fn infer_resume(&mut self, r: &ResumeExpr) -> Ty {
+        let value_ty = self.infer_expr(&r.value);
+
+        // Else: resolver/parser already rejects `resume` outside a handler
+        // clause; nothing useful to do when `handler_stack` is empty.
+        if let Some((_, _, resume_ty)) = self.handler_stack.last().cloned()
+            && self.try_unify(&resume_ty, &value_ty).is_err()
+        {
+            let expected = self.subst.apply(&resume_ty);
+            let found = self.subst.apply(&value_ty);
+            self.errors.push(TypeError::ResumeTypeMismatch {
+                expected,
+                found,
+                span: r.span,
+            });
+        }
+
+        // Resume diverges — give it a fresh var so it composes.
+        let diverges = self.fresh_tyvar();
+        self.node_types.insert(r.id, diverges.clone());
+        diverges
     }
 
     /// Bridges constructor calls for the built-in `Option` / `Result` enums
@@ -1995,6 +2552,38 @@ impl<'a> TypeInfer<'a> {
             (Ty::Handle(a), Ty::Handle(b)) => self.try_unify(&a, &b),
             (Ty::Poll(a), Ty::Poll(b)) => self.try_unify(&a, &b),
 
+            // M9: effect rows + value type unify pointwise. We require
+            // structural row equality (closed-row matching) — full row
+            // polymorphism is intentionally deferred past M9.
+            (Ty::Eff(r1, t1), Ty::Eff(r2, t2)) => {
+                if !rows_match(&r1, &r2) {
+                    return Err(());
+                }
+                // Unify any type arguments inside matched effect refs.
+                for (e1, e2) in r1.iter().zip(r2.iter()) {
+                    if e1.args.len() != e2.args.len() {
+                        return Err(());
+                    }
+                    for (a, b) in e1.args.iter().zip(e2.args.iter()) {
+                        self.try_unify(a, b)?;
+                    }
+                }
+                self.try_unify(&t1, &t2)
+            }
+
+            // Bare `T` may unify with `Eff<[], T>` — the empty-row case is
+            // just T. This keeps callers that don't care about effects
+            // composing cleanly with effected callees that happen to have
+            // an empty row.
+            (Ty::Eff(row, t), other) | (other, Ty::Eff(row, t)) if row.is_empty() => {
+                self.try_unify(&t, &other)
+            }
+
+            // EffVar unifies with EffVar trivially (same name) — full
+            // EffVar↔row inference is deferred. This arm is here so that
+            // explicit annotations carrying `EffVar` don't blow up.
+            (Ty::EffVar(n1), Ty::EffVar(n2)) if n1 == n2 => Ok(()),
+
             _ => Err(()),
         }
     }
@@ -2205,6 +2794,26 @@ fn unwrap_export(item: &Item) -> &Item {
     }
 }
 
+/// Compares two effect rows as multisets keyed by effect name, ignoring
+/// order. Two rows match if they have the same set of effect names with
+/// the same multiplicities. Type-argument unification happens at the call
+/// site after a successful name match.
+///
+/// M9 keeps row matching deliberately simple: closed rows must match
+/// structurally. Open rows (effect variables) are deferred — this is what
+/// the spec calls out as M9.5 territory.
+fn rows_match(a: &[EffectRef], b: &[EffectRef]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    // Sort by name (Symbol id) for order-independent comparison.
+    let mut a_names: Vec<u32> = a.iter().map(|e| e.name.0).collect();
+    let mut b_names: Vec<u32> = b.iter().map(|e| e.name.0).collect();
+    a_names.sort_unstable();
+    b_names.sort_unstable();
+    a_names == b_names
+}
+
 /// Substitutes type variables in `ty` according to `mapping`, leaving any
 /// variable not in the map untouched. Used for fresh-renaming a scheme during
 /// instantiation.
@@ -2249,6 +2858,15 @@ fn rename_vars(ty: &Ty, mapping: &HashMap<TyVar, Ty>) -> Ty {
         Ty::Async(inner) => Ty::Async(Box::new(rename_vars(inner, mapping))),
         Ty::Handle(inner) => Ty::Handle(Box::new(rename_vars(inner, mapping))),
         Ty::Poll(inner) => Ty::Poll(Box::new(rename_vars(inner, mapping))),
+        Ty::Eff(row, t) => Ty::Eff(
+            row.iter()
+                .map(|e| EffectRef {
+                    name: e.name,
+                    args: e.args.iter().map(|a| rename_vars(a, mapping)).collect(),
+                })
+                .collect(),
+            Box::new(rename_vars(t, mapping)),
+        ),
         other => other.clone(),
     }
 }
@@ -2298,6 +2916,15 @@ fn default_remaining_vars(ty: &Ty) -> Ty {
         Ty::Async(inner) => Ty::Async(Box::new(default_remaining_vars(inner))),
         Ty::Handle(inner) => Ty::Handle(Box::new(default_remaining_vars(inner))),
         Ty::Poll(inner) => Ty::Poll(Box::new(default_remaining_vars(inner))),
+        Ty::Eff(row, t) => Ty::Eff(
+            row.iter()
+                .map(|e| EffectRef {
+                    name: e.name,
+                    args: e.args.iter().map(default_remaining_vars).collect(),
+                })
+                .collect(),
+            Box::new(default_remaining_vars(t)),
+        ),
         other => other.clone(),
     }
 }
@@ -2329,7 +2956,8 @@ fn span_in_item(item: &Item, target: NodeId) -> Option<Span> {
         Item::StructDef { .. } | Item::EnumDef { .. } | Item::TraitDef { .. } => None,
         Item::Export(decl) => span_in_item(&decl.item, target),
         Item::Import(_) | Item::TypeAlias(_) => None,
-        Item::AsyncFn(decl) => span_in_expr(&decl.item.body, target),
+        // M9 Task 1: parser does not yet emit `effect` declarations.
+        Item::EffectDecl(_) => None,
     }
 }
 
@@ -2404,8 +3032,14 @@ fn span_in_expr(expr: &Expr, target: NodeId) -> Option<Span> {
             span_in_expr(array, target).or_else(|| span_in_expr(index, target))
         }
         Expr::Cast(c) => span_in_expr(&c.expr, target),
-        Expr::Await(a) => span_in_expr(&a.operand, target),
         Expr::AsyncBlock(b) => span_in_expr(&b.block, target),
+        Expr::Perform(p) => p.args.iter().find_map(|(_, e)| span_in_expr(e, target)),
+        Expr::Handle(h) => span_in_expr(&h.body, target).or_else(|| {
+            h.clauses
+                .iter()
+                .find_map(|c| span_in_expr(&c.handler, target))
+        }),
+        Expr::Resume(r) => span_in_expr(&r.value, target),
     }
 }
 
@@ -2445,6 +3079,9 @@ mod tests {
             env: InferEnv::new(),
             current_fn_ret: None,
             async_depth: 0,
+            effect_ops: HashMap::new(),
+            current_fn_row: None,
+            handler_stack: Vec::new(),
             generic_aliases: HashMap::new(),
             bound_constraints: HashMap::new(),
             type_aliases: HashMap::new(),
@@ -2472,6 +3109,9 @@ mod tests {
             env: InferEnv::new(),
             current_fn_ret: None,
             async_depth: 0,
+            effect_ops: HashMap::new(),
+            current_fn_row: None,
+            handler_stack: Vec::new(),
             generic_aliases: HashMap::new(),
             bound_constraints: HashMap::new(),
             type_aliases: HashMap::new(),
@@ -2501,6 +3141,9 @@ mod tests {
             env: InferEnv::new(),
             current_fn_ret: None,
             async_depth: 0,
+            effect_ops: HashMap::new(),
+            current_fn_row: None,
+            handler_stack: Vec::new(),
             generic_aliases: HashMap::new(),
             bound_constraints: HashMap::new(),
             type_aliases: HashMap::new(),
@@ -2540,6 +3183,9 @@ mod tests {
             env: InferEnv::new(),
             current_fn_ret: None,
             async_depth: 0,
+            effect_ops: HashMap::new(),
+            current_fn_row: None,
+            handler_stack: Vec::new(),
             generic_aliases: HashMap::new(),
             bound_constraints: HashMap::new(),
             type_aliases: HashMap::new(),
@@ -2577,5 +3223,399 @@ mod tests {
     fn node_id_unused() {
         // Quiet the unused-import check on NodeId.
         let _ = NodeId::new(0);
+    }
+
+    // ------------------------------------------------------------------
+    // M9 effect inference tests
+    // ------------------------------------------------------------------
+
+    use ferric_common::{
+        EffectAnnotation, EffectDecl, EffectOp, FnItem, HandleExpr, HandlerClause, Item, Literal,
+        NamedArg, PerformExpr, ResumeExpr,
+    };
+
+    /// Build an effect declaration: `effect <name> { <op>(<param_name>: <param_ty>) -> <resume_ty> }`.
+    fn mk_effect(
+        interner: &mut Interner,
+        name: &str,
+        op: &str,
+        param: Option<(&str, Ty)>,
+        resume_ty: Ty,
+    ) -> Item {
+        let name_sym = interner.intern(name);
+        let op_sym = interner.intern(op);
+        let params = match param {
+            Some((pn, pt)) => vec![(interner.intern(pn), pt)],
+            None => vec![],
+        };
+        Item::EffectDecl(EffectDecl {
+            span: Span::new(0, 0),
+            name: name_sym,
+            type_params: vec![],
+            ops: vec![EffectOp {
+                span: Span::new(0, 0),
+                name: op_sym,
+                params,
+                resume_type: resume_ty,
+            }],
+        })
+    }
+
+    /// `fn <name>() -> <ret> { <body> }` — synchronous, no params.
+    fn mk_fn(interner: &mut Interner, name: &str, ret: TypeAnnotation, body: Expr) -> Item {
+        Item::Fn(FnItem {
+            id: NodeId::new(100),
+            name: interner.intern(name),
+            type_params: vec![],
+            params: vec![],
+            ret_ty: ret,
+            body,
+            span: Span::new(0, 0),
+        })
+    }
+
+    fn lit_int(n: i64, id: u32) -> Expr {
+        Expr::Literal {
+            value: Literal::Int(n),
+            id: NodeId::new(id),
+            span: Span::new(0, 0),
+        }
+    }
+
+    fn lit_str(interner: &mut Interner, s: &str, id: u32) -> Expr {
+        Expr::Literal {
+            value: Literal::Str(interner.intern(s)),
+            id: NodeId::new(id),
+            span: Span::new(0, 0),
+        }
+    }
+
+    /// Block wrapping a single expression as the tail.
+    fn block(tail: Expr, id: u32) -> Expr {
+        Expr::Block {
+            stmts: vec![],
+            expr: Some(Box::new(tail)),
+            id: NodeId::new(id),
+            span: Span::new(0, 0),
+        }
+    }
+
+    #[test]
+    fn perform_in_eff_annotated_fn_typechecks() {
+        // effect E { Op() -> Int }
+        // fn f() -> Eff<[E], Int> { perform E::Op() }
+        let mut interner = Interner::new();
+        let e = mk_effect(&mut interner, "E", "Op", None, Ty::Int);
+        let perform = Expr::Perform(PerformExpr {
+            id: NodeId::new(200),
+            span: Span::new(0, 0),
+            effect: interner.intern("E"),
+            op: interner.intern("Op"),
+            args: vec![],
+        });
+        let body = block(perform, 300);
+        let ret_ann = TypeAnnotation::Eff {
+            row: vec![EffectAnnotation {
+                name: interner.intern("E"),
+                args: vec![],
+            }],
+            result: Box::new(TypeAnnotation::Named(interner.intern("Int"))),
+        };
+        let f = mk_fn(&mut interner, "f", ret_ann, body);
+        let ast = ParseResult::new(vec![e, f], vec![]);
+        let resolve = empty_resolve();
+        let registry = empty_registry();
+        let result = typecheck(&ast, &resolve, &interner, &registry);
+        assert!(
+            !result.has_errors(),
+            "expected no errors, got {:?}",
+            result.errors
+        );
+    }
+
+    #[test]
+    fn perform_in_unannotated_fn_does_not_error() {
+        // effect E { Op() -> Int }
+        // fn f() -> Int { perform E::Op() }   — sync return type, open row
+        // The task says: "If the row is closed (annotated) and doesn't
+        // contain Effect, emit UnhandledEffect." A bare `-> Int` is not
+        // a closed Eff row, so we treat it as open and accept.
+        // This documents that behaviour explicitly.
+        let mut interner = Interner::new();
+        let e = mk_effect(&mut interner, "E", "Op", None, Ty::Int);
+        let perform = Expr::Perform(PerformExpr {
+            id: NodeId::new(200),
+            span: Span::new(0, 0),
+            effect: interner.intern("E"),
+            op: interner.intern("Op"),
+            args: vec![],
+        });
+        let body = block(perform, 300);
+        let ret_ann = TypeAnnotation::Named(interner.intern("Int"));
+        let f = mk_fn(&mut interner, "f", ret_ann, body);
+        let ast = ParseResult::new(vec![e, f], vec![]);
+        let resolve = empty_resolve();
+        let registry = empty_registry();
+        let result = typecheck(&ast, &resolve, &interner, &registry);
+        // Open row: no UnhandledEffect.
+        assert!(
+            !result
+                .errors
+                .iter()
+                .any(|e| matches!(e, TypeError::UnhandledEffect { .. })),
+            "expected no UnhandledEffect, got {:?}",
+            result.errors
+        );
+    }
+
+    #[test]
+    fn perform_in_closed_row_without_effect_emits_unhandled() {
+        // effect E { Op() -> Int }
+        // effect F { Op() -> Int }
+        // fn f() -> Eff<[F], Int> { perform E::Op() }
+        let mut interner = Interner::new();
+        let e = mk_effect(&mut interner, "E", "Op", None, Ty::Int);
+        let f_eff = mk_effect(&mut interner, "F", "Op", None, Ty::Int);
+        let perform = Expr::Perform(PerformExpr {
+            id: NodeId::new(200),
+            span: Span::new(10, 20),
+            effect: interner.intern("E"),
+            op: interner.intern("Op"),
+            args: vec![],
+        });
+        let body = block(perform, 300);
+        let ret_ann = TypeAnnotation::Eff {
+            row: vec![EffectAnnotation {
+                name: interner.intern("F"),
+                args: vec![],
+            }],
+            result: Box::new(TypeAnnotation::Named(interner.intern("Int"))),
+        };
+        let f_fn = mk_fn(&mut interner, "f", ret_ann, body);
+        let ast = ParseResult::new(vec![e, f_eff, f_fn], vec![]);
+        let resolve = empty_resolve();
+        let registry = empty_registry();
+        let result = typecheck(&ast, &resolve, &interner, &registry);
+        let unhandled: Vec<_> = result
+            .errors
+            .iter()
+            .filter(|e| matches!(e, TypeError::UnhandledEffect { .. }))
+            .collect();
+        assert!(
+            !unhandled.is_empty(),
+            "expected UnhandledEffect, got {:?}",
+            result.errors
+        );
+    }
+
+    #[test]
+    fn handle_with_resume_typechecks() {
+        // effect E { Op() -> Int }
+        // fn f() -> Int { handle { perform E::Op() } with { E::Op() => resume k with 42 } }
+        let mut interner = Interner::new();
+        let e = mk_effect(&mut interner, "E", "Op", None, Ty::Int);
+        let perform = Expr::Perform(PerformExpr {
+            id: NodeId::new(200),
+            span: Span::new(0, 0),
+            effect: interner.intern("E"),
+            op: interner.intern("Op"),
+            args: vec![],
+        });
+        let body = block(perform, 300);
+        let cont_sym = interner.intern("k");
+        let clause_body = Expr::Resume(ResumeExpr {
+            id: NodeId::new(400),
+            span: Span::new(0, 0),
+            cont: cont_sym,
+            value: Box::new(lit_int(42, 401)),
+        });
+        let handle = Expr::Handle(HandleExpr {
+            id: NodeId::new(500),
+            span: Span::new(0, 0),
+            body: Box::new(body),
+            clauses: vec![HandlerClause {
+                span: Span::new(0, 0),
+                effect: interner.intern("E"),
+                op: interner.intern("Op"),
+                params: vec![],
+                cont: cont_sym,
+                handler: Box::new(clause_body),
+            }],
+        });
+        let ret_ann = TypeAnnotation::Named(interner.intern("Int"));
+        let f = mk_fn(&mut interner, "f", ret_ann, block(handle, 600));
+        let ast = ParseResult::new(vec![e, f], vec![]);
+        let resolve = empty_resolve();
+        let registry = empty_registry();
+        let result = typecheck(&ast, &resolve, &interner, &registry);
+        assert!(
+            !result.has_errors(),
+            "expected no errors, got {:?}",
+            result.errors
+        );
+    }
+
+    #[test]
+    fn resume_with_wrong_type_emits_resume_type_mismatch() {
+        // effect E { Op() -> Int }
+        // fn f() -> Int { handle { perform E::Op() } with { E::Op() => resume k with "wrong" } }
+        let mut interner = Interner::new();
+        let e = mk_effect(&mut interner, "E", "Op", None, Ty::Int);
+        let perform = Expr::Perform(PerformExpr {
+            id: NodeId::new(200),
+            span: Span::new(0, 0),
+            effect: interner.intern("E"),
+            op: interner.intern("Op"),
+            args: vec![],
+        });
+        let body = block(perform, 300);
+        let cont_sym = interner.intern("k");
+        let bad = lit_str(&mut interner, "wrong", 401);
+        let clause_body = Expr::Resume(ResumeExpr {
+            id: NodeId::new(400),
+            span: Span::new(7, 17),
+            cont: cont_sym,
+            value: Box::new(bad),
+        });
+        let handle = Expr::Handle(HandleExpr {
+            id: NodeId::new(500),
+            span: Span::new(0, 0),
+            body: Box::new(body),
+            clauses: vec![HandlerClause {
+                span: Span::new(0, 0),
+                effect: interner.intern("E"),
+                op: interner.intern("Op"),
+                params: vec![],
+                cont: cont_sym,
+                handler: Box::new(clause_body),
+            }],
+        });
+        let ret_ann = TypeAnnotation::Named(interner.intern("Int"));
+        let f = mk_fn(&mut interner, "f", ret_ann, block(handle, 600));
+        let ast = ParseResult::new(vec![e, f], vec![]);
+        let resolve = empty_resolve();
+        let registry = empty_registry();
+        let result = typecheck(&ast, &resolve, &interner, &registry);
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|e| matches!(e, TypeError::ResumeTypeMismatch { .. })),
+            "expected ResumeTypeMismatch, got {:?}",
+            result.errors
+        );
+    }
+
+    #[test]
+    fn perform_with_named_arg_typechecks() {
+        // effect E { Op(value: Int) -> Int }
+        // fn f() -> Eff<[E], Int> { perform E::Op(value: 7) }
+        let mut interner = Interner::new();
+        let e = mk_effect(&mut interner, "E", "Op", Some(("value", Ty::Int)), Ty::Int);
+        let _ = NamedArg {
+            // touch NamedArg to silence potential dead-import warnings
+            span: Span::new(0, 0),
+            name: interner.intern("value"),
+            value: Box::new(lit_int(0, 0)),
+        };
+        let perform = Expr::Perform(PerformExpr {
+            id: NodeId::new(200),
+            span: Span::new(0, 0),
+            effect: interner.intern("E"),
+            op: interner.intern("Op"),
+            args: vec![(interner.intern("value"), lit_int(7, 201))],
+        });
+        let body = block(perform, 300);
+        let ret_ann = TypeAnnotation::Eff {
+            row: vec![EffectAnnotation {
+                name: interner.intern("E"),
+                args: vec![],
+            }],
+            result: Box::new(TypeAnnotation::Named(interner.intern("Int"))),
+        };
+        let f = mk_fn(&mut interner, "f", ret_ann, body);
+        let ast = ParseResult::new(vec![e, f], vec![]);
+        let resolve = empty_resolve();
+        let registry = empty_registry();
+        let result = typecheck(&ast, &resolve, &interner, &registry);
+        assert!(
+            !result.has_errors(),
+            "expected no errors, got {:?}",
+            result.errors
+        );
+    }
+
+    #[test]
+    fn eff_annotation_with_empty_row_resolves_to_inner_t() {
+        // resolve_type_annotation should treat `Eff { row: [], result: Int }`
+        // as `Int` (the empty-row case is just the value type).
+        let registry = empty_registry();
+        let resolve = empty_resolve();
+        let mut interner = Interner::new();
+        let int_sym = interner.intern("Int");
+        let ann = TypeAnnotation::Eff {
+            row: vec![],
+            result: Box::new(TypeAnnotation::Named(int_sym)),
+        };
+        let ast = ParseResult::new(vec![], vec![]);
+        let mut infer = TypeInfer::new(&ast, &resolve, &interner, &registry);
+        let mut aliases = HashMap::new();
+        let resolved = infer.resolve_type_annotation(&ann, &mut aliases);
+        // Empty rows degenerate to bare T.
+        match resolved {
+            Ty::Int => {}
+            other => panic!("expected Ty::Int, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn eff_unifies_with_eff_when_rows_and_inner_match() {
+        // Verify Ty::Eff([E], Int) unifies with Ty::Eff([E], Int).
+        let registry = empty_registry();
+        let resolve = empty_resolve();
+        let mut interner = Interner::new();
+        let e = interner.intern("E");
+        let ast = ParseResult::new(vec![], vec![]);
+        let mut infer = TypeInfer::new(&ast, &resolve, &interner, &registry);
+        let a = Ty::Eff(
+            vec![EffectRef {
+                name: e,
+                args: vec![],
+            }],
+            Box::new(Ty::Int),
+        );
+        let b = a.clone();
+        infer.unify(&a, &b, Span::new(0, 0));
+        assert!(infer.errors.is_empty(), "{:?}", infer.errors);
+    }
+
+    #[test]
+    fn eff_does_not_unify_when_rows_differ() {
+        let registry = empty_registry();
+        let resolve = empty_resolve();
+        let mut interner = Interner::new();
+        let e1 = interner.intern("E1");
+        let e2 = interner.intern("E2");
+        let ast = ParseResult::new(vec![], vec![]);
+        let mut infer = TypeInfer::new(&ast, &resolve, &interner, &registry);
+        let a = Ty::Eff(
+            vec![EffectRef {
+                name: e1,
+                args: vec![],
+            }],
+            Box::new(Ty::Int),
+        );
+        let b = Ty::Eff(
+            vec![EffectRef {
+                name: e2,
+                args: vec![],
+            }],
+            Box::new(Ty::Int),
+        );
+        infer.unify(&a, &b, Span::new(0, 0));
+        assert!(
+            !infer.errors.is_empty(),
+            "expected a Mismatch error for differing rows",
+        );
     }
 }

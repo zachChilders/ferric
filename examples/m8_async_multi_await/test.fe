@@ -1,9 +1,10 @@
 // M8 — async fn with multiple sequential `await` points.
 //
-// Each `await` extracts the inner value from the previous async fn's
-// result. The final return type of `pipeline` is `Async<Str>`; `block_on`
-// drives it from sync top-level code.
-
+// Each `await` resolves the previous async fn's effectful return. After
+// M9, `async fn name(...) -> T` desugars to a plain `fn` returning
+// `Eff<[Async], T>`; the `Async` row is consumed at each `await` site
+// (which itself desugars to `perform Async::Suspend(future: ...)`) by
+// the default `Async` handler the VM installs around `main`.
 async fn step1() -> Int { 10 }
 async fn step2(x: Int) -> Int { x + 5 }
 async fn pipeline() -> Str {
@@ -12,5 +13,5 @@ async fn pipeline() -> Str {
     int_to_str(n: b)
 }
 
-let result: Str = block_on(task: pipeline())
+let result: Str = async { await pipeline() }
 println(s: result)
