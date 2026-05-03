@@ -1204,7 +1204,10 @@ impl<'a> TypeInfer<'a> {
                 // call site. The runtime intrinsic was relaxed in M9
                 // Task 6 to accept those values directly.
                 fn is_primitive(t: &Ty) -> bool {
-                    matches!(t, Ty::Int | Ty::Float | Ty::Bool | Ty::ShellOutput | Ty::Unit)
+                    matches!(
+                        t,
+                        Ty::Int | Ty::Float | Ty::Bool | Ty::ShellOutput | Ty::Unit
+                    )
                 }
                 let canon_args = self.resolve.canonical_call_args.get(id).cloned();
                 let arg_exprs: Vec<&Expr> = match &canon_args {
@@ -1212,9 +1215,7 @@ impl<'a> TypeInfer<'a> {
                     None => args.iter().map(|a| a.value.as_ref()).collect(),
                 };
                 if callee_name == Some("spawn") {
-                    if let (Some(arg_ty), Some(arg_expr)) =
-                        (arg_tys.first(), arg_exprs.first())
-                    {
+                    if let (Some(arg_ty), Some(arg_expr)) = (arg_tys.first(), arg_exprs.first()) {
                         let resolved = self.subst.apply(arg_ty);
                         let row_consumed = self.expr_returns_async(arg_expr);
                         if is_primitive(&resolved) && !row_consumed {
@@ -1761,10 +1762,7 @@ impl<'a> TypeInfer<'a> {
     /// `UnhandledEffect` per missing effect when the row is closed.
     fn check_call_effects(&mut self, row: &[EffectRef], span: Span) {
         for eff in row {
-            let in_handler = self
-                .handler_stack
-                .iter()
-                .any(|(e, _, _)| *e == eff.name);
+            let in_handler = self.handler_stack.iter().any(|(e, _, _)| *e == eff.name);
             if in_handler {
                 continue;
             }
@@ -1870,10 +1868,7 @@ impl<'a> TypeInfer<'a> {
         let row_has_async = self
             .current_fn_row
             .as_ref()
-            .map(|row| {
-                row.iter()
-                    .any(|e| self.interner.resolve(e.name) == "Async")
-            })
+            .map(|row| row.iter().any(|e| self.interner.resolve(e.name) == "Async"))
             .unwrap_or(false);
         if !in_handler_stack && !row_has_async {
             self.errors
@@ -2032,8 +2027,8 @@ impl<'a> TypeInfer<'a> {
         let unhandled = match (in_handler_stack, in_fn_row) {
             (true, _) => false,
             // No handler clause is in scope; check the enclosing fn's row.
-            (false, Some(true)) => false,           // declared in row → OK
-            (false, Some(false)) => true,           // closed row, missing → error
+            (false, Some(true)) => false, // declared in row → OK
+            (false, Some(false)) => true, // closed row, missing → error
             // No fn row annotation: treat the row as open. We do NOT emit
             // UnhandledEffect here — the inferred row is permissive.
             (false, None) => false,
@@ -2077,8 +2072,7 @@ impl<'a> TypeInfer<'a> {
                 .get(&(c.effect, c.op))
                 .map(|op| op.resume_type.clone())
                 .unwrap_or_else(|| self.fresh_tyvar());
-            self.handler_stack
-                .push((c.effect, c.op, resume_ty.clone()));
+            self.handler_stack.push((c.effect, c.op, resume_ty.clone()));
             pushed.push((c.effect, c.op, resume_ty));
         }
 

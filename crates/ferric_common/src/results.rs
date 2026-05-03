@@ -310,11 +310,7 @@ pub struct EffectResult {
 
 impl EffectResult {
     /// Creates a new `EffectResult`.
-    pub fn new(
-        ast: ParseResult,
-        errors: Vec<EffectError>,
-        warnings: Vec<EffectWarning>,
-    ) -> Self {
+    pub fn new(ast: ParseResult, errors: Vec<EffectError>, warnings: Vec<EffectWarning>) -> Self {
         Self {
             ast,
             tags: EffectTags::default(),

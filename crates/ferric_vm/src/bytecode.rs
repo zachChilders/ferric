@@ -853,12 +853,12 @@ impl BytecodeVM {
                     // simply drop the top handler frame. The body's value is
                     // already on the value stack and becomes the result of
                     // the handle expression.
-                    self.handler_stack.pop().ok_or_else(|| {
-                        RuntimeError::InvalidOperation {
+                    self.handler_stack
+                        .pop()
+                        .ok_or_else(|| RuntimeError::InvalidOperation {
                             op: "PopHandler with empty handler stack".to_string(),
                             span: dummy_span(),
-                        }
-                    })?;
+                        })?;
                 }
                 Op::Perform(effect_tag, op_tag, argc) => {
                     self.op_perform(effect_tag, op_tag, argc)?;
@@ -1174,13 +1174,12 @@ impl BytecodeVM {
         table_idx: u16,
         body_end_offset: u16,
     ) -> Result<(), RuntimeError> {
-        let table = self
-            .handler_tables
-            .get(table_idx as usize)
-            .ok_or_else(|| RuntimeError::InvalidOperation {
+        let table = self.handler_tables.get(table_idx as usize).ok_or_else(|| {
+            RuntimeError::InvalidOperation {
                 op: format!("PushHandler({table_idx}) out of range"),
                 span: dummy_span(),
-            })?;
+            }
+        })?;
 
         // All entries in one `handle ... with { ... }` share one effect
         // (the parser/effects pass already enforces that all clauses
@@ -1199,14 +1198,14 @@ impl BytecodeVM {
         // top-most frame at this moment; record its index so a later
         // Perform can capture it (and any frames above it that opened
         // during body evaluation).
-        let frame_idx = self
-            .call_stack
-            .len()
-            .checked_sub(1)
-            .ok_or_else(|| RuntimeError::InvalidOperation {
-                op: "PushHandler outside any call frame".to_string(),
-                span: dummy_span(),
-            })?;
+        let frame_idx =
+            self.call_stack
+                .len()
+                .checked_sub(1)
+                .ok_or_else(|| RuntimeError::InvalidOperation {
+                    op: "PushHandler outside any call frame".to_string(),
+                    span: dummy_span(),
+                })?;
 
         // The dispatch loop advanced the IP to "next instruction after
         // PushHandler" before invoking this opcode. Adding the compile-
@@ -1231,12 +1230,7 @@ impl BytecodeVM {
     /// to the matched clause chunk.
     ///
     /// If no handler matches, raises `RuntimeError::UnhandledEffect`.
-    fn op_perform(
-        &mut self,
-        effect_tag: u16,
-        op_tag: u8,
-        argc: u8,
-    ) -> Result<(), RuntimeError> {
+    fn op_perform(&mut self, effect_tag: u16, op_tag: u8, argc: u8) -> Result<(), RuntimeError> {
         let argc = argc as usize;
         if self.stack.len() < argc {
             return Err(underflow());
@@ -1405,13 +1399,14 @@ impl BytecodeVM {
     ///     around plain async-fn calls, so the call returns the inner value
     ///     directly. `await` simply unwraps it.
     fn builtin_async_suspend(&mut self, args: Vec<Value>) -> Result<(), RuntimeError> {
-        let future = args.into_iter().next().ok_or_else(|| {
-            RuntimeError::WrongArgumentCount {
+        let future = args
+            .into_iter()
+            .next()
+            .ok_or_else(|| RuntimeError::WrongArgumentCount {
                 expected: 1,
                 found: 0,
                 span: dummy_span(),
-            }
-        })?;
+            })?;
         let resolved = match future {
             Value::Async(_) | Value::Handle(_) => self.drive_to_value(future)?,
             other => other,

@@ -592,11 +592,7 @@ pub enum TypeError {
     },
     /// `resume k with v` had a value whose type does not match the declared
     /// `EffectOp::resume_type` of the handled operation. M9.
-    ResumeTypeMismatch {
-        expected: Ty,
-        found: Ty,
-        span: Span,
-    },
+    ResumeTypeMismatch { expected: Ty, found: Ty, span: Span },
 }
 
 impl TypeError {
@@ -923,11 +919,9 @@ impl TypeError {
                 "`join` requires `Handle<T>` arguments, found `{}`",
                 found.description()
             ),
-            TypeError::UnhandledEffect { effect, op, .. } => format!(
-                "no handler in scope for `{}::{}`",
-                nm(*effect),
-                nm(*op)
-            ),
+            TypeError::UnhandledEffect { effect, op, .. } => {
+                format!("no handler in scope for `{}::{}`", nm(*effect), nm(*op))
+            }
             TypeError::EffectRowMismatch {
                 expected, found, ..
             } => format!(

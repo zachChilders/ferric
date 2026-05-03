@@ -18,11 +18,7 @@ fn run_effects(src: &str) -> (Interner, ferric_common::EffectResult) {
     let lex_result = lex(src, &mut interner);
     pre_intern_desugar_names(&mut interner);
     let parse = parse_with_interner(&lex_result, &interner);
-    assert!(
-        parse.errors.is_empty(),
-        "parse errors: {:?}",
-        parse.errors
-    );
+    assert!(parse.errors.is_empty(), "parse errors: {:?}", parse.errors);
 
     let resolve = resolve_with_natives_and_builtins(&parse, &[], &[]);
     let traits = build_registry(&parse, &resolve, &interner);

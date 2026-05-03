@@ -865,10 +865,7 @@ impl<'a> Compiler<'a> {
             self.compile_expr(arg_expr);
         }
         let arg_count = u8::try_from(p.args.len()).expect("perform: too many args");
-        let (effect_tag, op_tag) = self
-            .effect_tags
-            .lookup(p.effect, p.op)
-            .unwrap_or((0, 0));
+        let (effect_tag, op_tag) = self.effect_tags.lookup(p.effect, p.op).unwrap_or((0, 0));
         self.emit(Op::Perform(effect_tag, op_tag, arg_count));
     }
 

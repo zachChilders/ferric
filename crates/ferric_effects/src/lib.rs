@@ -100,11 +100,7 @@ pub fn lower_effects(ast: &ParseResult, _types: &TypeResult) -> EffectResult {
 /// that reference them.
 #[allow(clippy::type_complexity)] // Inline const literal — naming the tuple shape adds noise without aiding callers.
 const BUILTIN_EFFECTS: &[(&str, u16, &[(&str, u8)])] = &[
-    (
-        "Async",
-        0,
-        &[("Suspend", 0), ("Spawn", 1), ("Join", 2)],
-    ),
+    ("Async", 0, &[("Suspend", 0), ("Spawn", 1), ("Join", 2)]),
     ("Gen", 1, &[("Yield", 0)]),
 ];
 

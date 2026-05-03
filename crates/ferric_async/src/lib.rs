@@ -26,9 +26,9 @@
 //! `docs/tasks/m9-00-overview.md` for the rationale.
 
 use ferric_common::{
-    AsyncBlockExpr, AsyncLowerError, AsyncResult, AsyncWarning, AsyncWarningKind,
-    CastExpr, ExportDecl, Expr, FnItem, ImplMethod, Item, Literal, MatchArm, NamedArg,
-    NodeId, ParseResult, PerformExpr, RequireStmt, ShellPart, Span, Stmt, Symbol, TypeResult,
+    AsyncBlockExpr, AsyncLowerError, AsyncResult, AsyncWarning, AsyncWarningKind, CastExpr,
+    ExportDecl, Expr, FnItem, ImplMethod, Item, Literal, MatchArm, NamedArg, NodeId, ParseResult,
+    PerformExpr, RequireStmt, ShellPart, Span, Stmt, Symbol, TypeResult,
 };
 
 /// Single public entry point for the async preparation stage.
@@ -140,17 +140,13 @@ impl Lowerer {
                 // is the enclosing fn. Detecting it here keeps the
                 // diagnostic alive even though `Item::AsyncFn` no longer
                 // survives parsing.
-                if body_async && body_directly_self_awaits_via_perform(&body, f.name)
-                {
+                if body_async && body_directly_self_awaits_via_perform(&body, f.name) {
                     self.errors.push(AsyncLowerError::InfiniteAsyncRecursion {
                         fn_name: f.name,
                         span: f.span,
                     });
                 }
-                Item::Fn(FnItem {
-                    body,
-                    ..f.clone()
-                })
+                Item::Fn(FnItem { body, ..f.clone() })
             }
             Item::ImplBlock {
                 id,
@@ -200,7 +196,6 @@ impl Lowerer {
             Item::EffectDecl(_) => item.clone(),
         }
     }
-
 }
 
 // ---------------------------------------------------------------------------

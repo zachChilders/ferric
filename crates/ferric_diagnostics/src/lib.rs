@@ -23,8 +23,8 @@
 
 use ferric_common::{
     AsyncLowerError, AsyncWarning, AsyncWarningKind, EffectError, EffectWarning,
-    ExhaustivenessError, Interner, LexError,
-    ManifestError, ModuleError, ParseError, ParseWarning, ResolveError, Span, Symbol, TypeError,
+    ExhaustivenessError, Interner, LexError, ManifestError, ModuleError, ParseError, ParseWarning,
+    ResolveError, Span, Symbol, TypeError,
 };
 
 /// Public entry point for diagnostics. Keep the surface stable: every other

@@ -12,12 +12,12 @@
 //! All other implementation details are private.
 
 use ferric_common::{
-    AsyncBlockExpr, BinOp, CastExpr, EffectAnnotation, EffectDecl, EffectOp,
-    ExportDecl, Expr, FnItem, HandleExpr, HandlerClause, ImplMethod, ImportDecl, ImportItem,
-    ImportItems, ImportPath, Interner, Item, LexResult, Literal, MatchArm, NamedArg, NodeId,
-    Param, ParseError, ParseResult, ParseWarning, Pattern, PerformExpr, RequireMode, RequireStmt,
-    ResumeExpr, ShellPart, ShellTokenPart, Span, Stmt, Symbol, Token, TokenKind, TraitMethod, Ty,
-    TypeAliasItem, TypeAnnotation, TypeParam, UnOp,
+    AsyncBlockExpr, BinOp, CastExpr, EffectAnnotation, EffectDecl, EffectOp, ExportDecl, Expr,
+    FnItem, HandleExpr, HandlerClause, ImplMethod, ImportDecl, ImportItem, ImportItems, ImportPath,
+    Interner, Item, LexResult, Literal, MatchArm, NamedArg, NodeId, Param, ParseError, ParseResult,
+    ParseWarning, Pattern, PerformExpr, RequireMode, RequireStmt, ResumeExpr, ShellPart,
+    ShellTokenPart, Span, Stmt, Symbol, Token, TokenKind, TraitMethod, Ty, TypeAliasItem,
+    TypeAnnotation, TypeParam, UnOp,
 };
 
 /// Generates unique NodeIds for AST nodes.
@@ -1314,9 +1314,7 @@ impl<'a> Parser<'a> {
                     _ => Ty::Var(ferric_common::TyVar(0)),
                 }
             }
-            TypeAnnotation::Array(inner) => {
-                Ty::Array(Box::new(self.lower_type_annotation(inner)))
-            }
+            TypeAnnotation::Array(inner) => Ty::Array(Box::new(self.lower_type_annotation(inner))),
             TypeAnnotation::Generic { head, args } => {
                 let name = self
                     .interner
@@ -1902,7 +1900,7 @@ impl<'a> Parser<'a> {
                 | TokenKind::Yield     // prefix `yield expr`
                 | TokenKind::Perform   // `perform Effect::Op(...)`
                 | TokenKind::Handle    // `handle { ... } with { ... }`
-                | TokenKind::Resume    // `resume k with v`
+                | TokenKind::Resume // `resume k with v`
         )
     }
 
@@ -3701,8 +3699,7 @@ impl<'a> Parser<'a> {
 
         // Validate that we're inside a handler clause.
         if self.cont_stack.is_empty() {
-            self.errors
-                .push(ParseError::ResumeOutsideHandler { span });
+            self.errors.push(ParseError::ResumeOutsideHandler { span });
         }
 
         Expr::Resume(ResumeExpr {
@@ -4510,10 +4507,7 @@ mod tests {
                     TypeAnnotation::Eff { row, result: inner } => {
                         assert_eq!(row.len(), 1);
                         assert_eq!(interner.resolve(row[0].name), "Async");
-                        assert!(matches!(
-                            inner.as_ref(),
-                            TypeAnnotation::Named(_)
-                        ));
+                        assert!(matches!(inner.as_ref(), TypeAnnotation::Named(_)));
                     }
                     other => panic!("expected Eff return type, got {other:?}"),
                 }
@@ -4711,9 +4705,8 @@ mod tests {
 
     #[test]
     fn test_effect_decl_parses() {
-        let (interner, result) = lex_parse(
-            "effect Counter { Inc(amount: Int) -> Int, Reset() -> Unit }",
-        );
+        let (interner, result) =
+            lex_parse("effect Counter { Inc(amount: Int) -> Int, Reset() -> Unit }");
         assert_eq!(result.errors.len(), 0, "errors: {:?}", result.errors);
         match &result.items[0] {
             Item::EffectDecl(decl) => {
@@ -4733,9 +4726,7 @@ mod tests {
 
     #[test]
     fn test_effect_decl_with_type_params() {
-        let (interner, result) = lex_parse(
-            "effect Gen<T> { Yield(value: T) -> Unit }",
-        );
+        let (interner, result) = lex_parse("effect Gen<T> { Yield(value: T) -> Unit }");
         assert_eq!(result.errors.len(), 0, "errors: {:?}", result.errors);
         match &result.items[0] {
             Item::EffectDecl(decl) => {
@@ -4749,9 +4740,7 @@ mod tests {
 
     #[test]
     fn test_effect_decl_inside_fn_is_error() {
-        let (_, result) = lex_parse(
-            "fn outer() -> Unit { effect Inner { Op() -> Unit } }",
-        );
+        let (_, result) = lex_parse("fn outer() -> Unit { effect Inner { Op() -> Unit } }");
         assert!(
             result
                 .errors
@@ -4764,13 +4753,14 @@ mod tests {
 
     #[test]
     fn test_perform_expression() {
-        let (interner, result) = lex_parse(
-            "fn use_eff() -> Int { perform Counter::Inc(amount: 1) }",
-        );
+        let (interner, result) =
+            lex_parse("fn use_eff() -> Int { perform Counter::Inc(amount: 1) }");
         assert_eq!(result.errors.len(), 0, "errors: {:?}", result.errors);
         match &result.items[0] {
             Item::Fn(item) => match &item.body {
-                Expr::Block { expr: Some(tail), .. } => match tail.as_ref() {
+                Expr::Block {
+                    expr: Some(tail), ..
+                } => match tail.as_ref() {
                     Expr::Perform(p) => {
                         assert_eq!(interner.resolve(p.effect), "Counter");
                         assert_eq!(interner.resolve(p.op), "Inc");
@@ -4793,7 +4783,9 @@ mod tests {
         assert_eq!(result.errors.len(), 0, "errors: {:?}", result.errors);
         match &result.items[0] {
             Item::Fn(item) => match &item.body {
-                Expr::Block { expr: Some(tail), .. } => match tail.as_ref() {
+                Expr::Block {
+                    expr: Some(tail), ..
+                } => match tail.as_ref() {
                     Expr::Handle(h) => {
                         assert_eq!(h.clauses.len(), 1);
                         let cl = &h.clauses[0];
@@ -4820,9 +4812,7 @@ mod tests {
 
     #[test]
     fn test_resume_outside_handler_is_error() {
-        let (_, result) = lex_parse(
-            "fn bad() -> Int { resume k with 1 }",
-        );
+        let (_, result) = lex_parse("fn bad() -> Int { resume k with 1 }");
         assert!(
             result
                 .errors
@@ -4835,9 +4825,7 @@ mod tests {
 
     #[test]
     fn test_handler_param_named_k_warns_shadows_continuation() {
-        let (_, result) = lex_parse(
-            "fn run() -> Int { handle { 1 } with { Foo::Bar(k) => 0 } }",
-        );
+        let (_, result) = lex_parse("fn run() -> Int { handle { 1 } with { Foo::Bar(k) => 0 } }");
         assert!(
             result
                 .warnings
@@ -4850,9 +4838,7 @@ mod tests {
 
     #[test]
     fn test_gen_fn_desugars_to_eff_gen_unit() {
-        let (interner, result) = lex_parse(
-            "gen fn iter() -> Int { yield 42 }",
-        );
+        let (interner, result) = lex_parse("gen fn iter() -> Int { yield 42 }");
         assert_eq!(result.errors.len(), 0, "errors: {:?}", result.errors);
         match &result.items[0] {
             Item::Fn(item) => {
@@ -4873,7 +4859,9 @@ mod tests {
                 }
                 // Body's tail expr should be Perform(Gen::Yield).
                 match &item.body {
-                    Expr::Block { expr: Some(tail), .. } => match tail.as_ref() {
+                    Expr::Block {
+                        expr: Some(tail), ..
+                    } => match tail.as_ref() {
                         Expr::Perform(p) => {
                             assert_eq!(interner.resolve(p.effect), "Gen");
                             assert_eq!(interner.resolve(p.op), "Yield");
