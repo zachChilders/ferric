@@ -51,7 +51,8 @@ use ferric_lexer::lex;
 use ferric_parser::parse;
 use ferric_resolve::resolve;
 use ferric_typecheck::typecheck;
-use ferric_common::{LexResult, ParseResult, ResolveResult, TypeResult};
+use ferric_effects::lower_effects;
+use ferric_common::{LexResult, ParseResult, ResolveResult, TypeResult, EffectResult};
 
 // ILLEGAL — importing stage internals
 use ferric_parser::ExprParser;     // internal
@@ -209,7 +210,12 @@ pub const KEYWORDS: &[&str] = &[
     "let", "mut", "fn", "return",
     "if", "else", "while", "loop",
     "break", "continue", "true", "false",
-    "require",                          // added in M2.5
+    "require",
+    "struct", "enum", "match", "trait", "impl",
+    "for", "import", "export", "from", "type", "as",
+    "async", "await",
+    "effect", "perform", "handle", "with", "resume",  // M9 algebraic effects
+    "gen", "yield",                                    // M9 generators
 ];
 
 pub const TYPE_KEYWORDS: &[&str] = &[
@@ -285,6 +291,7 @@ pub struct PipelineSnapshot {
     pub parse:    Option<ParseResult>,
     pub resolve:  Option<ResolveResult>,
     pub typecheck: Option<TypeResult>,
+    pub effects:  Option<EffectResult>,
 }
 
 impl PipelineSnapshot {
@@ -305,7 +312,7 @@ struct DocumentState {
     current:    Arc<PipelineSnapshot>,
     // last_good[stage] is the most recent snapshot where that stage succeeded.
     // Used for completions/hover when the current snapshot has errors.
-    last_good:  [Option<Arc<PipelineSnapshot>>; 4],  // lex, parse, resolve, typecheck
+    last_good:  [Option<Arc<PipelineSnapshot>>; 5],  // lex, parse, resolve, typecheck, effects
 }
 ```
 
@@ -344,6 +351,14 @@ pub fn run_pipeline(source: &str, version: i32) -> PipelineSnapshot {
         snapshot.resolve.as_ref().unwrap(),
     ));
     snapshot.typecheck = type_result;
+    if snapshot.typecheck.is_none() { return snapshot; }
+
+    // Stage 5: Effects lowering
+    let effects_result = catch_stage(|| ferric_effects::lower_effects(
+        snapshot.parse.as_ref().unwrap(),
+        snapshot.typecheck.as_ref().unwrap(),
+    ));
+    snapshot.effects = effects_result;
 
     snapshot
 }
@@ -393,8 +408,9 @@ pub fn server_capabilities() -> ServerCapabilities {
 
 All errors from all stages are converted to LSP `Diagnostic` objects and pushed
 to the client after every pipeline run. The conversion is one-to-one: each
-`LexError`, `ParseError`, `ResolveError`, and `TypeError` (all of which carry
-`Span` per Rule 5) becomes one LSP diagnostic.
+`LexError`, `ParseError`, `ResolveError`, `TypeError`, `EffectError` (all of which
+carry `Span` per Rule 5) becomes one LSP diagnostic. `EffectWarning` items are
+published as `DiagnosticSeverity::WARNING`.
 
 ```rust
 fn ferric_span_to_lsp_range(span: Span, source: &str) -> lsp_types::Range {
@@ -1102,6 +1118,8 @@ code.**
 |-----------|-------------------|----------------------------------------------------------|
 | LSP       | `ferric_lsp`      | `ferric_common`: +`keywords.rs`, +`pub mod keywords`, +`Display for Ty` |
 |           |                   | `ferric_lexer`: internal keyword refactor (no public API change) |
+| M9        | `ferric_effects`  | `ferric_common`: +`EffectDecl`, `PerformExpr`, `HandleExpr`, `ResumeExpr` AST nodes, +`Ty::Eff` |
+|           |                   | `ferric_lsp`: +`effects` field in `PipelineSnapshot`, +stage 5 in pipeline runner, +`EffectError`/`EffectWarning` diagnostics |
 
 ---
 
@@ -1121,7 +1139,8 @@ code.**
 - [ ] A document open triggers an immediate pipeline run
 
 **Diagnostics:**
-- [ ] All `LexError`, `ParseError`, `ResolveError`, `TypeError` items are pushed as LSP diagnostics
+- [ ] All `LexError`, `ParseError`, `ResolveError`, `TypeError`, `EffectError` items are pushed as LSP diagnostics
+- [ ] `EffectWarning` items are pushed as `DiagnosticSeverity::WARNING`
 - [ ] Every diagnostic has a correct line/column range (derived from `Span`)
 - [ ] `require(warn)` failures appear as `DiagnosticSeverity::WARNING`
 - [ ] No duplicate diagnostics are pushed for the same version

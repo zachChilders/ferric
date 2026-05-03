@@ -53,14 +53,14 @@ itself or for pure-Rust behaviour that has no Ferric-program form.
 
 ## What this is
 
-Ferric is a language interpreter written in Rust. The project is milestone-driven; each milestone extends or replaces stages while keeping the pipeline shape fixed. The current implementation is **M2** (while loops, mutable vars, floats, span-annotated errors). **M2.5** tasks are in `docs/tasks/m2.5-*.md`.
+Ferric is a language interpreter written in Rust. The project is milestone-driven; each milestone extends or replaces stages while keeping the pipeline shape fixed. The current implementation is **M9** (algebraic effects, one-shot continuations, async/await and generators via effects desugaring). Completed milestone specs live in `docs/tasks/complete/`.
 
 ## Pipeline
 
-Source code flows through six independent stages, each in its own crate:
+Source code flows through these independent stages, each in its own crate:
 
 ```
-source → lex() → parse() → resolve() → typecheck() → Program → vm.run()
+source → lex() → parse() → resolve() → typecheck() → lower_effects() → Program → vm.run()
 ```
 
 `main.rs` is the only file that imports from multiple stages. Every other stage only imports from `ferric_common`.
@@ -84,6 +84,7 @@ pub fn lex(source: &str, interner: &mut Interner) -> LexResult;
 pub fn parse(lex: &LexResult) -> ParseResult;
 pub fn resolve_with_natives(ast: &ParseResult, native_symbols: &[Symbol]) -> ResolveResult;
 pub fn typecheck(ast: &ParseResult, resolve: &ResolveResult, interner: &Interner) -> TypeResult;
+pub fn lower_effects(ast: &ParseResult, types: &TypeResult) -> EffectResult;
 // Executor trait in ferric_vm — TreeWalker implements it now, BytecodeVM in M3
 fn run(&mut self, program: Program, natives: NativeRegistry, interner: &Interner) -> Result<Value, RuntimeError>;
 ```
@@ -95,29 +96,41 @@ fn run(&mut self, program: Program, natives: NativeRegistry, interner: &Interner
 - `Symbol(u32)` — interned string handle; resolve to `&str` via `interner.resolve(sym)`
 - `DefId(u32)` — identifier for a variable/function definition; used for slot assignment
 - `Interner` — passed through the pipeline; `intern()` produces `Symbol`, `resolve()` recovers the string
-- `Ty::Unknown` — escape hatch accepted everywhere without error; intentionally removed in M3
-
-## Upcoming work (M2.5)
-
-Four tasks planned; **Task 1 (named parameters) must complete first** as it modifies `CallExpr` in `ferric_common`, which all stages read:
-
-1. `m2.5-01-named-params.md` — make named parameters mandatory at all call sites; resolver canonicalises to definition order before typecheck/VM see it
-2. `m2.5-02-require.md` — module/require system
-3. `m2.5-03-shell.md` — shell integration
-4. `m2.5-04-async-prep.md` — async preparation
+- `Ty::Unknown` — escape hatch accepted everywhere without error
+- `Ty::Eff { effects: Vec<EffectId>, ret: Box<Ty> }` — effect-row return type; inferred automatically by `ferric_infer`
 
 ## Ferric language syntax (current)
 
-```rust
+```ferric
 fn fibonacci(n: Int) -> Int {
-    if n <= 1 { n } else { fibonacci(n - 1) + fibonacci(n - 2) }
+    if n <= 1 { n } else { fibonacci(n: n - 1) + fibonacci(n: n - 2) }
 }
 
 let mut counter = 0
 while counter < 5 {
-    println(int_to_str(counter))
+    println(s: int_to_str(n: counter))
     counter = counter + 1
+}
+
+// Algebraic effects (M9)
+effect Config {
+    Get(key: Str) -> Str,
+}
+
+let result = handle {
+    perform Config::Get(key: "host")
+} with {
+    Config::Get(key) => resume k with "localhost",
+}
+
+// async fn and gen fn desugar to effects automatically
+async fn fetch(url: Str) -> Str { url }
+
+gen fn numbers() {
+    yield 1
+    yield 2
+    yield 3
 }
 ```
 
-Stdlib: `println(s: Str)`, `print(s: Str)`, `int_to_str(n: Int)`, `float_to_str(n: Float)`, `bool_to_str(b: Bool)`, `int_to_float(n: Int)`.
+Stdlib: `println(s: Str)`, `print(s: Str)`, `int_to_str(n: Int)`, `float_to_str(n: Float)`, `bool_to_str(b: Bool)`, `int_to_float(n: Int)`. Full stdlib reference in `language.md`.
