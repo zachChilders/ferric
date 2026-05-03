@@ -482,6 +482,7 @@ dependencies = [
  "ferric_common",
  "ferric_compiler",
  "ferric_diagnostics",
+ "ferric_effects",
  "ferric_exhaust",
  "ferric_infer",
  "ferric_lexer",
@@ -529,6 +530,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "ferric_effects"
+version = "0.1.0"
+dependencies = [
+ "ferric_common",
+ "ferric_infer",
+ "ferric_lexer",
+ "ferric_parser",
+ "ferric_resolve",
+ "ferric_traits",
+]
+
+[[package]]
 name = "ferric_exhaust"
 version = "0.1.0"
 dependencies = [
@@ -556,6 +569,7 @@ version = "0.1.0"
 dependencies = [
  "dashmap",
  "ferric_common",
+ "ferric_effects",
  "ferric_infer",
  "ferric_lexer",
  "ferric_parser",
@@ -648,6 +662,7 @@ version = "0.1.0"
 dependencies = [
  "ferric_common",
  "ferric_compiler",
+ "ferric_effects",
  "ferric_infer",
  "ferric_lexer",
  "ferric_parser",

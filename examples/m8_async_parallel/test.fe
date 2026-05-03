@@ -1,14 +1,12 @@
 // M8 — true parallelism: two spawned tasks run on separate OS threads.
 //
-// Each `slow_task(n)` does `await sleep(ms: 500)` then returns `n`. With
-// lazy async semantics (M8 Task 5 Option A), calling `slow_task(n)` builds
-// a deferred `Async<Int>` *without* running the body. `spawn` moves the
-// deferred work onto an OS worker thread. Both spawned tasks sleep
+// Each `slow_task(n)` does `await sleep(ms: 500)` then returns `n`. After
+// M9 the parser desugars `await sleep(...)` into
+// `perform Async::Suspend(future: sleep(...))`; the default `Async`
+// handler installed by the VM resolves the suspended future. `spawn`
+// moves the work onto an OS worker thread. Both spawned tasks sleep
 // concurrently, so the wall clock measures ~500ms — not the ~1000ms a
-// sequential implementation would take.
-//
-// `join` then collects both results; `block_on` is the host-side runner
-// that drives the whole thing from sync top-level code.
+// sequential implementation would take. `join` collects both results.
 
 async fn slow_task(n: Int) -> Int {
     await sleep(ms: 500)

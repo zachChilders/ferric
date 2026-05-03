@@ -1,15 +1,15 @@
 // M8 — spawn + join end-to-end.
 //
-// `spawn` submits an `Async<T>` to the scheduler and returns a `Handle<T>`.
+// `spawn` submits an async task to the scheduler and returns a `Handle`
+// (the resolver tracks it as an opaque runtime value post-M9).
 // `join` reads two handles and returns a `(A, B)` tuple of their results.
 // Tuple field access via `.0` is not yet supported — destructure with
 // `match` to pull the elements out.
-
 async fn fetch_str() -> Str { "from-spawn" }
 async fn fetch_int() -> Int { 42 }
 
-let h1: Handle<Str> = spawn(task: fetch_str())
-let h2: Handle<Int> = spawn(task: fetch_int())
+let h1 = spawn(task: fetch_str())
+let h2 = spawn(task: fetch_int())
 
 let pair = join(a: h1, b: h2)
 match pair {

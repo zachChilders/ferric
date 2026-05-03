@@ -1,12 +1,13 @@
 // M8 — async/await end-to-end: a single `async fn` with one `await`.
 //
-// `fetch` returns `Async<Str>`. `block_on` is the host-side runner that
-// drives an `Async<T>` to completion synchronously — needed because
-// top-level `await` is a parse error (the parser only allows it inside
-// an `async fn` body or `async { ... }` block).
-
+// After the M9 parser desugars `await expr` to
+// `perform Async::Suspend(future: expr)` and `async fn fetch(...) -> T`
+// to `fn fetch(...) -> Eff<[Async], T>`, the M8 host-side `block_on`
+// helper is no longer needed: the default `Async` handler installed by
+// the VM resolves the operand of `Async::Suspend` directly. The
+// surrounding `async { ... }` block is kept so the parser's fast-path
+// rule (`await` only inside an async context) still accepts the await.
 async fn fetch(url: Str) -> Str { url }
 
-let task: Async<Str> = async { await fetch(url: "hello world") }
-let got: Str = block_on(task: task)
+let got: Str = async { await fetch(url: "hello world") }
 println(s: got)

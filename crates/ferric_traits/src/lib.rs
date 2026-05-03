@@ -170,6 +170,23 @@ fn convert_annotation(
                 _ => Ty::Var(ferric_common::TyVar(0)),
             }
         }
+        TypeAnnotation::Eff { row, result } => {
+            let effects = row
+                .iter()
+                .map(|e| ferric_common::EffectRef {
+                    name: e.name,
+                    args: e
+                        .args
+                        .iter()
+                        .map(|a| convert_annotation(a, self_trait, interner, resolve))
+                        .collect(),
+                })
+                .collect();
+            Ty::Eff(
+                effects,
+                Box::new(convert_annotation(result, self_trait, interner, resolve)),
+            )
+        }
         TypeAnnotation::Infer => Ty::Var(ferric_common::TyVar(0)),
     }
 }

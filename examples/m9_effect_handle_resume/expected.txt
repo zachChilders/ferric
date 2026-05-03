@@ -1,0 +1,8 @@
+warning: handler bound continuation `k` but never resumed it
+  --> input:34:5
+    |
+ 34 |     Log::Bail(reason) => {
+    |     ^^^^^^^^^^^^^^^^^^^^^^ continuation is dropped
+    = help: if this is intentional (early return), rebind to `_` to silence the warning[info] starting
+[bail] stop now
+result: aborted

@@ -74,6 +74,7 @@ const _: fn() = || {
     check::<TyVar>();
     check::<TypeScheme>();
     check::<TypeAnnotation>();
+    check::<EffectAnnotation>();
     check::<Literal>();
     check::<BinOp>();
     check::<UnOp>();
@@ -96,6 +97,7 @@ const _: fn() = || {
     check::<ImplTy>();
     check::<LexError>();
     check::<ParseError>();
+    check::<ParseWarning>();
     check::<ResolveError>();
     check::<TypeError>();
     check::<ExhaustivenessError>();
@@ -126,13 +128,22 @@ const _: fn() = || {
     check::<Manifest>();
     check::<ManifestError>();
     check::<FnItem>();
-    check::<AsyncFnItem>();
-    check::<AwaitExpr>();
     check::<AsyncBlockExpr>();
     check::<AsyncResult>();
     check::<AsyncLowerError>();
     check::<AsyncWarning>();
     check::<AsyncWarningKind>();
+    check::<EffectDecl>();
+    check::<EffectOp>();
+    check::<PerformExpr>();
+    check::<HandleExpr>();
+    check::<HandlerClause>();
+    check::<ResumeExpr>();
+    check::<EffectRef>();
+    check::<EffectResult>();
+    check::<EffectTags>();
+    check::<EffectError>();
+    check::<EffectWarning>();
 };
 
 #[cfg(test)]

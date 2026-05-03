@@ -42,13 +42,6 @@ fn push_item_symbol(
                 li.range_of(item.span),
             ));
         }
-        Item::AsyncFn(decl) => {
-            out.push(make_symbol(
-                snapshot.interner.resolve(decl.item.name).to_string(),
-                SymbolKind::FUNCTION,
-                li.range_of(decl.span),
-            ));
-        }
         Item::StructDef { name, span, .. } => {
             out.push(make_symbol(
                 snapshot.interner.resolve(*name).to_string(),
@@ -127,6 +120,16 @@ fn push_item_symbol(
             push_item_symbol(&decl.item, snapshot, li, out);
         }
         Item::Import(_) => {}
+        // M9 Task 1: surface effect declarations as namespace-shaped symbols
+        // — the operation listing comes in M9 Task 2 once the parser fills
+        // out `EffectOp` nodes.
+        Item::EffectDecl(decl) => {
+            out.push(make_symbol(
+                snapshot.interner.resolve(decl.name).to_string(),
+                SymbolKind::INTERFACE,
+                li.range_of(decl.span),
+            ));
+        }
     }
 }
 
@@ -204,6 +207,20 @@ mod tests {
         assert!(
             s.iter()
                 .any(|d| d.name == "Color" && d.kind == SymbolKind::ENUM)
+        );
+    }
+
+    #[test]
+    fn effect_decl_appears_as_interface() {
+        // M9: an `effect` declaration should appear in the outline as an
+        // INTERFACE-shaped symbol (closest LSP symbol kind to a typeclass /
+        // operation set; see `push_item_symbol`'s EffectDecl arm).
+        let src = "effect Config { Get(key: Str) -> Str, }";
+        let s = syms(src);
+        assert!(
+            s.iter()
+                .any(|d| d.name == "Config" && d.kind == SymbolKind::INTERFACE),
+            "expected an INTERFACE symbol named `Config`, got {s:?}"
         );
     }
 

@@ -1,0 +1,17 @@
+// M9 — `perform` against an effect that has no enclosing handler.
+//
+// `perform Config::Get(key:)` only makes sense inside a `handle ... with {
+// Config::Get(key) => ... }` block. With no handler in scope, the runtime
+// has nowhere to dispatch the operation: the VM raises an unhandled-effect
+// error pointing at the `perform` site.
+//
+// The expected output is the rendered diagnostic + non-zero exit. Compare
+// with `m9_config_di` and `m9_effect_reader`, which wrap the same shape of
+// `perform` in a matching handler block.
+
+effect Config {
+    Get(key: Str) -> Str,
+}
+
+let host = perform Config::Get(key: "db.host")
+println(s: host)

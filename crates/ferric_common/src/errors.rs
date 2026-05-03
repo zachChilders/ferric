@@ -3,7 +3,7 @@
 //! CRITICAL: Every error type MUST carry a Span field (Rule 5).
 //! This enables precise error reporting and future renderer replacement.
 
-use crate::{Interner, Span, Symbol, TokenKind, Ty, TyVar};
+use crate::{EffectRef, Interner, Span, Symbol, TokenKind, Ty, TyVar};
 use serde::{Deserialize, Serialize};
 
 /// Errors that can occur during lexing.
@@ -116,6 +116,12 @@ pub enum ParseError {
     /// token after `async` was something like `let`, `struct`, or any other
     /// non-function form.
     AsyncOnNonFn { span: Span },
+    /// An `effect` declaration appeared inside a function body. Effect
+    /// declarations may only appear at module scope.
+    EffectDeclInsideFn { span: Span },
+    /// `resume` appeared outside of any handler clause body. The parser
+    /// statically tracks handler-clause scope so this is caught early.
+    ResumeOutsideHandler { span: Span },
 }
 
 impl ParseError {
@@ -135,6 +141,8 @@ impl ParseError {
             ParseError::StrayPipe { span } => *span,
             ParseError::AwaitOutsideAsync { span } => *span,
             ParseError::AsyncOnNonFn { span } => *span,
+            ParseError::EffectDeclInsideFn { span } => *span,
+            ParseError::ResumeOutsideHandler { span } => *span,
         }
     }
 
@@ -184,6 +192,40 @@ impl ParseError {
             }
             ParseError::AsyncOnNonFn { .. } => {
                 "`async` must be followed by `fn` or `{`".to_string()
+            }
+            ParseError::EffectDeclInsideFn { .. } => {
+                "`effect` declarations are only allowed at module scope".to_string()
+            }
+            ParseError::ResumeOutsideHandler { .. } => {
+                "`resume` is only legal inside a handler clause body".to_string()
+            }
+        }
+    }
+}
+
+/// Non-fatal diagnostics produced by the parser.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum ParseWarning {
+    /// A handler-clause parameter shadowed the implicit continuation variable
+    /// `k`. The clause body's references to `k` will resolve to the parameter,
+    /// not the continuation — this is almost always a mistake.
+    ShadowsContinuation { span: Span },
+}
+
+impl ParseWarning {
+    /// Returns the span associated with this warning.
+    pub fn span(&self) -> Span {
+        match self {
+            ParseWarning::ShadowsContinuation { span } => *span,
+        }
+    }
+
+    /// Returns a human-readable description of this warning.
+    pub fn description(&self) -> String {
+        match self {
+            ParseWarning::ShadowsContinuation { .. } => {
+                "handler clause parameter shadows the implicit continuation variable `k`"
+                    .to_string()
             }
         }
     }
@@ -532,6 +574,25 @@ pub enum TypeError {
     AsyncNotAwaited { found: Ty, expected: Ty, span: Span },
     /// `join(...)` received an argument whose type is not `Handle<T>`.
     JoinNonHandle { found: Ty, span: Span },
+    /// A `perform Effect::Op(...)` site appears in a function whose declared
+    /// effect row does not contain `Effect`. M9: caught at compile time when
+    /// the row is closed (annotated); open rows are constrained instead.
+    UnhandledEffect {
+        effect: Symbol,
+        op: Symbol,
+        span: Span,
+    },
+    /// The inferred effect row of an expression did not unify with the
+    /// expected row from its context (e.g. an explicit `Eff<[E1], T>`
+    /// annotation that doesn't match the body's actual effects). M9.
+    EffectRowMismatch {
+        expected: Vec<EffectRef>,
+        found: Vec<EffectRef>,
+        span: Span,
+    },
+    /// `resume k with v` had a value whose type does not match the declared
+    /// `EffectOp::resume_type` of the handled operation. M9.
+    ResumeTypeMismatch { expected: Ty, found: Ty, span: Span },
 }
 
 impl TypeError {
@@ -564,6 +625,9 @@ impl TypeError {
             TypeError::SpawnNonAsync { span, .. } => *span,
             TypeError::AsyncNotAwaited { span, .. } => *span,
             TypeError::JoinNonHandle { span, .. } => *span,
+            TypeError::UnhandledEffect { span, .. } => *span,
+            TypeError::EffectRowMismatch { span, .. } => *span,
+            TypeError::ResumeTypeMismatch { span, .. } => *span,
         }
     }
 
@@ -705,6 +769,17 @@ impl TypeError {
                     found.description()
                 )
             }
+            TypeError::UnhandledEffect { .. } => {
+                "perform expression has no enclosing handler".to_string()
+            }
+            TypeError::EffectRowMismatch { .. } => "effect row mismatch".to_string(),
+            TypeError::ResumeTypeMismatch {
+                expected, found, ..
+            } => format!(
+                "resume value type mismatch: expected {}, found {}",
+                expected.description(),
+                found.description()
+            ),
         }
     }
 
@@ -844,6 +919,23 @@ impl TypeError {
                 "`join` requires `Handle<T>` arguments, found `{}`",
                 found.description()
             ),
+            TypeError::UnhandledEffect { effect, op, .. } => {
+                format!("no handler in scope for `{}::{}`", nm(*effect), nm(*op))
+            }
+            TypeError::EffectRowMismatch {
+                expected, found, ..
+            } => format!(
+                "effect row mismatch: expected {} effect(s), found {}",
+                expected.len(),
+                found.len()
+            ),
+            TypeError::ResumeTypeMismatch {
+                expected, found, ..
+            } => format!(
+                "`resume` value type mismatch: expected `{}`, found `{}`",
+                expected.description(),
+                found.description()
+            ),
         }
     }
 }
@@ -923,6 +1015,90 @@ impl AsyncWarning {
             AsyncWarningKind::BlockingShell => {
                 "`$` shell expression outside an async context — this will block the thread"
                     .to_string()
+            }
+        }
+    }
+}
+
+/// Errors discovered by the `ferric_effects` lowering / checking pass.
+///
+/// All variants carry a `Span` (Rule 5).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum EffectError {
+    /// A `perform Effect::Op(...)` had no enclosing handler clause for that
+    /// `(effect, op)` pair.
+    UnhandledEffect {
+        effect: Symbol,
+        op: Symbol,
+        span: Span,
+    },
+    /// A handler clause's continuation `k` was resumed more than once.
+    /// One-shot continuations only.
+    ResumedTwice { cont: Symbol, span: Span },
+    /// `resume k` appeared somewhere that is not lexically inside a handler
+    /// clause body. The parser already rejects most of these; this is the
+    /// fallback for cases that survive macro/sugar expansion.
+    ResumeOutsideHandler { span: Span },
+    /// The effect row of an expression did not match the row required by its
+    /// context (e.g. calling a function that performs `Async` from a function
+    /// whose declared row does not include `Async`).
+    EffectRowMismatch {
+        expected: Vec<crate::EffectRef>,
+        found: Vec<crate::EffectRef>,
+        span: Span,
+    },
+}
+
+impl EffectError {
+    /// Returns the span associated with this error.
+    pub fn span(&self) -> Span {
+        match self {
+            EffectError::UnhandledEffect { span, .. } => *span,
+            EffectError::ResumedTwice { span, .. } => *span,
+            EffectError::ResumeOutsideHandler { span } => *span,
+            EffectError::EffectRowMismatch { span, .. } => *span,
+        }
+    }
+
+    /// Returns a human-readable description of this error (no interner access).
+    pub fn description(&self) -> String {
+        match self {
+            EffectError::UnhandledEffect { .. } => {
+                "perform expression has no enclosing handler".to_string()
+            }
+            EffectError::ResumedTwice { .. } => {
+                "continuation resumed more than once (one-shot only)".to_string()
+            }
+            EffectError::ResumeOutsideHandler { .. } => {
+                "`resume` is only legal inside a handler clause body".to_string()
+            }
+            EffectError::EffectRowMismatch { .. } => "effect row mismatch".to_string(),
+        }
+    }
+}
+
+/// Non-fatal diagnostic emitted during effect lowering.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum EffectWarning {
+    /// A handler clause bound a continuation `k` but never resumed it. The
+    /// continuation is dropped — that may be intentional (e.g. early return)
+    /// but is worth flagging.
+    ContinuationDropped { cont: Symbol, span: Span },
+}
+
+impl EffectWarning {
+    /// Returns the span associated with this warning.
+    pub fn span(&self) -> Span {
+        match self {
+            EffectWarning::ContinuationDropped { span, .. } => *span,
+        }
+    }
+
+    /// Returns a human-readable description of this warning.
+    pub fn description(&self) -> String {
+        match self {
+            EffectWarning::ContinuationDropped { .. } => {
+                "handler bound a continuation but never resumed it".to_string()
             }
         }
     }

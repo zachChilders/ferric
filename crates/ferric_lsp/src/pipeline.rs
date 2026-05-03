@@ -19,7 +19,8 @@ use std::sync::Arc;
 
 use dashmap::DashMap;
 use ferric_common::{
-    Interner, LexResult, ParseResult, ResolveResult, Span, Symbol, TypeAnnotation, TypeResult,
+    EffectResult, Interner, LexResult, ParseResult, ResolveResult, Span, Symbol, TypeAnnotation,
+    TypeResult,
 };
 use tower_lsp::lsp_types::{Position, Range, Url};
 
@@ -46,6 +47,12 @@ pub struct PipelineSnapshot {
     pub parse: Option<ParseResult>,
     pub resolve: Option<ResolveResult>,
     pub typecheck: Option<TypeResult>,
+    /// Output of `ferric_effects::lower_effects` — runs after typecheck.
+    /// `None` only when typecheck didn't produce a `TypeResult` (an earlier
+    /// stage panicked). Effect-stage errors and warnings live in
+    /// `effects.errors` / `effects.warnings`; the diagnostics handler
+    /// publishes them alongside the other stages.
+    pub effects: Option<EffectResult>,
 
     pub line_index: LineIndex,
 }
@@ -172,6 +179,11 @@ pub fn run_pipeline(uri: String, version: i32, source: String) -> PipelineSnapsh
     // Stage 2: parse. Uses the interner-aware variant for better error
     // messages. The lexer is permissive and emits error tokens that the
     // parser can recover from, so parse runs even when lex has errors.
+    //
+    // Pre-intern the desugar names (`Async`, `Suspend`, `Gen`, `Yield`, …)
+    // so the parser's `async fn` / `gen fn` desugaring produces effect AST
+    // nodes with stable `Symbol` identities.
+    ferric_parser::pre_intern_desugar_names(&mut interner);
     let parse_result = match &lex_result {
         Some(lex) => catch_stage(std::panic::AssertUnwindSafe(|| {
             ferric_parser::parse_with_interner(lex, &interner)
@@ -198,6 +210,17 @@ pub fn run_pipeline(uri: String, version: i32, source: String) -> PipelineSnapsh
         _ => None,
     };
 
+    // Stage 5: effects. M9's analysis pass — assigns effect/op tags and
+    // validates handler clauses (`ResumedTwice`, `ResumeOutsideHandler`,
+    // `ContinuationDropped`). Runs only when typecheck succeeded; the
+    // analyzer needs both the AST and the type result.
+    let effect_result = match (&parse_result, &typecheck_result) {
+        (Some(ast), Some(types)) => catch_stage(std::panic::AssertUnwindSafe(|| {
+            ferric_effects::lower_effects(ast, types)
+        })),
+        _ => None,
+    };
+
     PipelineSnapshot {
         uri,
         version,
@@ -207,6 +230,7 @@ pub fn run_pipeline(uri: String, version: i32, source: String) -> PipelineSnapsh
         parse: parse_result,
         resolve: resolve_result,
         typecheck: typecheck_result,
+        effects: effect_result,
         line_index,
     }
 }

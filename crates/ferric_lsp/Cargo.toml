@@ -25,6 +25,10 @@ ferric_traits  = { path = "../ferric_traits" }
 # of truth for native names, params, and signatures; replaces the LSP's
 # previous hand-curated mirror tables.
 ferric_stdlib_meta = { path = "../ferric_stdlib_meta" }
+# M9 effects analysis pass — runs after typecheck so the LSP can surface
+# `EffectError` / `EffectWarning` (UnhandledEffect, ResumedTwice,
+# ResumeOutsideHandler, ContinuationDropped). Mirrors the CLI's pipeline.
+ferric_effects = { path = "../ferric_effects" }
 
 tower-lsp  = "0.20"
 tokio      = { version = "1", features = ["full"] }

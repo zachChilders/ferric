@@ -362,6 +362,7 @@ impl<'a> ModuleCtx<'a> {
     fn load_and_parse(&mut self, path: &Path) -> Result<(), std::io::Error> {
         let source = std::fs::read_to_string(path)?;
         let lex_result = lex(&source, self.interner);
+        ferric_parser::pre_intern_desugar_names(self.interner);
         let parse_result = parse_with_interner(&lex_result, self.interner);
         self.file_asts.insert(path.to_path_buf(), parse_result);
         Ok(())
@@ -438,12 +439,14 @@ impl<'a> ModuleCtx<'a> {
 fn exported_name(item: &Item) -> Option<Symbol> {
     match item {
         Item::Fn(item) => Some(item.name),
-        Item::AsyncFn(decl) => Some(decl.item.name),
         Item::StructDef { name, .. } | Item::EnumDef { name, .. } | Item::TraitDef { name, .. } => {
             Some(*name)
         }
         Item::TypeAlias(decl) => Some(decl.name),
         Item::ImplBlock { .. } | Item::Script { .. } | Item::Import(_) | Item::Export(_) => None,
+        // M9 Task 1: `effect` declarations carry a name; module export wiring
+        // for them is part of M9 Task 2.
+        Item::EffectDecl(decl) => Some(decl.name),
     }
 }
 
@@ -523,6 +526,7 @@ mod tests {
 
     fn lex_parse(interner: &mut Interner, src: &str) -> ParseResult {
         let lex_result = lex(src, interner);
+        ferric_parser::pre_intern_desugar_names(interner);
         parse_with_interner(&lex_result, interner)
     }
 

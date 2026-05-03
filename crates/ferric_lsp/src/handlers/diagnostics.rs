@@ -89,6 +89,37 @@ pub fn publish(snapshot: &PipelineSnapshot) -> Vec<Diagnostic> {
         }
     } else {
         out.push(panic_diag("typecheck"));
+        return out;
+    }
+
+    // Stage 5: effects (M9). Surfaces `EffectError` / `EffectWarning` from
+    // `ferric_effects::lower_effects` — `ResumedTwice`,
+    // `ResumeOutsideHandler`, `UnhandledEffect`, `EffectRowMismatch`, and
+    // the `ContinuationDropped` warning.
+    if let Some(effects) = &snapshot.effects {
+        for err in &effects.errors {
+            out.push(diag(
+                err.span(),
+                DiagnosticSeverity::ERROR,
+                err.description(),
+                "effect",
+                li,
+            ));
+        }
+        for warn in &effects.warnings {
+            out.push(diag(
+                warn.span(),
+                DiagnosticSeverity::WARNING,
+                warn.description(),
+                "effect",
+                li,
+            ));
+        }
+    }
+    // Note: a missing effect result with typecheck present means the effects
+    // stage panicked; surface that explicitly.
+    else if snapshot.typecheck.is_some() {
+        out.push(panic_diag("effects"));
     }
 
     out
@@ -213,5 +244,27 @@ mod tests {
         let diags2 = run("@invalid");
         assert_eq!(diags1.len(), diags2.len());
         assert!(!diags1.is_empty());
+    }
+
+    /// M9: `ferric_effects` runs after typecheck and emits a
+    /// `ContinuationDropped` warning when a handler clause never resumes
+    /// its bound continuation. The diagnostics handler must surface that
+    /// warning under the `effect` code with severity WARNING.
+    #[test]
+    fn effect_continuation_dropped_appears_as_warning() {
+        // The `Get(key)` clause binds `k` implicitly but never `resume k …`,
+        // so `ContinuationDropped` fires. The handler-block expression itself
+        // returns `"oops"` directly.
+        let src = r#"effect Config { Get(key: Str) -> Str, }
+fn f() -> Str { handle { perform Config::Get(key: "x") } with { Config::Get(key) => "oops" } }"#;
+        let diags = run(src);
+        let warn = diags.iter().find(|d| {
+            d.severity == Some(DiagnosticSeverity::WARNING)
+                && d.code == Some(NumberOrString::String("effect".into()))
+        });
+        assert!(
+            warn.is_some(),
+            "expected a `ContinuationDropped` warning under the `effect` code, got {diags:?}"
+        );
     }
 }

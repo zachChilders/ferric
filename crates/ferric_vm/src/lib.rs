@@ -87,6 +87,11 @@ pub enum Value {
     /// `Op::Await` on a `Handle` consults the scheduler to retrieve the
     /// resolved value (joining a worker thread first if needed).
     Handle(u64),
+    /// One-shot continuation handle (M9). Created when `Op::Perform`
+    /// matches a handler and captures the suspended computation. Carries
+    /// only the slot index in the VM's continuation slab — the captured
+    /// state itself stays inside the VM.
+    Continuation(u32),
 }
 
 /// Wrapper around the shared, lock-protected state of a `Value::Async`.
@@ -218,6 +223,13 @@ impl Value {
     pub fn new_handle(id: u64) -> Self {
         Value::Handle(id)
     }
+
+    /// Creates a `Continuation` value referencing the given slot in the
+    /// VM's continuation slab. Rule 7: outside `ferric_vm`, this is the
+    /// only way to construct `Value::Continuation`.
+    pub fn new_continuation(id: u32) -> Self {
+        Value::Continuation(id)
+    }
 }
 
 /// Runtime errors with source location information.
@@ -289,6 +301,27 @@ pub enum RuntimeError {
     /// `Op::Await` reached a `Handle` whose task never resolved — the
     /// scheduler made a full pass with no forward progress.
     AsyncDeadlock {
+        span: Span,
+    },
+    /// A `perform Effect::Op(...)` ran with no enclosing handler clause for
+    /// that `(effect, op)` pair on the handler stack. Carries the numeric
+    /// tags rather than the symbols — the bytecode does not reference the
+    /// names directly, so the renderer reports the tags. The
+    /// `effects-pass`-aware diagnostic layer can map these back if it is
+    /// given a tag table.
+    UnhandledEffect {
+        effect_tag: u16,
+        op_tag: u8,
+        span: Span,
+    },
+    /// A continuation `k` was resumed more than once. Continuations in M9
+    /// are one-shot only.
+    ResumedTwice {
+        span: Span,
+    },
+    /// `Op::Resume` referenced a continuation id that does not exist —
+    /// internal VM bug.
+    InvalidContinuation {
         span: Span,
     },
 }

@@ -1,0 +1,30 @@
+// M9 — Config::Get effect as a worked example of dependency injection.
+//
+// `Config::Get(key:)` is a user-declared effect operation. The handler
+// installed by `handle ... with { Config::Get(key) => ... }` intercepts
+// every `perform Config::Get(...)` inside the body and resumes the
+// continuation with whatever value the handler chooses. The host code in
+// `read_config` is unchanged whether the values come from a config file,
+// an env var, or — as here — a test handler that hard-codes them. This
+// is exactly a reader monad, just spelled with effects.
+effect Config {
+    Get(key: Str) -> Str,
+}
+
+fn lookup(key: Str) -> Str {
+    if key == "db.host" { "localhost" } else { "5432" }
+}
+
+fn read_config() -> Str {
+    let host = perform Config::Get(key: "db.host")
+    let port = perform Config::Get(key: "db.port")
+    host + ":" + port
+}
+
+let conn = handle {
+    read_config()
+} with {
+    Config::Get(key) => resume k with lookup(key: key)
+}
+
+println(s: conn)

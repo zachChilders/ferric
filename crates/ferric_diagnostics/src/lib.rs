@@ -22,8 +22,9 @@
 //! header-only block in that case.
 
 use ferric_common::{
-    AsyncLowerError, AsyncWarning, AsyncWarningKind, ExhaustivenessError, Interner, LexError,
-    ManifestError, ModuleError, ParseError, ResolveError, Span, Symbol, TypeError,
+    AsyncLowerError, AsyncWarning, AsyncWarningKind, EffectError, EffectWarning,
+    ExhaustivenessError, Interner, LexError, ManifestError, ModuleError, ParseError, ParseWarning,
+    ResolveError, Span, Symbol, TypeError,
 };
 
 /// Public entry point for diagnostics. Keep the surface stable: every other
@@ -266,6 +267,56 @@ impl<'a> Renderer<'a> {
                 secondary: vec![],
                 notes: vec![],
                 help: None,
+            }),
+            ParseError::EffectDeclInsideFn { span } => self.render(Diag {
+                kind: "error",
+                message: "`effect` declarations are only allowed at module scope",
+                primary: Some(Label {
+                    span: *span,
+                    message: Some("`effect` cannot appear inside a function body".to_string()),
+                }),
+                secondary: vec![],
+                notes: vec![],
+                help: Some(
+                    "move the `effect Name { ... }` declaration to the top level of the file"
+                        .to_string(),
+                ),
+            }),
+            ParseError::ResumeOutsideHandler { span } => self.render(Diag {
+                kind: "error",
+                message: "`resume` is only legal inside a handler clause body",
+                primary: Some(Label {
+                    span: *span,
+                    message: Some("`resume` used outside any handler clause".to_string()),
+                }),
+                secondary: vec![],
+                notes: vec![],
+                help: Some(
+                    "`resume k with v` may only appear inside `handle { ... } with { Op(...) => ... }`"
+                        .to_string(),
+                ),
+            }),
+        }
+    }
+
+    /// Renders a `ParseWarning` (M9).
+    pub fn render_parse_warning(&self, warning: &ParseWarning) -> String {
+        match warning {
+            ParseWarning::ShadowsContinuation { span } => self.render(Diag {
+                kind: "warning",
+                message: "handler clause parameter shadows the implicit continuation `k`",
+                primary: Some(Label {
+                    span: *span,
+                    message: Some(
+                        "this parameter named `k` shadows the continuation in the handler body"
+                            .to_string(),
+                    ),
+                }),
+                secondary: vec![],
+                notes: vec![],
+                help: Some(
+                    "rename the parameter to avoid shadowing the implicit continuation".to_string(),
+                ),
             }),
         }
     }
@@ -970,6 +1021,65 @@ impl<'a> Renderer<'a> {
                     "use `spawn(task: ...)` to obtain a `Handle<T>` from an `Async<T>`".to_string(),
                 ),
             }),
+            TypeError::UnhandledEffect { effect, op, span } => self.render(Diag {
+                kind: "error",
+                message: &format!(
+                    "no handler in scope for `{}::{}`",
+                    self.name(*effect),
+                    self.name(*op),
+                ),
+                primary: Some(Label {
+                    span: *span,
+                    message: Some("perform expression has no enclosing handler".to_string()),
+                }),
+                secondary: vec![],
+                notes: vec![],
+                help: Some(
+                    "wrap the call site in `handle { ... } with { ... }` providing a clause for this op, or add the effect to the function's declared row"
+                        .to_string(),
+                ),
+            }),
+            TypeError::EffectRowMismatch {
+                expected,
+                found,
+                span,
+            } => self.render(Diag {
+                kind: "error",
+                message: &format!(
+                    "effect row mismatch: expected {} effect(s), found {}",
+                    expected.len(),
+                    found.len(),
+                ),
+                primary: Some(Label {
+                    span: *span,
+                    message: Some("effects performed here exceed the declared row".to_string()),
+                }),
+                secondary: vec![],
+                notes: vec![],
+                help: None,
+            }),
+            TypeError::ResumeTypeMismatch {
+                expected,
+                found,
+                span,
+            } => self.render(Diag {
+                kind: "error",
+                message: &format!(
+                    "`resume` value type mismatch: expected `{}`, found `{}`",
+                    expected.description(),
+                    found.description(),
+                ),
+                primary: Some(Label {
+                    span: *span,
+                    message: Some("this value cannot be resumed".to_string()),
+                }),
+                secondary: vec![],
+                notes: vec![],
+                help: Some(
+                    "the value must match the effect operation's declared `resume_type`"
+                        .to_string(),
+                ),
+            }),
         }
     }
 
@@ -1064,6 +1174,103 @@ impl<'a> Renderer<'a> {
                 secondary: vec![],
                 notes: vec![],
                 help: None,
+            }),
+        }
+    }
+
+    /// Renders an `EffectError` (M9). The `ferric_effects` lowering pass
+    /// produces these once it lands in M9 Task 4. Until then, this method
+    /// exists so callers (e.g. `main.rs` after the M9 task 7 cleanup swap) can
+    /// be written against the effect-pipeline shape.
+    pub fn render_effect_error(&self, error: &EffectError) -> String {
+        match error {
+            EffectError::UnhandledEffect { effect, op, span } => self.render(Diag {
+                kind: "error",
+                message: &format!(
+                    "no handler in scope for `{}::{}`",
+                    self.name(*effect),
+                    self.name(*op),
+                ),
+                primary: Some(Label {
+                    span: *span,
+                    message: Some("perform expression has no enclosing handler".to_string()),
+                }),
+                secondary: vec![],
+                notes: vec![],
+                help: Some(
+                    "wrap the call site in `handle { ... } with { ... }` providing a clause for this op"
+                        .to_string(),
+                ),
+            }),
+            EffectError::ResumedTwice { cont, span } => self.render(Diag {
+                kind: "error",
+                message: &format!(
+                    "continuation `{}` was resumed more than once",
+                    self.name(*cont),
+                ),
+                primary: Some(Label {
+                    span: *span,
+                    message: Some("second resume of a one-shot continuation".to_string()),
+                }),
+                secondary: vec![],
+                notes: vec![],
+                help: Some(
+                    "Ferric effect continuations are one-shot — capture and resume at most once"
+                        .to_string(),
+                ),
+            }),
+            EffectError::ResumeOutsideHandler { span } => self.render(Diag {
+                kind: "error",
+                message: "`resume` is only legal inside a handler clause body",
+                primary: Some(Label {
+                    span: *span,
+                    message: Some("`resume` used outside any handler clause".to_string()),
+                }),
+                secondary: vec![],
+                notes: vec![],
+                help: None,
+            }),
+            EffectError::EffectRowMismatch {
+                expected,
+                found,
+                span,
+            } => self.render(Diag {
+                kind: "error",
+                message: &format!(
+                    "effect row mismatch: expected {} effect(s), found {}",
+                    expected.len(),
+                    found.len(),
+                ),
+                primary: Some(Label {
+                    span: *span,
+                    message: Some("effects performed here exceed the declared row".to_string()),
+                }),
+                secondary: vec![],
+                notes: vec![],
+                help: None,
+            }),
+        }
+    }
+
+    /// Renders an `EffectWarning` (M9).
+    pub fn render_effect_warning(&self, warning: &EffectWarning) -> String {
+        match warning {
+            EffectWarning::ContinuationDropped { cont, span } => self.render(Diag {
+                kind: "warning",
+                message: &format!(
+                    "handler bound continuation `{}` but never resumed it",
+                    self.name(*cont),
+                ),
+                primary: Some(Label {
+                    span: *span,
+                    message: Some("continuation is dropped".to_string()),
+                }),
+                secondary: vec![],
+                notes: vec![],
+                help: Some(
+                    "if this is intentional (early return), rebind to `_` to silence the warning"
+                        .to_string(),
+                ),
             }),
         }
     }
@@ -1210,6 +1417,39 @@ impl<'a> Renderer<'a> {
                     "an awaited handle never resolved; check for tasks awaiting each other"
                         .to_string(),
                 ),
+            }),
+            RuntimeError::UnhandledEffect {
+                effect_tag,
+                op_tag,
+                span,
+            } => self.render(Diag {
+                kind: "error",
+                message: &format!(
+                    "unhandled effect: effect_tag={effect_tag}, op_tag={op_tag} performed with no enclosing handler"
+                ),
+                primary: nonzero_label(*span),
+                secondary: vec![],
+                notes: vec![],
+                help: Some(
+                    "wrap the call site in `handle { ... } with { Effect::Op(args) => ... }`"
+                        .to_string(),
+                ),
+            }),
+            RuntimeError::ResumedTwice { span } => self.render(Diag {
+                kind: "error",
+                message: "continuation resumed more than once (one-shot only)",
+                primary: nonzero_label(*span),
+                secondary: vec![],
+                notes: vec![],
+                help: None,
+            }),
+            RuntimeError::InvalidContinuation { span } => self.render(Diag {
+                kind: "error",
+                message: "invalid continuation handle (internal VM error)",
+                primary: nonzero_label(*span),
+                secondary: vec![],
+                notes: vec![],
+                help: None,
             }),
         }
     }

@@ -171,4 +171,33 @@ pub enum Op {
     /// joins the worker thread (blocks if not yet done) and pushes the
     /// resolved value. For any other type, raises `RuntimeError`.
     Await,
+
+    // ---------------- M9: algebraic effects ----------------------------------
+    /// Invoke an effect operation. Pops `arg_count` arguments + the
+    /// (effect_tag, op_tag) pair from the stack; transfers control to the
+    /// nearest enclosing handler clause for `(effect_tag, op_tag)`. The
+    /// handler resumes by pushing a value and executing `Resume`.
+    ///
+    /// Encoded as a triple: `Perform(effect_tag, op_tag, arg_count)`.
+    Perform(u16, u8, u8),
+    /// Push a handler frame onto the handler stack.
+    ///
+    /// Operands:
+    ///   - `table_idx`: index into `Program::handler_tables`. The indexed
+    ///     table lists `(effect_tag, op_tag, clause_chunk_idx)` entries.
+    ///   - `body_end_offset`: distance (in instructions) from the
+    ///     instruction *after* this `PushHandler` to the instruction
+    ///     immediately after the matching `PopHandler`. Used by
+    ///     `Op::Perform` when a handler clause runs without ever
+    ///     resuming: in that case the body's bytecode after the perform
+    ///     site is skipped, and the body's containing frame jumps to
+    ///     this position to flow the clause's return value back through
+    ///     the enclosing computation.
+    PushHandler(u16, u16),
+    /// Pop a handler frame from the handler stack.
+    PopHandler,
+    /// Resume a captured continuation exactly once. Pops a value and a
+    /// continuation handle from the stack; transfers control back to the
+    /// suspended computation.
+    Resume,
 }

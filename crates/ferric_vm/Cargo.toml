@@ -13,3 +13,4 @@ ferric_parser   = { path = "../ferric_parser" }
 ferric_resolve  = { path = "../ferric_resolve" }
 ferric_infer    = { path = "../ferric_infer" }
 ferric_compiler = { path = "../ferric_compiler" }
+ferric_effects  = { path = "../ferric_effects" }

@@ -94,6 +94,13 @@ fn walk_expr(expr: &Expr, byte: u32) -> Option<(NodeId, Span)> {
         }
         Expr::StructLit { fields, .. } => fields.iter().find_map(|(_, e)| walk_expr(e, byte)),
         Expr::Cast(c) => walk_expr(&c.expr, byte),
+        // M9 effect AST nodes — recurse into argument values, body, clause
+        // bodies, and the resume value so hover/goto-def work on identifiers
+        // inside `perform`, `handle`/`with`, and `resume`.
+        Expr::Perform(p) => p.args.iter().find_map(|(_, e)| walk_expr(e, byte)),
+        Expr::Handle(h) => walk_expr(&h.body, byte)
+            .or_else(|| h.clauses.iter().find_map(|c| walk_expr(&c.handler, byte))),
+        Expr::Resume(r) => walk_expr(&r.value, byte),
         // Variants without sub-expressions: Literal, Variable, Break, Continue, Shell.
         // Shell parts may contain interpolated tokens, but those aren't AST
         // expressions we'd hover over here — handled in a future task.

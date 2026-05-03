@@ -47,9 +47,8 @@ impl<'a> Checker<'a> {
                 self.check_item(&decl.item);
             }
             Item::Import(_) | Item::TypeAlias(_) => {}
-            // Async fn body checking lands with M8 Task 4 (lowering): bodies
-            // are only available after the state machine transform.
-            Item::AsyncFn(_) => {}
+            // M9 Task 1: parser does not yet emit `effect` declarations.
+            Item::EffectDecl(_) => {}
         }
     }
 
@@ -176,8 +175,11 @@ impl<'a> Checker<'a> {
                 self.check_expr(index);
             }
             Expr::Cast(c) => self.check_expr(&c.expr),
-            // Async expressions: parser does not yet emit these in M8 Task 1.
-            Expr::Await(_) | Expr::AsyncBlock(_) => {}
+            // Async block: body has no match arms to exhaust-check beyond
+            // what walking it already covers.
+            Expr::AsyncBlock(_) => {}
+            // M9 Task 1: parser does not yet emit perform / handle / resume.
+            Expr::Perform(_) | Expr::Handle(_) | Expr::Resume(_) => {}
         }
     }
 
