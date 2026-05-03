@@ -2,7 +2,7 @@
 
 ![ferric](./static/ferric.png)
 
-A small, statically-typed scripting language with a modular interpreter pipeline. Source is lowered to bytecode that runs on a stack VM. The type system is Hindley–Milner with trait-based bounded generics — familiar to Rust without the overhead of borrow checking.
+A small, statically-typed scripting language with a modular interpreter pipeline. Source is lowered to bytecode that runs on a stack VM. The type system is Hindley–Milner with trait-based bounded generics — familiar to Rust without the overhead of borrow checking. Effects are first-class: `async`/`await` and generators desugar into the algebraic effects system rather than bespoke state machines.
 
 ## Shell First
 
@@ -27,9 +27,25 @@ Call sites use named arguments by definition order. `println(s: ...)`, `fibonacc
 
 Ferric ships with a workspace manifest (`Ferric.toml`), a module system, a language server (`ferric_lsp`) with a TextMate grammar generated from a single keyword list, and a stdlib that covers strings, collections, IO, time, randomness, regex, JSON, HTTP client/server, sockets, crypto, encoding, processes, logging, and more.
 
+## Algebraic Effects
+
+`effect` declares a named set of operations; `perform` suspends the current computation; `handle ... with` installs a handler that intercepts performs and `resume`s the continuation with a result. Continuations are one-shot. `async fn` and `gen fn` are syntactic sugar — the parser desugars them to `Eff<[Async], T>` and `Eff<[Gen<T>], Unit]` before any other stage sees them.
+
+```rust
+effect Config {
+    Get(key: Str) -> Str,
+}
+
+let host = handle {
+    perform Config::Get(key: "db.host")
+} with {
+    Config::Get(key) => resume k with "localhost",
+}
+```
+
 ## Async/Await with Real Parallelism
 
-`async fn`, `async { ... }`, and prefix `await expr` are first class. `spawn` moves a deferred async value onto a worker thread; `join` waits on two handles; `block_on` runs an `Async<T>` from sync code. The wall-clock parallelism test in `examples/m8_async_parallel/` proves two 250 ms `sleep` tasks finish in well under 500 ms.
+`async fn`, `async { ... }`, and postfix `.await` are first class (desugared to `Eff<[Async], T>` at parse time). `spawn` moves a deferred async value onto a worker thread; `join` waits on two handles; `block_on` runs an `Async<T>` from sync code. The wall-clock parallelism test in `examples/m8_async_parallel/` proves two 250 ms `sleep` tasks finish in well under 500 ms.
 
 ## Forever Versions
 
@@ -126,7 +142,8 @@ source
   → build_registry       (traits + impl blocks)
   → typecheck            (HM inference + trait constraint solving)
   → check_exhaustiveness (match coverage + unreachable-arm warnings)
-  → lower_async          (async/await → state machine + shell-in-async rewrite)
+  → lower_async          (diagnostic-only backwards-compat pass)
+  → lower_effects        (algebraic effects analysis; async/await and gen already desugared by parser)
   → compile              (typed AST → bytecode chunks)
   → vm.run               (Executor — currently BytecodeVM)
 ```
@@ -142,7 +159,8 @@ source
 | `ferric_traits` | Builds the `TraitRegistry` consumed by the type checker. |
 | `ferric_infer` | Hindley–Milner inference + trait constraint solving + method dispatch. |
 | `ferric_exhaust` | Match exhaustiveness and unreachable-arm checks. |
-| `ferric_async` | Async/await lowering pass + shell-inside-async rewrite + warnings. |
+| `ferric_async` | Retained as a diagnostic-only pass for backwards compatibility; async/await desugaring now happens in the parser. |
+| `ferric_effects` | Algebraic effects lowering: assigns effect/op tags, validates handler clauses, performs static analysis. Entry point: `lower_effects(ast, types) -> EffectResult`. |
 | `ferric_compiler` | Typed AST → bytecode chunks (one per fn / closure / async body / impl method). |
 | `ferric_vm` | Stack VM behind the `Executor` trait. Holds the scheduler for `spawn`/`join`/`await`. |
 | `ferric_diagnostics` | Multi-label rustc-style error rendering. |
