@@ -110,10 +110,14 @@ pub enum TokenKind {
     Gen,
     /// `yield` keyword — generator yield, desugars to `perform Gen::Yield(...)`
     Yield,
+    /// `must` keyword — postfix unwrap operator (expr must "msg")
+    Must,
 
     // Identifiers and operators
     /// Identifier (variable/function name)
     Ident(Symbol),
+    /// Loop label: `'identifier` (tick immediately followed by an identifier)
+    Label(Symbol),
 
     // Arithmetic operators
     /// `+` addition
@@ -152,6 +156,10 @@ pub enum TokenKind {
     OrOr,
     /// `|` (single pipe) — used for closure parameter delimiters.
     Pipe,
+    /// `|>` pipeline operator
+    Pipe2,
+    /// `?` propagation operator (postfix)
+    Question,
 
     // Punctuation
     /// `(` left parenthesis
@@ -182,6 +190,17 @@ pub enum TokenKind {
     Underscore,
     /// `=>` match arm separator
     FatArrow,
+
+    /// Start of an f-string: `f"` — switches the lexer into f-string mode.
+    FStringStart,
+    /// Literal text segment inside an f-string.
+    FStringLit(String),
+    /// Opening `{` of an interpolated expression inside an f-string.
+    FStringExprStart,
+    /// Closing `}` of an interpolated expression inside an f-string.
+    FStringExprEnd,
+    /// Closing `"` that ends an f-string.
+    FStringEnd,
 
     /// A shell command line `$ ...` — composite token produced by shell-line
     /// mode. The parts alternate between literal text and interpolated Ferric
@@ -232,7 +251,9 @@ impl TokenKind {
             TokenKind::Resume => "keyword 'resume'".to_string(),
             TokenKind::Gen => "keyword 'gen'".to_string(),
             TokenKind::Yield => "keyword 'yield'".to_string(),
+            TokenKind::Must => "keyword 'must'".to_string(),
             TokenKind::Ident(_) => "identifier".to_string(),
+            TokenKind::Label(_) => "loop label".to_string(),
             TokenKind::Plus => "'+'".to_string(),
             TokenKind::Minus => "'-'".to_string(),
             TokenKind::Star => "'*'".to_string(),
@@ -249,6 +270,8 @@ impl TokenKind {
             TokenKind::AndAnd => "'&&'".to_string(),
             TokenKind::OrOr => "'||'".to_string(),
             TokenKind::Pipe => "'|'".to_string(),
+            TokenKind::Pipe2 => "'|>'".to_string(),
+            TokenKind::Question => "'?'".to_string(),
             TokenKind::LParen => "'('".to_string(),
             TokenKind::RParen => "')'".to_string(),
             TokenKind::LBrace => "'{'".to_string(),
@@ -263,6 +286,11 @@ impl TokenKind {
             TokenKind::ColonColon => "'::'".to_string(),
             TokenKind::Underscore => "'_'".to_string(),
             TokenKind::FatArrow => "'=>'".to_string(),
+            TokenKind::FStringStart => "f-string start".to_string(),
+            TokenKind::FStringLit(_) => "f-string literal segment".to_string(),
+            TokenKind::FStringExprStart => "f-string expression start '{'".to_string(),
+            TokenKind::FStringExprEnd => "f-string expression end '}'".to_string(),
+            TokenKind::FStringEnd => "f-string end '\"'".to_string(),
             TokenKind::ShellLine(_) => "shell expression".to_string(),
             TokenKind::Eof => "end of file".to_string(),
         }

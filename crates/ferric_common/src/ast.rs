@@ -13,6 +13,9 @@ pub struct NamedArg {
     pub span: Span,
     pub name: Symbol,
     pub value: Box<Expr>,
+    /// True when the parser inferred the label from a bare identifier whose
+    /// name matched the parameter name (implicit named arg, M10).
+    pub implicit: bool,
 }
 
 /// A part of a shell command line in the AST.
@@ -396,6 +399,68 @@ pub struct ResumeExpr {
     pub value: Box<Expr>,
 }
 
+/// A loop label: `'name:` prefix on a loop keyword.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Label {
+    pub span: Span,
+    /// The identifier after `'`, e.g. `outer` for `'outer:`.
+    pub name: Symbol,
+}
+
+/// One segment of an f-string literal.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FStringSegment {
+    pub span: Span,
+    pub kind: FStringSegmentKind,
+}
+
+/// The kind of an f-string segment.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum FStringSegmentKind {
+    /// Literal text between interpolation braces (with `{{`/`}}` already unescaped).
+    Lit(String),
+    /// An interpolated `{expr}` — any Ferric expression.
+    Expr(Box<Expr>),
+}
+
+/// An f-string expression: `f"..."`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FStringExpr {
+    pub id: NodeId,
+    pub span: Span,
+    pub segments: Vec<FStringSegment>,
+}
+
+/// A pipeline expression: `lhs |> rhs_call(args...)`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PipelineExpr {
+    pub id: NodeId,
+    pub span: Span,
+    pub lhs: Box<Expr>,
+    /// Must resolve to a `CallExpr` after desugaring.
+    pub rhs: Box<Expr>,
+}
+
+/// A `?` propagation expression: early-returns `None`/`Err` from the enclosing function.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PropagateExpr {
+    pub id: NodeId,
+    pub span: Span,
+    /// Must be `Option<T>` or `Result<T, E>`.
+    pub operand: Box<Expr>,
+}
+
+/// A `must` unwrap expression: panics if the operand is `None`/`Err`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MustExpr {
+    pub id: NodeId,
+    pub span: Span,
+    /// Must be `Option<T>` or `Result<T, E>`.
+    pub operand: Box<Expr>,
+    /// Optional panic message (must have type `Str` if present).
+    pub message: Option<Box<Expr>>,
+}
+
 /// Expression in Ferric.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Expr {
@@ -457,6 +522,7 @@ pub enum Expr {
     },
     /// While loop: `while cond { body }`
     While {
+        label: Option<Label>,
         cond: Box<Expr>,
         body: Box<Expr>,
         id: NodeId,
@@ -464,14 +530,24 @@ pub enum Expr {
     },
     /// Infinite loop: `loop { body }`
     Loop {
+        label: Option<Label>,
         body: Box<Expr>,
         id: NodeId,
         span: Span,
     },
-    /// Break expression
-    Break { id: NodeId, span: Span },
-    /// Continue expression
-    Continue { id: NodeId, span: Span },
+    /// Break expression (optionally labeled and optionally carrying a value)
+    Break {
+        label: Option<Label>,
+        value: Option<Box<Expr>>,
+        id: NodeId,
+        span: Span,
+    },
+    /// Continue expression (optionally targeting a labeled loop)
+    Continue {
+        label: Option<Label>,
+        id: NodeId,
+        span: Span,
+    },
     /// Closure expression: `|| { body }`
     Closure {
         params: Vec<Param>,
@@ -563,6 +639,15 @@ pub enum Expr {
     /// `resume k with value` — resumes the continuation captured by an
     /// enclosing `HandlerClause`. Legal only inside a handler clause body.
     Resume(ResumeExpr),
+    /// F-string interpolation: `f"text {expr} text"`. Always has type `Str`.
+    FString(FStringExpr),
+    /// Pipeline expression: `lhs |> rhs_call(args...)`. Desugared by the
+    /// resolver into a plain `CallExpr` before type checking.
+    Pipeline(PipelineExpr),
+    /// `expr?` — propagate: early-return `None`/`Err` from enclosing function.
+    Propagate(PropagateExpr),
+    /// `expr must` / `expr must "msg"` — unwrap or panic.
+    Must(MustExpr),
 }
 
 /// A single arm of a `match` expression.
@@ -649,6 +734,10 @@ impl Expr {
             Expr::Perform(p) => p.id,
             Expr::Handle(h) => h.id,
             Expr::Resume(r) => r.id,
+            Expr::FString(f) => f.id,
+            Expr::Pipeline(p) => p.id,
+            Expr::Propagate(p) => p.id,
+            Expr::Must(m) => m.id,
         }
     }
 
@@ -682,8 +771,25 @@ impl Expr {
             Expr::Perform(p) => p.span,
             Expr::Handle(h) => h.span,
             Expr::Resume(r) => r.span,
+            Expr::FString(f) => f.span,
+            Expr::Pipeline(p) => p.span,
+            Expr::Propagate(p) => p.span,
+            Expr::Must(m) => m.span,
         }
     }
+}
+
+/// The left-hand pattern of a `let` binding.
+///
+/// All patterns here are irrefutable — enum variant patterns belong in `match`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum LetPattern {
+    /// `let x = ...` — simple identifier binding (existing form).
+    Ident(Symbol),
+    /// `let (a, b, c) = ...` — tuple destructuring.
+    Tuple(Vec<Symbol>),
+    /// `let Point { x, y } = ...` — struct field destructuring.
+    Struct { name: Symbol, fields: Vec<Symbol> },
 }
 
 /// Statement in Ferric.
@@ -691,7 +797,7 @@ impl Expr {
 pub enum Stmt {
     /// Let binding: `let x: Type = expr` or `let mut x: Type = expr`
     Let {
-        name: Symbol,
+        pattern: LetPattern,
         mutable: bool,
         ty: Option<TypeAnnotation>,
         init: Expr,
@@ -711,6 +817,7 @@ pub enum Stmt {
     Require(RequireStmt),
     /// `for x in expr { body }` loop.
     For {
+        label: Option<Label>,
         var: Symbol,
         var_id: NodeId,
         iter: Expr,

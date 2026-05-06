@@ -14,10 +14,10 @@
 use ferric_common::{
     AsyncBlockExpr, BinOp, CastExpr, EffectAnnotation, EffectDecl, EffectOp, ExportDecl, Expr,
     FnItem, HandleExpr, HandlerClause, ImplMethod, ImportDecl, ImportItem, ImportItems, ImportPath,
-    Interner, Item, LexResult, Literal, MatchArm, NamedArg, NodeId, Param, ParseError, ParseResult,
-    ParseWarning, Pattern, PerformExpr, RequireMode, RequireStmt, ResumeExpr, ShellPart,
-    ShellTokenPart, Span, Stmt, Symbol, Token, TokenKind, TraitMethod, Ty, TypeAliasItem,
-    TypeAnnotation, TypeParam, UnOp,
+    Interner, Item, LexResult, LetPattern, Literal, MatchArm, NamedArg, NodeId, Param, ParseError,
+    ParseResult, ParseWarning, Pattern, PerformExpr, RequireMode, RequireStmt, ResumeExpr,
+    ShellPart, ShellTokenPart, Span, Stmt, Symbol, Token, TokenKind, TraitMethod, Ty,
+    TypeAliasItem, TypeAnnotation, TypeParam, UnOp,
 };
 
 /// Generates unique NodeIds for AST nodes.
@@ -1994,6 +1994,7 @@ impl<'a> Parser<'a> {
         let id = self.node_id_gen.next();
 
         Some(Stmt::For {
+            label: None,
             var,
             var_id,
             iter,
@@ -2051,7 +2052,7 @@ impl<'a> Parser<'a> {
         let id = self.node_id_gen.next();
 
         Some(Stmt::Let {
-            name,
+            pattern: LetPattern::Ident(name),
             mutable,
             ty,
             init,
@@ -2201,6 +2202,7 @@ impl<'a> Parser<'a> {
         let id = self.node_id_gen.next();
 
         Expr::While {
+            label: None,
             cond,
             body,
             id,
@@ -2236,7 +2238,7 @@ impl<'a> Parser<'a> {
         let span = start_span.to(body.span());
         let id = self.node_id_gen.next();
 
-        Expr::Loop { body, id, span }
+        Expr::Loop { label: None, body, id, span }
     }
 
     /// Parses a break expression: `break`
@@ -2245,7 +2247,7 @@ impl<'a> Parser<'a> {
         self.advance(); // consume 'break'
         let id = self.node_id_gen.next();
 
-        Expr::Break { id, span }
+        Expr::Break { label: None, value: None, id, span }
     }
 
     /// Parses a continue expression: `continue`
@@ -2254,7 +2256,7 @@ impl<'a> Parser<'a> {
         self.advance(); // consume 'continue'
         let id = self.node_id_gen.next();
 
-        Expr::Continue { id, span }
+        Expr::Continue { label: None, id, span }
     }
 
     /// Parses a match expression: `match scrutinee { pattern => body, ... }`
@@ -2736,6 +2738,7 @@ impl<'a> Parser<'a> {
                                 span,
                                 name,
                                 value: Box::new(value),
+                                implicit: false,
                             });
                         } else {
                             // Positional arg — error and recover
@@ -2748,6 +2751,7 @@ impl<'a> Parser<'a> {
                                 span,
                                 name: Symbol::new(0),
                                 value: Box::new(value),
+                                implicit: false,
                             });
                         }
 
@@ -2866,6 +2870,7 @@ impl<'a> Parser<'a> {
                     span,
                     name,
                     value: Box::new(value),
+                    implicit: false,
                 });
             } else {
                 self.errors
@@ -2876,6 +2881,7 @@ impl<'a> Parser<'a> {
                     span,
                     name: Symbol::new(0),
                     value: Box::new(value),
+                    implicit: false,
                 });
             }
             if !self.match_token(&TokenKind::Comma) {

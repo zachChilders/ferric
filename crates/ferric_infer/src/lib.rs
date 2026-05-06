@@ -10,9 +10,10 @@ use std::collections::{HashMap, HashSet};
 
 use ferric_common::{
     BinOp, DefId, EffectDecl, EffectOp, EffectRef, Expr, FnItem, HandleExpr, HandlerClause,
-    ImplMethod, Interner, Item, Literal, MatchArm, NamedArg, NodeId, Param, ParseResult, Pattern,
-    PerformExpr, RequireStmt, ResolveResult, ResumeExpr, ShellPart, Span, Stmt, Symbol,
-    TraitRegistry, Ty, TyVar, TypeAnnotation, TypeError, TypeParam, TypeResult, TypeScheme, UnOp,
+    ImplMethod, Interner, Item, LetPattern, Literal, MatchArm, NamedArg, NodeId, Param,
+    ParseResult, Pattern, PerformExpr, RequireStmt, ResolveResult, ResumeExpr, ShellPart, Span,
+    Stmt, Symbol, TraitRegistry, Ty, TyVar, TypeAnnotation, TypeError, TypeParam, TypeResult,
+    TypeScheme, UnOp,
 };
 
 /// Adapter that lets `ferric_stdlib_meta` polymorphic-signature builders
@@ -954,7 +955,7 @@ impl<'a> TypeInfer<'a> {
     fn check_stmt(&mut self, stmt: &Stmt) {
         match stmt {
             Stmt::Let {
-                name,
+                pattern,
                 ty,
                 init,
                 id,
@@ -1011,7 +1012,34 @@ impl<'a> TypeInfer<'a> {
                 // Generalise over any free vars not pinned by the surrounding
                 // monomorphic environment — classic let-polymorphism.
                 let scheme = self.generalize(&bound_ty);
-                self.env.define(*name, scheme);
+                match pattern {
+                    LetPattern::Ident(name) => self.env.define(*name, scheme),
+                    LetPattern::Tuple(names) => {
+                        for (i, name) in names.iter().enumerate() {
+                            let elem_ty = if let Ty::Tuple(ref elems) = bound_ty {
+                                elems.get(i).cloned().unwrap_or_else(|| self.fresh_tyvar())
+                            } else {
+                                self.fresh_tyvar()
+                            };
+                            self.env.define(*name, self.generalize(&elem_ty));
+                        }
+                    }
+                    LetPattern::Struct { name: struct_name, fields } => {
+                        for field in fields {
+                            let field_ty = if let Ty::Struct { fields: struct_fields, .. } = &bound_ty {
+                                struct_fields
+                                    .iter()
+                                    .find(|(n, _)| *n == *field)
+                                    .map(|(_, t)| t.clone())
+                                    .unwrap_or_else(|| self.fresh_tyvar())
+                            } else {
+                                let _ = struct_name;
+                                self.fresh_tyvar()
+                            };
+                            self.env.define(*field, self.generalize(&field_ty));
+                        }
+                    }
+                }
 
                 self.node_types.insert(*id, self.subst.apply(&bound_ty));
             }
@@ -1753,6 +1781,41 @@ impl<'a> TypeInfer<'a> {
             Expr::Perform(p) => self.infer_perform(p),
             Expr::Handle(h) => self.infer_handle(h),
             Expr::Resume(r) => self.infer_resume(r),
+            // M10 expressions — type inference deferred to later tasks.
+            // Return a fresh type variable as a placeholder so the rest
+            // of the pipeline can compile and run without changes.
+            Expr::FString(f) => {
+                for seg in &f.segments {
+                    if let ferric_common::FStringSegmentKind::Expr(e) = &seg.kind {
+                        self.infer_expr(e);
+                    }
+                }
+                self.node_types.insert(f.id, Ty::Str);
+                Ty::Str
+            }
+            Expr::Pipeline(p) => {
+                self.infer_expr(&p.lhs);
+                let rhs_ty = self.infer_expr(&p.rhs);
+                self.node_types.insert(p.id, rhs_ty.clone());
+                rhs_ty
+            }
+            Expr::Propagate(p) => {
+                let inner = self.infer_expr(&p.operand);
+                let result = self.fresh_tyvar();
+                self.node_types.insert(p.id, result.clone());
+                let _ = inner;
+                result
+            }
+            Expr::Must(m) => {
+                let inner = self.infer_expr(&m.operand);
+                if let Some(msg) = &m.message {
+                    self.infer_expr(msg);
+                }
+                let result = self.fresh_tyvar();
+                self.node_types.insert(m.id, result.clone());
+                let _ = inner;
+                result
+            }
         }
     }
 
@@ -3034,6 +3097,19 @@ fn span_in_expr(expr: &Expr, target: NodeId) -> Option<Span> {
                 .find_map(|c| span_in_expr(&c.handler, target))
         }),
         Expr::Resume(r) => span_in_expr(&r.value, target),
+        Expr::FString(f) => f.segments.iter().find_map(|seg| {
+            if let ferric_common::FStringSegmentKind::Expr(e) = &seg.kind {
+                span_in_expr(e, target)
+            } else {
+                None
+            }
+        }),
+        Expr::Pipeline(p) => {
+            span_in_expr(&p.lhs, target).or_else(|| span_in_expr(&p.rhs, target))
+        }
+        Expr::Propagate(p) => span_in_expr(&p.operand, target),
+        Expr::Must(m) => span_in_expr(&m.operand, target)
+            .or_else(|| m.message.as_ref().and_then(|msg| span_in_expr(msg, target))),
     }
 }
 

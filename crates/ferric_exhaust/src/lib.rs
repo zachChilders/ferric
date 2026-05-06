@@ -180,6 +180,24 @@ impl<'a> Checker<'a> {
             Expr::AsyncBlock(_) => {}
             // M9 Task 1: parser does not yet emit perform / handle / resume.
             Expr::Perform(_) | Expr::Handle(_) | Expr::Resume(_) => {}
+            Expr::FString(f) => {
+                for seg in &f.segments {
+                    if let ferric_common::FStringSegmentKind::Expr(e) = &seg.kind {
+                        self.check_expr(e);
+                    }
+                }
+            }
+            Expr::Pipeline(p) => {
+                self.check_expr(&p.lhs);
+                self.check_expr(&p.rhs);
+            }
+            Expr::Propagate(p) => self.check_expr(&p.operand),
+            Expr::Must(m) => {
+                self.check_expr(&m.operand);
+                if let Some(msg) = &m.message {
+                    self.check_expr(msg);
+                }
+            }
         }
     }
 

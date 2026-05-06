@@ -27,8 +27,8 @@
 
 use ferric_common::{
     AsyncBlockExpr, AsyncLowerError, AsyncResult, AsyncWarning, AsyncWarningKind, CastExpr,
-    ExportDecl, Expr, FnItem, ImplMethod, Item, Literal, MatchArm, NamedArg, NodeId, ParseResult,
-    PerformExpr, RequireStmt, ShellPart, Span, Stmt, Symbol, TypeResult,
+    ExportDecl, Expr, FnItem, ImplMethod, Item, Literal, MatchArm, NamedArg, NodeId,
+    ParseResult, PerformExpr, RequireStmt, ShellPart, Span, Stmt, Symbol, TypeResult,
 };
 
 /// Single public entry point for the async preparation stage.
@@ -206,14 +206,14 @@ impl Lowerer {
     fn lower_stmt(&mut self, stmt: &Stmt) -> Stmt {
         match stmt {
             Stmt::Let {
-                name,
+                pattern,
                 mutable,
                 ty,
                 init,
                 id,
                 span,
             } => Stmt::Let {
-                name: *name,
+                pattern: pattern.clone(),
                 mutable: *mutable,
                 ty: ty.clone(),
                 init: self.lower_expr(init),
@@ -242,6 +242,7 @@ impl Lowerer {
                 set_fn: req.set_fn.as_ref().map(|s| Box::new(self.lower_expr(s))),
             }),
             Stmt::For {
+                label,
                 var,
                 var_id,
                 iter,
@@ -249,6 +250,7 @@ impl Lowerer {
                 id,
                 span,
             } => Stmt::For {
+                label: label.clone(),
                 var: *var,
                 var_id: *var_id,
                 iter: self.lower_expr(iter),
@@ -357,6 +359,7 @@ impl Lowerer {
                         span: a.span,
                         name: a.name,
                         value: Box::new(self.lower_expr(&a.value)),
+                        implicit: a.implicit,
                     })
                     .collect(),
                 id: *id,
@@ -392,17 +395,20 @@ impl Lowerer {
                 span: *span,
             },
             Expr::While {
+                label,
                 cond,
                 body,
                 id,
                 span,
             } => Expr::While {
+                label: label.clone(),
                 cond: Box::new(self.lower_expr(cond)),
                 body: Box::new(self.lower_expr(body)),
                 id: *id,
                 span: *span,
             },
-            Expr::Loop { body, id, span } => Expr::Loop {
+            Expr::Loop { label, body, id, span } => Expr::Loop {
+                label: label.clone(),
                 body: Box::new(self.lower_expr(body)),
                 id: *id,
                 span: *span,
@@ -510,6 +516,7 @@ impl Lowerer {
                         span: a.span,
                         name: a.name,
                         value: Box::new(self.lower_expr(&a.value)),
+                        implicit: a.implicit,
                     })
                     .collect(),
                 id: *id,
@@ -520,6 +527,42 @@ impl Lowerer {
                 span: c.span,
                 expr: Box::new(self.lower_expr(&c.expr)),
                 target: c.target.clone(),
+            }),
+            Expr::FString(f) => Expr::FString(ferric_common::FStringExpr {
+                id: f.id,
+                span: f.span,
+                segments: f
+                    .segments
+                    .iter()
+                    .map(|seg| ferric_common::FStringSegment {
+                        span: seg.span,
+                        kind: match &seg.kind {
+                            ferric_common::FStringSegmentKind::Lit(s) => {
+                                ferric_common::FStringSegmentKind::Lit(s.clone())
+                            }
+                            ferric_common::FStringSegmentKind::Expr(e) => {
+                                ferric_common::FStringSegmentKind::Expr(Box::new(self.lower_expr(e)))
+                            }
+                        },
+                    })
+                    .collect(),
+            }),
+            Expr::Pipeline(p) => Expr::Pipeline(ferric_common::PipelineExpr {
+                id: p.id,
+                span: p.span,
+                lhs: Box::new(self.lower_expr(&p.lhs)),
+                rhs: Box::new(self.lower_expr(&p.rhs)),
+            }),
+            Expr::Propagate(p) => Expr::Propagate(ferric_common::PropagateExpr {
+                id: p.id,
+                span: p.span,
+                operand: Box::new(self.lower_expr(&p.operand)),
+            }),
+            Expr::Must(m) => Expr::Must(ferric_common::MustExpr {
+                id: m.id,
+                span: m.span,
+                operand: Box::new(self.lower_expr(&m.operand)),
+                message: m.message.as_ref().map(|msg| Box::new(self.lower_expr(msg))),
             }),
         }
     }
@@ -580,6 +623,7 @@ impl Lowerer {
                 span,
                 name: synth_symbol("cmd"),
                 value: Box::new(cmd_literal),
+                implicit: false,
             }],
             id: self.fresh_id(),
             span,
@@ -827,5 +871,23 @@ fn walk_node_ids_expr(expr: &Expr, f: &mut impl FnMut(NodeId)) {
             }
         }
         Expr::Resume(r) => walk_node_ids_expr(&r.value, f),
+        Expr::FString(fs) => {
+            for seg in &fs.segments {
+                if let ferric_common::FStringSegmentKind::Expr(e) = &seg.kind {
+                    walk_node_ids_expr(e, f);
+                }
+            }
+        }
+        Expr::Pipeline(p) => {
+            walk_node_ids_expr(&p.lhs, f);
+            walk_node_ids_expr(&p.rhs, f);
+        }
+        Expr::Propagate(p) => walk_node_ids_expr(&p.operand, f),
+        Expr::Must(m) => {
+            walk_node_ids_expr(&m.operand, f);
+            if let Some(msg) = &m.message {
+                walk_node_ids_expr(msg, f);
+            }
+        }
     }
 }

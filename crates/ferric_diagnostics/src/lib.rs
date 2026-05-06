@@ -296,6 +296,56 @@ impl<'a> Renderer<'a> {
                         .to_string(),
                 ),
             }),
+            ParseError::UnterminatedFString { span } => self.render(Diag {
+                kind: "error",
+                message: "unterminated f-string literal",
+                primary: Some(Label {
+                    span: *span,
+                    message: Some("f-string not closed with `\"`".to_string()),
+                }),
+                secondary: vec![],
+                notes: vec![],
+                help: None,
+            }),
+            ParseError::InvalidFStringExpr { span } => self.render(Diag {
+                kind: "error",
+                message: "invalid expression in f-string interpolation",
+                primary: Some(Label {
+                    span: *span,
+                    message: Some("expression could not be parsed".to_string()),
+                }),
+                secondary: vec![],
+                notes: vec![],
+                help: Some("check the expression inside `{...}` for syntax errors".to_string()),
+            }),
+            ParseError::LabeledBreakOutside { label, span } => self.render(Diag {
+                kind: "error",
+                message: &format!(
+                    "labeled `break`/`continue` targets label `'{}` which is not in scope",
+                    self.name(*label)
+                ),
+                primary: Some(Label {
+                    span: *span,
+                    message: Some("no enclosing loop has this label".to_string()),
+                }),
+                secondary: vec![],
+                notes: vec![],
+                help: None,
+            }),
+            ParseError::DestructureIrrefutable { pattern, span } => self.render(Diag {
+                kind: "error",
+                message: &format!(
+                    "pattern `{}` is refutable and cannot be used in a `let` binding",
+                    pattern
+                ),
+                primary: Some(Label {
+                    span: *span,
+                    message: Some("refutable pattern here".to_string()),
+                }),
+                secondary: vec![],
+                notes: vec![],
+                help: Some("use `match` for refutable patterns (enum variant destructuring)".to_string()),
+            }),
         }
     }
 
@@ -530,6 +580,74 @@ impl<'a> Renderer<'a> {
                 secondary: vec![],
                 notes: vec![],
                 help: Some(format!("add `export` to the definition in \"{path}\"")),
+            }),
+            ResolveError::PropagateNonFallible { ty, span } => self.render(Diag {
+                kind: "error",
+                message: &format!("`?` applied to non-fallible type `{ty}`"),
+                primary: Some(Label {
+                    span: *span,
+                    message: Some("not `Option<T>` or `Result<T, E>`".to_string()),
+                }),
+                secondary: vec![],
+                notes: vec![],
+                help: Some("the `?` operator requires `Option<T>` or `Result<T, E>`".to_string()),
+            }),
+            ResolveError::MustNonFallible { ty, span } => self.render(Diag {
+                kind: "error",
+                message: &format!("`must` applied to non-fallible type `{ty}`"),
+                primary: Some(Label {
+                    span: *span,
+                    message: Some("not `Option<T>` or `Result<T, E>`".to_string()),
+                }),
+                secondary: vec![],
+                notes: vec![],
+                help: Some("`must` requires `Option<T>` or `Result<T, E>`".to_string()),
+            }),
+            ResolveError::PipelineRhsNotCall { span } => self.render(Diag {
+                kind: "error",
+                message: "right-hand side of `|>` must be a function call",
+                primary: Some(Label {
+                    span: *span,
+                    message: Some("expected a call expression".to_string()),
+                }),
+                secondary: vec![],
+                notes: vec![],
+                help: Some("write `value |> function(args...)` with a call on the right".to_string()),
+            }),
+            ResolveError::LabelNotFound { label, span } => self.render(Diag {
+                kind: "error",
+                message: &format!("label `'{}` not found in scope", self.name(*label)),
+                primary: Some(Label {
+                    span: *span,
+                    message: Some("no enclosing loop has this label".to_string()),
+                }),
+                secondary: vec![],
+                notes: vec![],
+                help: None,
+            }),
+            ResolveError::DestructureArity { expected, got, span } => self.render(Diag {
+                kind: "error",
+                message: &format!(
+                    "destructuring pattern has {got} binding(s) but the type has {expected} field(s)"
+                ),
+                primary: Some(Label {
+                    span: *span,
+                    message: Some(format!("expected {expected} binding(s)")),
+                }),
+                secondary: vec![],
+                notes: vec![],
+                help: None,
+            }),
+            ResolveError::UnknownMethod { method, ty, span } => self.render(Diag {
+                kind: "error",
+                message: &format!("type `{ty}` has no method `{}`", self.name(*method)),
+                primary: Some(Label {
+                    span: *span,
+                    message: Some("method not found".to_string()),
+                }),
+                secondary: vec![],
+                notes: vec![],
+                help: None,
             }),
         }
     }
@@ -1077,6 +1195,34 @@ impl<'a> Renderer<'a> {
                 notes: vec![],
                 help: Some(
                     "the value must match the effect operation's declared `resume_type`"
+                        .to_string(),
+                ),
+            }),
+            TypeError::MustMessageNotStr { span } => self.render(Diag {
+                kind: "error",
+                message: "`must` message must be of type `Str`",
+                primary: Some(Label {
+                    span: *span,
+                    message: Some("this expression is not a `Str`".to_string()),
+                }),
+                secondary: vec![],
+                notes: vec![],
+                help: Some("provide a string literal as the panic message".to_string()),
+            }),
+            TypeError::FStringNonDisplayable { found, span } => self.render(Diag {
+                kind: "error",
+                message: &format!(
+                    "f-string interpolation: `{}` is not displayable",
+                    found.description()
+                ),
+                primary: Some(Label {
+                    span: *span,
+                    message: Some("this type cannot be interpolated".to_string()),
+                }),
+                secondary: vec![],
+                notes: vec![],
+                help: Some(
+                    "only `Int`, `Float`, `Bool`, and `Str` may be interpolated in f-strings"
                         .to_string(),
                 ),
             }),

@@ -354,6 +354,24 @@ impl Analyzer {
             }
             Expr::Cast(c) => self.walk_expr(&c.expr),
             Expr::AsyncBlock(b) => self.walk_expr(&b.block),
+            Expr::FString(f) => {
+                for seg in &f.segments {
+                    if let ferric_common::FStringSegmentKind::Expr(e) = &seg.kind {
+                        self.walk_expr(e);
+                    }
+                }
+            }
+            Expr::Pipeline(p) => {
+                self.walk_expr(&p.lhs);
+                self.walk_expr(&p.rhs);
+            }
+            Expr::Propagate(p) => self.walk_expr(&p.operand),
+            Expr::Must(m) => {
+                self.walk_expr(&m.operand);
+                if let Some(msg) = &m.message {
+                    self.walk_expr(msg);
+                }
+            }
         }
     }
 

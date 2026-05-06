@@ -7,8 +7,8 @@
 //! Public API: Only the `resolve()` function is exposed.
 
 use ferric_common::{
-    DefId, DefInfo, Expr, ImplMethod, Item, ModuleResult, NamedArg, NodeId, Param, ParseResult,
-    Pattern, RequireStmt, ResolveError, ResolveResult, ShellPart, Span, Stmt, Symbol,
+    DefId, DefInfo, Expr, ImplMethod, Item, LetPattern, ModuleResult, NamedArg, NodeId, Param,
+    ParseResult, Pattern, RequireStmt, ResolveError, ResolveResult, ShellPart, Span, Stmt, Symbol,
     TypeAnnotation,
 };
 use std::collections::HashMap;
@@ -637,7 +637,7 @@ impl Resolver {
     fn resolve_stmt(&mut self, stmt: &Stmt) {
         match stmt {
             Stmt::Let {
-                name,
+                pattern,
                 mutable,
                 init,
                 span,
@@ -646,13 +646,31 @@ impl Resolver {
                 // Resolve initializer first (before defining the variable)
                 self.resolve_expr(init);
 
-                // Define the variable in the current scope
-                let def_id = self.define(*name, *mutable, *span);
-
-                // Assign variable slot
-                let slot = self.next_slot;
-                self.next_slot += 1;
-                self.def_slots.insert(def_id, slot);
+                // Define each binding introduced by the pattern
+                match pattern {
+                    LetPattern::Ident(name) => {
+                        let def_id = self.define(*name, *mutable, *span);
+                        let slot = self.next_slot;
+                        self.next_slot += 1;
+                        self.def_slots.insert(def_id, slot);
+                    }
+                    LetPattern::Tuple(names) => {
+                        for name in names {
+                            let def_id = self.define(*name, *mutable, *span);
+                            let slot = self.next_slot;
+                            self.next_slot += 1;
+                            self.def_slots.insert(def_id, slot);
+                        }
+                    }
+                    LetPattern::Struct { fields, .. } => {
+                        for name in fields {
+                            let def_id = self.define(*name, *mutable, *span);
+                            let slot = self.next_slot;
+                            self.next_slot += 1;
+                            self.def_slots.insert(def_id, slot);
+                        }
+                    }
+                }
             }
             Stmt::Assign {
                 target,
@@ -819,6 +837,7 @@ impl Resolver {
                                 span: *span,
                                 name: param.name,
                                 value: default.clone(),
+                                implicit: false,
                             });
                         } else {
                             self.errors.push(ResolveError::MissingArg {
@@ -1110,6 +1129,26 @@ impl Resolver {
                 }
                 self.resolve_expr(&r.value);
             }
+            // M10 expressions — full resolution deferred to Tasks 2–6.
+            // Walk sub-expressions so variable references inside them resolve.
+            Expr::FString(f) => {
+                for seg in &f.segments {
+                    if let ferric_common::FStringSegmentKind::Expr(e) = &seg.kind {
+                        self.resolve_expr(e);
+                    }
+                }
+            }
+            Expr::Pipeline(p) => {
+                self.resolve_expr(&p.lhs);
+                self.resolve_expr(&p.rhs);
+            }
+            Expr::Propagate(p) => self.resolve_expr(&p.operand),
+            Expr::Must(m) => {
+                self.resolve_expr(&m.operand);
+                if let Some(msg) = &m.message {
+                    self.resolve_expr(msg);
+                }
+            }
         }
     }
 
@@ -1221,7 +1260,7 @@ impl Resolver {
 mod tests {
     use super::*;
     use ferric_common::{
-        Expr, FnItem, Item, Literal, NodeId, Param, Span, Stmt, Symbol, TypeAnnotation,
+        Expr, FnItem, Item, LetPattern, Literal, NodeId, Param, Span, Stmt, Symbol, TypeAnnotation,
     };
 
     fn make_span() -> Span {
@@ -1243,7 +1282,7 @@ mod tests {
             vec![
                 Item::Script {
                     stmt: Stmt::Let {
-                        name: make_sym(0), // x
+                        pattern: LetPattern::Ident(make_sym(0)), // x
                         mutable: false,
                         ty: None,
                         init: Expr::Literal {
@@ -1320,7 +1359,7 @@ mod tests {
             vec![
                 Item::Script {
                     stmt: Stmt::Let {
-                        name: make_sym(0), // x
+                        pattern: LetPattern::Ident(make_sym(0)), // x
                         mutable: false,
                         ty: None,
                         init: Expr::Literal {
@@ -1338,7 +1377,7 @@ mod tests {
                     stmt: Stmt::Expr {
                         expr: Expr::Block {
                             stmts: vec![Stmt::Let {
-                                name: make_sym(0), // x (shadows outer x)
+                                pattern: LetPattern::Ident(make_sym(0)), // x (shadows outer x)
                                 mutable: false,
                                 ty: None,
                                 init: Expr::Literal {
@@ -1379,7 +1418,7 @@ mod tests {
         let ast = ParseResult::new(
             vec![Item::Script {
                 stmt: Stmt::Let {
-                    name: make_sym(0), // x
+                    pattern: LetPattern::Ident(make_sym(0)), // x
                     mutable: false,
                     ty: None,
                     init: Expr::Variable {
@@ -1411,7 +1450,7 @@ mod tests {
             vec![
                 Item::Script {
                     stmt: Stmt::Let {
-                        name: make_sym(0), // x
+                        pattern: LetPattern::Ident(make_sym(0)), // x
                         mutable: false,
                         ty: None,
                         init: Expr::Literal {
@@ -1427,7 +1466,7 @@ mod tests {
                 },
                 Item::Script {
                     stmt: Stmt::Let {
-                        name: make_sym(0), // x (duplicate)
+                        pattern: LetPattern::Ident(make_sym(0)), // x (duplicate)
                         mutable: false,
                         ty: None,
                         init: Expr::Literal {
@@ -1460,7 +1499,7 @@ mod tests {
             vec![
                 Item::Script {
                     stmt: Stmt::Let {
-                        name: make_sym(0), // x
+                        pattern: LetPattern::Ident(make_sym(0)), // x
                         mutable: false,
                         ty: None,
                         init: Expr::Literal {
@@ -1508,7 +1547,7 @@ mod tests {
                     stmt: Stmt::Expr {
                         expr: Expr::Block {
                             stmts: vec![Stmt::Let {
-                                name: make_sym(0), // x
+                                pattern: LetPattern::Ident(make_sym(0)), // x
                                 mutable: false,
                                 ty: None,
                                 init: Expr::Literal {
@@ -1562,7 +1601,7 @@ mod tests {
                 ret_ty: TypeAnnotation::Named(make_sym(2)), // Int
                 body: Expr::Block {
                     stmts: vec![Stmt::Let {
-                        name: make_sym(3), // y
+                        pattern: LetPattern::Ident(make_sym(3)), // y
                         mutable: false,
                         ty: None,
                         init: Expr::Variable {

@@ -122,6 +122,15 @@ pub enum ParseError {
     /// `resume` appeared outside of any handler clause body. The parser
     /// statically tracks handler-clause scope so this is caught early.
     ResumeOutsideHandler { span: Span },
+    /// An f-string literal was not terminated before EOF.
+    UnterminatedFString { span: Span },
+    /// Expression parsing inside `{...}` in an f-string failed.
+    InvalidFStringExpr { span: Span },
+    /// `break 'label` / `continue 'label` used outside any loop with that label.
+    LabeledBreakOutside { label: Symbol, span: Span },
+    /// A `let` binding used a refutable (enum-variant) pattern. Use `match`
+    /// for refutable patterns.
+    DestructureIrrefutable { pattern: String, span: Span },
 }
 
 impl ParseError {
@@ -143,6 +152,10 @@ impl ParseError {
             ParseError::AsyncOnNonFn { span } => *span,
             ParseError::EffectDeclInsideFn { span } => *span,
             ParseError::ResumeOutsideHandler { span } => *span,
+            ParseError::UnterminatedFString { span } => *span,
+            ParseError::InvalidFStringExpr { span } => *span,
+            ParseError::LabeledBreakOutside { span, .. } => *span,
+            ParseError::DestructureIrrefutable { span, .. } => *span,
         }
     }
 
@@ -198,6 +211,19 @@ impl ParseError {
             }
             ParseError::ResumeOutsideHandler { .. } => {
                 "`resume` is only legal inside a handler clause body".to_string()
+            }
+            ParseError::UnterminatedFString { .. } => "unterminated f-string literal".to_string(),
+            ParseError::InvalidFStringExpr { .. } => {
+                "invalid expression inside f-string interpolation `{...}`".to_string()
+            }
+            ParseError::LabeledBreakOutside { .. } => {
+                "labeled `break`/`continue` used outside any matching labeled loop".to_string()
+            }
+            ParseError::DestructureIrrefutable { pattern, .. } => {
+                format!(
+                    "pattern `{}` is refutable — use `match` for enum variant patterns",
+                    pattern
+                )
             }
         }
     }
@@ -326,6 +352,20 @@ pub enum ResolveError {
         path: String,
         span: Span,
     },
+    /// `expr?` or `expr must` applied to a type that is neither `Option<T>`
+    /// nor `Result<T, E>`.
+    PropagateNonFallible { ty: String, span: Span },
+    /// `expr must` applied to a non-fallible type.
+    MustNonFallible { ty: String, span: Span },
+    /// The right-hand side of `|>` is not a call expression.
+    PipelineRhsNotCall { span: Span },
+    /// `break 'label` / `continue 'label` used but the label is not in scope.
+    LabelNotFound { label: Symbol, span: Span },
+    /// Destructuring `let` pattern has a different arity than the RHS type.
+    DestructureArity { expected: usize, got: usize, span: Span },
+    /// Method called on a type that has no such method in the stdlib method table
+    /// or in any `impl` block.
+    UnknownMethod { method: Symbol, ty: String, span: Span },
 }
 
 impl ResolveError {
@@ -347,6 +387,12 @@ impl ResolveError {
             ResolveError::UnknownVariant { span, .. } => *span,
             ResolveError::VariantArity { span, .. } => *span,
             ResolveError::PrivateImport { span, .. } => *span,
+            ResolveError::PropagateNonFallible { span, .. } => *span,
+            ResolveError::MustNonFallible { span, .. } => *span,
+            ResolveError::PipelineRhsNotCall { span } => *span,
+            ResolveError::LabelNotFound { span, .. } => *span,
+            ResolveError::DestructureArity { span, .. } => *span,
+            ResolveError::UnknownMethod { span, .. } => *span,
         }
     }
 
@@ -376,6 +422,20 @@ impl ResolveError {
             ResolveError::PrivateImport { path, .. } => {
                 format!("imported name is not exported from \"{path}\"")
             }
+            ResolveError::PropagateNonFallible { ty, .. } => {
+                format!("`?` applied to non-fallible type `{ty}`")
+            }
+            ResolveError::MustNonFallible { ty, .. } => {
+                format!("`must` applied to non-fallible type `{ty}`")
+            }
+            ResolveError::PipelineRhsNotCall { .. } => {
+                "right-hand side of `|>` must be a function call".to_string()
+            }
+            ResolveError::LabelNotFound { .. } => "label not found in scope".to_string(),
+            ResolveError::DestructureArity { expected, got, .. } => {
+                format!("destructuring pattern has {got} element(s) but the type has {expected}")
+            }
+            ResolveError::UnknownMethod { .. } => "unknown method for this type".to_string(),
         }
     }
 
@@ -449,6 +509,24 @@ impl ResolveError {
             ),
             ResolveError::PrivateImport { name: n, path, .. } => {
                 format!("`{}` is not exported from \"{}\"", name(*n), path)
+            }
+            ResolveError::PropagateNonFallible { ty, .. } => {
+                format!("`?` operator applied to non-fallible type `{ty}`; expected `Option<T>` or `Result<T, E>`")
+            }
+            ResolveError::MustNonFallible { ty, .. } => {
+                format!("`must` operator applied to non-fallible type `{ty}`; expected `Option<T>` or `Result<T, E>`")
+            }
+            ResolveError::PipelineRhsNotCall { .. } => {
+                "the right-hand side of `|>` must be a function call expression".to_string()
+            }
+            ResolveError::LabelNotFound { label, .. } => {
+                format!("label `'{}` is not in scope", name(*label))
+            }
+            ResolveError::DestructureArity { expected, got, .. } => {
+                format!("destructuring pattern has {got} binding(s) but the type has {expected} field(s)")
+            }
+            ResolveError::UnknownMethod { method, ty, .. } => {
+                format!("type `{ty}` has no method `{}`", name(*method))
             }
         }
     }
@@ -593,6 +671,11 @@ pub enum TypeError {
     /// `resume k with v` had a value whose type does not match the declared
     /// `EffectOp::resume_type` of the handled operation. M9.
     ResumeTypeMismatch { expected: Ty, found: Ty, span: Span },
+    /// The message expression in `expr must "msg"` is not of type `Str`.
+    MustMessageNotStr { span: Span },
+    /// An interpolated expression in an f-string has a type that is not
+    /// displayable (not `Int`, `Float`, `Bool`, or `Str`).
+    FStringNonDisplayable { found: Ty, span: Span },
 }
 
 impl TypeError {
@@ -628,6 +711,8 @@ impl TypeError {
             TypeError::UnhandledEffect { span, .. } => *span,
             TypeError::EffectRowMismatch { span, .. } => *span,
             TypeError::ResumeTypeMismatch { span, .. } => *span,
+            TypeError::MustMessageNotStr { span } => *span,
+            TypeError::FStringNonDisplayable { span, .. } => *span,
         }
     }
 
@@ -780,6 +865,15 @@ impl TypeError {
                 expected.description(),
                 found.description()
             ),
+            TypeError::MustMessageNotStr { .. } => {
+                "`must` message expression must be of type Str".to_string()
+            }
+            TypeError::FStringNonDisplayable { found, .. } => {
+                format!(
+                    "f-string interpolation: type {} is not displayable (must be Int, Float, Bool, or Str)",
+                    found.description()
+                )
+            }
         }
     }
 
@@ -936,6 +1030,15 @@ impl TypeError {
                 expected.description(),
                 found.description()
             ),
+            TypeError::MustMessageNotStr { .. } => {
+                "`must` message must be of type `Str`".to_string()
+            }
+            TypeError::FStringNonDisplayable { found, .. } => {
+                format!(
+                    "f-string interpolation: `{}` is not displayable; expected `Int`, `Float`, `Bool`, or `Str`",
+                    found.description()
+                )
+            }
         }
     }
 }

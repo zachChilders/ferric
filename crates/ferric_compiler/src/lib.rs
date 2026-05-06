@@ -27,8 +27,8 @@ use std::collections::HashMap;
 
 use ferric_common::{
     BinOp, Chunk, Constant, DefId, EffectTags, Expr, HandleExpr, HandlerClause, HandlerEntry,
-    HandlerTable, ImplMethod, Interner, Item, Literal, MatchArm, NamedArg, NodeId, Op, Param,
-    ParseResult, Pattern, PerformExpr, Program, RequireMode, RequireStmt, ResolveResult,
+    HandlerTable, ImplMethod, Interner, Item, LetPattern, Literal, MatchArm, NamedArg, NodeId, Op,
+    Param, ParseResult, Pattern, PerformExpr, Program, RequireMode, RequireStmt, ResolveResult,
     ResumeExpr, ShellPart, Stmt, Symbol, Ty, TypeResult, UnOp,
 };
 
@@ -338,10 +338,34 @@ impl<'a> Compiler<'a> {
 
     fn compile_stmt(&mut self, stmt: &Stmt) {
         match stmt {
-            Stmt::Let { name, init, .. } => {
+            Stmt::Let { pattern, init, .. } => {
                 self.compile_expr(init);
-                let slot = self.bind_local(*name);
-                self.emit(Op::StoreSlot(slot));
+                match pattern {
+                    LetPattern::Ident(name) => {
+                        let slot = self.bind_local(*name);
+                        self.emit(Op::StoreSlot(slot));
+                    }
+                    LetPattern::Tuple(names) => {
+                        // Destructure tuple elements by index and bind to slots
+                        for (i, name) in names.iter().enumerate() {
+                            self.emit(Op::Dup);
+                            self.emit(Op::GetTupleField(i as u8));
+                            let slot = self.bind_local(*name);
+                            self.emit(Op::StoreSlot(slot));
+                        }
+                        self.emit(Op::Pop); // pop the tuple itself
+                    }
+                    LetPattern::Struct { fields, .. } => {
+                        // Extract each named field by index (declaration order)
+                        for (i, name) in fields.iter().enumerate() {
+                            self.emit(Op::Dup);
+                            self.emit(Op::GetField(i as u8));
+                            let slot = self.bind_local(*name);
+                            self.emit(Op::StoreSlot(slot));
+                        }
+                        self.emit(Op::Pop); // pop the struct itself
+                    }
+                }
             }
             Stmt::Assign { target, value, .. } => {
                 self.compile_expr(value);
@@ -721,6 +745,35 @@ impl<'a> Compiler<'a> {
             // M9: `resume k with value` — push the continuation handle
             // and the resume value, then emit `Op::Resume`.
             Expr::Resume(r) => self.compile_resume(r),
+            // M10: new expression forms. Full code generation deferred to
+            // later tasks. Emit a Unit placeholder so the stack stays
+            // balanced and existing programs are unaffected (the parser
+            // does not produce these nodes yet).
+            Expr::FString(f) => {
+                // Walk segments to register any sub-expression node ids
+                for seg in &f.segments {
+                    if let ferric_common::FStringSegmentKind::Expr(e) = &seg.kind {
+                        self.compile_expr(e);
+                        self.emit(Op::Pop);
+                    }
+                }
+                self.emit(Op::Unit);
+            }
+            Expr::Pipeline(p) => {
+                self.compile_expr(&p.lhs);
+                self.emit(Op::Pop);
+                self.compile_expr(&p.rhs);
+            }
+            Expr::Propagate(p) => {
+                self.compile_expr(&p.operand);
+            }
+            Expr::Must(m) => {
+                self.compile_expr(&m.operand);
+                if let Some(msg) = &m.message {
+                    self.compile_expr(msg);
+                    self.emit(Op::Pop);
+                }
+            }
         }
     }
 
