@@ -219,6 +219,96 @@ fn has_type_vars(ty: &Ty, subst: &Substitution) -> bool {
     !s.is_empty()
 }
 
+/// Renames every `TyVar` in `ty` to a fresh inferer-allocated variable,
+/// preserving sharing through `mapping`. Used to fresh-instantiate trait
+/// method signatures at each call site so the registry's sentinel
+/// `TyVar`s don't bleed across call sites.
+fn rename_tyvars(ty: &Ty, mapping: &mut HashMap<TyVar, TyVar>, next: &mut u32) -> Ty {
+    match ty {
+        Ty::Var(v) => {
+            let fresh = *mapping.entry(*v).or_insert_with(|| {
+                let id = *next;
+                *next += 1;
+                TyVar(id)
+            });
+            Ty::Var(fresh)
+        }
+        Ty::Fn { params, ret } => Ty::Fn {
+            params: params
+                .iter()
+                .map(|p| rename_tyvars(p, mapping, next))
+                .collect(),
+            ret: Box::new(rename_tyvars(ret, mapping, next)),
+        },
+        Ty::Tuple(elems) => Ty::Tuple(
+            elems
+                .iter()
+                .map(|t| rename_tyvars(t, mapping, next))
+                .collect(),
+        ),
+        Ty::Struct {
+            def_id,
+            name,
+            fields,
+        } => Ty::Struct {
+            def_id: *def_id,
+            name: *name,
+            fields: fields
+                .iter()
+                .map(|(n, t)| (*n, rename_tyvars(t, mapping, next)))
+                .collect(),
+        },
+        Ty::Enum {
+            def_id,
+            name,
+            variants,
+        } => Ty::Enum {
+            def_id: *def_id,
+            name: *name,
+            variants: variants
+                .iter()
+                .map(|(vn, payload)| {
+                    (
+                        *vn,
+                        payload
+                            .iter()
+                            .map(|t| rename_tyvars(t, mapping, next))
+                            .collect(),
+                    )
+                })
+                .collect(),
+        },
+        Ty::Array(inner) => Ty::Array(Box::new(rename_tyvars(inner, mapping, next))),
+        Ty::Option(inner) => Ty::Option(Box::new(rename_tyvars(inner, mapping, next))),
+        Ty::Result(ok, err) => Ty::Result(
+            Box::new(rename_tyvars(ok, mapping, next)),
+            Box::new(rename_tyvars(err, mapping, next)),
+        ),
+        Ty::Async(inner) => Ty::Async(Box::new(rename_tyvars(inner, mapping, next))),
+        Ty::Handle(inner) => Ty::Handle(Box::new(rename_tyvars(inner, mapping, next))),
+        Ty::Poll(inner) => Ty::Poll(Box::new(rename_tyvars(inner, mapping, next))),
+        Ty::Opaque { def_id, inner } => Ty::Opaque {
+            def_id: *def_id,
+            inner: Box::new(rename_tyvars(inner, mapping, next)),
+        },
+        Ty::Eff(row, t) => Ty::Eff(
+            row.iter()
+                .map(|e| ferric_common::EffectRef {
+                    name: e.name,
+                    args: e
+                        .args
+                        .iter()
+                        .map(|a| rename_tyvars(a, mapping, next))
+                        .collect(),
+                })
+                .collect(),
+            Box::new(rename_tyvars(t, mapping, next)),
+        ),
+        // Concrete leaf types pass through unchanged.
+        _ => ty.clone(),
+    }
+}
+
 // ============================================================================
 // Type environment
 // ============================================================================
@@ -374,6 +464,12 @@ struct TypeInfer<'a> {
     node_types: HashMap<NodeId, Ty>,
     /// Output: each method-call NodeId → resolved impl method DefId.
     method_dispatch: HashMap<NodeId, DefId>,
+    /// Output: each call-argument NodeId → `DefId` of the `To` impl method
+    /// that should be invoked to coerce the written argument to the
+    /// parameter's type. Populated only when normal unification at a call
+    /// argument position fails *and* exactly one `To<param_ty>` impl with
+    /// `arg_ty` as source is registered. (Coercion task 3.)
+    coercions: HashMap<NodeId, DefId>,
     /// Pending method-call resolutions: receiver NodeId, method name,
     /// the call's MethodCall NodeId, and source span. Resolved post-pass
     /// after the substitution settles.
@@ -410,6 +506,7 @@ impl<'a> TypeInfer<'a> {
             type_alias_resolving: HashSet::new(),
             node_types: HashMap::new(),
             method_dispatch: HashMap::new(),
+            coercions: HashMap::new(),
             pending_methods: Vec::new(),
             shell_interp_nodes: Vec::new(),
             errors: Vec::new(),
@@ -426,6 +523,22 @@ impl<'a> TypeInfer<'a> {
         let v = TyVar(self.next_tyvar);
         self.next_tyvar += 1;
         v
+    }
+
+    /// Fresh-instantiates a trait method signature: every `TyVar` appearing
+    /// in `params` or `ret` is replaced by a new inferer-allocated tyvar,
+    /// preserving identity (so a Var that occurs in multiple places is
+    /// renamed to the *same* fresh var). Without this each call site would
+    /// share the registry's sentinel TyVars across calls and unification at
+    /// one call site would leak into another.
+    fn instantiate_method_sig(&mut self, params: &[Ty], ret: &Ty) -> (Vec<Ty>, Ty) {
+        let mut mapping: HashMap<TyVar, TyVar> = HashMap::new();
+        let new_params = params
+            .iter()
+            .map(|t| rename_tyvars(t, &mut mapping, &mut self.next_tyvar))
+            .collect();
+        let new_ret = rename_tyvars(ret, &mut mapping, &mut self.next_tyvar);
+        (new_params, new_ret)
     }
 
     /// Adapter: lets `ferric_stdlib_meta::Signature::Poly` builders mint
@@ -1264,6 +1377,97 @@ impl<'a> TypeInfer<'a> {
                             span: *span,
                         });
                     }
+                    Ty::Fn {
+                        params: param_tys,
+                        ret: callee_ret,
+                    } => {
+                        // Per-argument unification with implicit-coercion
+                        // fallback (Coercion task 3). We unify each
+                        // (arg_ty, param_ty) pair individually so that when a
+                        // single argument fails to unify we can attempt a
+                        // `To<param_ty>` lookup with `arg_ty` as the source.
+                        // The function return type is unified separately
+                        // below to keep the spawn/join handling identical.
+                        //
+                        // This branch is identical in observable behaviour to
+                        // the bulk `self.unify(&callee_ty, &expected_fn_ty,
+                        // *span)` for arguments that unify directly — the
+                        // emitted error variant is the same `TypeError::Mismatch`.
+                        let dedicated = matches!(callee_name, Some("spawn") | Some("join"));
+                        let param_tys = param_tys.clone();
+                        let callee_ret = (**callee_ret).clone();
+                        for (idx, (arg_ty, param_ty)) in
+                            arg_tys.iter().zip(param_tys.iter()).enumerate()
+                        {
+                            if self.try_unify(arg_ty, param_ty).is_ok() {
+                                continue;
+                            }
+                            // Unification failed. Attempt a single-hop
+                            // `To<param_ty>` coercion if both types are
+                            // concrete after substitution.
+                            let arg_resolved = self.subst.apply(arg_ty);
+                            let param_resolved = self.subst.apply(param_ty);
+                            let arg_span = arg_exprs.get(idx).map(|e| e.span()).unwrap_or(*span);
+                            let arg_node_id = arg_exprs.get(idx).map(|e| e.id());
+
+                            if matches!(arg_resolved, Ty::Var(_))
+                                || matches!(param_resolved, Ty::Var(_))
+                            {
+                                // Either side is still a type variable —
+                                // coercion only fires between concrete types.
+                                // Fall back to the normal mismatch error.
+                                if !dedicated {
+                                    self.errors.push(TypeError::Mismatch {
+                                        expected: param_resolved,
+                                        found: arg_resolved,
+                                        span: arg_span,
+                                    });
+                                }
+                                continue;
+                            }
+
+                            let candidates =
+                                self.registry.find_to_impls(&arg_resolved, &param_resolved);
+                            match candidates.len() {
+                                0 => {
+                                    if !dedicated {
+                                        self.errors.push(TypeError::Mismatch {
+                                            expected: param_resolved,
+                                            found: arg_resolved,
+                                            span: arg_span,
+                                        });
+                                    }
+                                }
+                                1 => {
+                                    if let Some(node_id) = arg_node_id {
+                                        self.coercions.insert(node_id, candidates[0]);
+                                    }
+                                    // Effective arg type is `param_ty`. We
+                                    // intentionally do NOT extend the
+                                    // substitution with the coercion result;
+                                    // the coercion is purely a recorded
+                                    // call-site rewrite for the compiler.
+                                }
+                                _ => {
+                                    self.errors.push(TypeError::AmbiguousCoercion {
+                                        found: arg_resolved,
+                                        expected: param_resolved,
+                                        candidates,
+                                        span: arg_span,
+                                    });
+                                }
+                            }
+                        }
+                        // Unify the return type so callers see the right Ty
+                        // for the call expression. Use try_unify for
+                        // spawn/join to avoid double-reporting; otherwise
+                        // surface a normal mismatch.
+                        if !dedicated {
+                            self.unify(&callee_ret, &ret_ty, *span);
+                        } else {
+                            let _ = self.try_unify(&callee_ret, &ret_ty);
+                        }
+                    }
                     _ => {
                         // For `spawn`/`join` we already pushed a dedicated
                         // diagnostic above; skip the generic unify so we don't
@@ -1581,7 +1785,9 @@ impl<'a> TypeInfer<'a> {
                     if let Some(trait_def) = self.registry.traits.get(&trait_name)
                         && let Some(sig) = trait_def.methods.get(method)
                     {
-                        method_sig = Some((sig.params.clone(), sig.ret.clone()));
+                        // Fresh-instantiate the trait method's TyVars so the
+                        // registry's sentinel vars don't leak across calls.
+                        method_sig = Some(self.instantiate_method_sig(&sig.params, &sig.ret));
                     }
                 }
 
@@ -1596,7 +1802,7 @@ impl<'a> TypeInfer<'a> {
                         if let Some(trait_def) = self.registry.traits.get(bound)
                             && let Some(sig) = trait_def.methods.get(method)
                         {
-                            method_sig = Some((sig.params.clone(), sig.ret.clone()));
+                            method_sig = Some(self.instantiate_method_sig(&sig.params, &sig.ret));
                             break;
                         }
                     }
@@ -2774,6 +2980,7 @@ impl<'a> TypeInfer<'a> {
 
         let mut result = TypeResult::new(resolved, self.errors);
         result.method_dispatch = self.method_dispatch;
+        result.coercions = self.coercions;
         result
     }
 }
@@ -3082,6 +3289,7 @@ mod tests {
             type_alias_resolving: HashSet::new(),
             node_types: HashMap::new(),
             method_dispatch: HashMap::new(),
+            coercions: HashMap::new(),
             pending_methods: Vec::new(),
             shell_interp_nodes: vec![],
             errors: vec![],
@@ -3112,6 +3320,7 @@ mod tests {
             type_alias_resolving: HashSet::new(),
             node_types: HashMap::new(),
             method_dispatch: HashMap::new(),
+            coercions: HashMap::new(),
             pending_methods: Vec::new(),
             shell_interp_nodes: vec![],
             errors: vec![],
@@ -3144,6 +3353,7 @@ mod tests {
             type_alias_resolving: HashSet::new(),
             node_types: HashMap::new(),
             method_dispatch: HashMap::new(),
+            coercions: HashMap::new(),
             pending_methods: Vec::new(),
             shell_interp_nodes: vec![],
             errors: vec![],
@@ -3186,6 +3396,7 @@ mod tests {
             type_alias_resolving: HashSet::new(),
             node_types: HashMap::new(),
             method_dispatch: HashMap::new(),
+            coercions: HashMap::new(),
             pending_methods: Vec::new(),
             shell_interp_nodes: vec![],
             errors: vec![],

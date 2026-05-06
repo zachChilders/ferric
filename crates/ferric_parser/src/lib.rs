@@ -1417,6 +1417,7 @@ impl<'a> Parser<'a> {
     }
 
     /// Parses a trait definition: `trait Name { fn method(self, params) -> Ret; ... }`
+    /// or `trait Name<T, U: Bound> { ... }` for traits with generic params.
     fn parse_trait_def(&mut self) -> Option<Item> {
         let start_span = self.peek().span;
         self.advance(); // consume 'trait'
@@ -1436,6 +1437,13 @@ impl<'a> Parser<'a> {
                 });
                 return None;
             }
+        };
+
+        // Optional generic parameters on the trait itself (`trait To<T>`).
+        let type_params = if self.check(&TokenKind::Lt) {
+            self.parse_type_params()
+        } else {
+            Vec::new()
         };
 
         if self.expect(TokenKind::LBrace, "'{'").is_err() {
@@ -1504,12 +1512,14 @@ impl<'a> Parser<'a> {
         Some(Item::TraitDef {
             id,
             name,
+            type_params,
             methods,
             span,
         })
     }
 
-    /// Parses an impl block: `impl Trait for Type { fn method(self, ...) { body } ... }`.
+    /// Parses an impl block: `impl Trait for Type { fn method(self, ...) { body } ... }`,
+    /// or `impl Trait<Arg1, ...> for Type { ... }` for impls of generic traits.
     fn parse_impl_block(&mut self) -> Option<Item> {
         let start_span = self.peek().span;
         self.advance(); // consume 'impl'
@@ -1529,6 +1539,25 @@ impl<'a> Parser<'a> {
                 });
                 return None;
             }
+        };
+
+        // Optional generic arguments to the trait (`impl To<Str> for ...`).
+        let trait_args = if self.check(&TokenKind::Lt) {
+            let _ = self.expect(TokenKind::Lt, "'<'");
+            let mut args: Vec<TypeAnnotation> = Vec::new();
+            while !self.check(&TokenKind::Gt) && !self.is_at_end() {
+                match self.parse_type() {
+                    Some(t) => args.push(t),
+                    None => break,
+                }
+                if !self.match_token(&TokenKind::Comma) {
+                    break;
+                }
+            }
+            let _ = self.expect(TokenKind::Gt, "'>'");
+            args
+        } else {
+            Vec::new()
         };
 
         if self.expect(TokenKind::For, "'for'").is_err() {
@@ -1575,6 +1604,7 @@ impl<'a> Parser<'a> {
         Some(Item::ImplBlock {
             id,
             trait_name,
+            trait_args,
             type_name,
             methods,
             span,

@@ -519,6 +519,8 @@ dependencies = [
  "ferric_lexer",
  "ferric_parser",
  "ferric_resolve",
+ "ferric_stdlib",
+ "ferric_traits",
 ]
 
 [[package]]
@@ -553,7 +555,12 @@ name = "ferric_infer"
 version = "0.1.0"
 dependencies = [
  "ferric_common",
+ "ferric_lexer",
+ "ferric_parser",
+ "ferric_resolve",
+ "ferric_stdlib",
  "ferric_stdlib_meta",
+ "ferric_traits",
 ]
 
 [[package]]
@@ -654,6 +661,10 @@ name = "ferric_traits"
 version = "0.1.0"
 dependencies = [
  "ferric_common",
+ "ferric_lexer",
+ "ferric_parser",
+ "ferric_resolve",
+ "ferric_stdlib",
 ]
 
 [[package]]

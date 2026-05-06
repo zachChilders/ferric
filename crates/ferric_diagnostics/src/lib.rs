@@ -531,6 +531,32 @@ impl<'a> Renderer<'a> {
                 notes: vec![],
                 help: Some(format!("add `export` to the definition in \"{path}\"")),
             }),
+            ResolveError::OrphanImpl {
+                trait_name,
+                source,
+                target,
+                span,
+            } => self.render(Diag {
+                kind: "error",
+                message: &format!(
+                    "orphan impl: `impl {}<{}> for {}` — neither `{}` nor `{}` is owned by this crate",
+                    self.name(*trait_name),
+                    target.description(),
+                    source.description(),
+                    source.description(),
+                    target.description(),
+                ),
+                primary: Some(Label {
+                    span: *span,
+                    message: Some("orphan impl".to_string()),
+                }),
+                secondary: vec![],
+                notes: vec![],
+                help: Some(
+                    "an `impl Trait<T> for U` must be defined in the crate that owns either `U` or `T`"
+                        .to_string(),
+                ),
+            }),
         }
     }
 
@@ -1080,6 +1106,45 @@ impl<'a> Renderer<'a> {
                         .to_string(),
                 ),
             }),
+            TypeError::AmbiguousCoercion {
+                found,
+                expected,
+                candidates,
+                span,
+            } => {
+                // The candidates are `DefId`s. The renderer doesn't currently
+                // resolve them to source locations — Task 4 (LSP hints) will
+                // wire in a `DefInfo` lookup. For now, render numerically so
+                // the diagnostic is still actionable.
+                let candidate_list = candidates
+                    .iter()
+                    .map(|d| format!("def #{}", d.0))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                self.render(Diag {
+                    kind: "error",
+                    message: &format!(
+                        "ambiguous implicit coercion: cannot decide which `To<{}>` impl to apply to value of type `{}`. Candidates: {}",
+                        expected.description(),
+                        found.description(),
+                        candidate_list,
+                    ),
+                    primary: Some(Label {
+                        span: *span,
+                        message: Some(format!(
+                            "value is `{}`, expected `{}`",
+                            found.description(),
+                            expected.description()
+                        )),
+                    }),
+                    secondary: vec![],
+                    notes: vec![],
+                    help: Some(
+                        "write the conversion explicitly (e.g. with an `as` cast or `.to()` call) to disambiguate"
+                            .to_string(),
+                    ),
+                })
+            }
         }
     }
 
