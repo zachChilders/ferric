@@ -95,7 +95,7 @@ const _: fn() = || {
     check::<ImplDef>();
     check::<MethodSignature>();
     check::<ImplTy>();
-    check::<TraitOrigin>();
+    check::<CrateOrigin>();
     check::<LexError>();
     check::<ParseError>();
     check::<ParseWarning>();

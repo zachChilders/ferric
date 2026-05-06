@@ -11,11 +11,16 @@
 //!
 //! Coercion task 2 added an optional pre-seeded "built-in" registry passed
 //! by stdlib (containing the `To<T>` trait and its built-in impls), and an
-//! orphan-rule pass that flags user impls of stdlib-owned types/traits.
+//! orphan-rule pass that flags user impls.
+//!
+//! The orphan check is uniform across stdlib and user impls: an impl is
+//! allowed iff its registering crate owns at least one of (trait, source
+//! type, target args). Stdlib impls pass because stdlib owns the trait and
+//! types — there's no special-case bypass.
 
 use ferric_common::{
-    ImplDef, ImplTy, Interner, Item, MethodSignature, ParseResult, ResolveError, ResolveResult,
-    Symbol, TraitDef, TraitOrigin, TraitRegistry, Ty, TypeAnnotation,
+    check_orphan, CrateOrigin, ImplDef, ImplTy, Interner, Item, MethodSignature, ParseResult,
+    ResolveError, ResolveResult, Symbol, TraitDef, TraitRegistry, Ty, TypeAnnotation,
 };
 
 /// Output of the trait stage. Returned in addition to the registry so
@@ -73,14 +78,15 @@ pub fn build_registry_seeded(
                     name: *name,
                     type_params: type_params.iter().map(|p| p.name).collect(),
                     methods: method_table,
-                    origin: TraitOrigin::User,
+                    origin: CrateOrigin::User,
                 },
             );
         }
     }
 
-    // Pass 2: collect every user impl block, applying the orphan rule to
-    // each one as it is registered.
+    // Pass 2: collect every user impl block, applying the uniform orphan
+    // check via `ferric_common::check_orphan`. Stdlib impls were validated
+    // at seed time; user impls are validated here. Same rule, same code.
     for item in &ast.items {
         if let Item::ImplBlock {
             trait_name,
@@ -101,18 +107,11 @@ pub fn build_registry_seeded(
                 .filter_map(|ann| impl_ty_for_annotation(ann, interner, resolve))
                 .collect();
 
-            // Orphan-rule check: a user impl is allowed only if at least one
-            // of (trait, source, target args) is owned by user code. Built-in
-            // traits/impls are always stdlib-owned and skipped here.
-            let trait_is_user = registry
-                .traits
-                .get(trait_name)
-                .map(|t| t.origin == TraitOrigin::User)
-                .unwrap_or(true);
-            let source_is_user = is_user_owned(&for_type);
-            let any_arg_is_user = arg_keys.iter().any(is_user_owned);
+            let trait_origin = registry.trait_origin(*trait_name);
+            let source_origin = for_type.origin();
+            let arg_origins: Vec<CrateOrigin> = arg_keys.iter().map(ImplTy::origin).collect();
 
-            if !trait_is_user && !source_is_user && !any_arg_is_user {
+            if !check_orphan(CrateOrigin::User, trait_origin, source_origin, &arg_origins) {
                 let target_ty = trait_args
                     .first()
                     .and_then(|ann| ty_for_annotation(ann, interner, resolve))
@@ -137,7 +136,7 @@ pub fn build_registry_seeded(
                 for_type,
                 trait_args: arg_keys,
                 methods: method_def_ids,
-                origin: TraitOrigin::User,
+                origin: CrateOrigin::User,
             });
         }
     }
@@ -155,13 +154,6 @@ pub fn build_registry(
     interner: &Interner,
 ) -> TraitRegistry {
     build_registry_seeded(ast, resolve, interner, TraitRegistry::new()).registry
-}
-
-/// Returns true if `ty` is owned by user code (a struct/enum declared in
-/// the program being compiled). Built-in primitives and `ShellOutput` are
-/// stdlib-owned and never qualify.
-fn is_user_owned(ty: &ImplTy) -> bool {
-    matches!(ty, ImplTy::Struct(_) | ImplTy::Enum(_))
 }
 
 /// Best-effort `Ty` reconstruction from an `ImplTy`. Used to fill the

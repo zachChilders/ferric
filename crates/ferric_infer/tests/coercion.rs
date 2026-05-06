@@ -319,7 +319,7 @@ fn ambiguous_coercion_emits_ambiguous_error() {
         for_type: ferric_common::ImplTy::Int,
         trait_args: vec![ferric_common::ImplTy::Float],
         methods: method_def_ids,
-        origin: ferric_common::TraitOrigin::User,
+        origin: ferric_common::CrateOrigin::User,
     });
     assert_eq!(
         registry.find_to_impls(&Ty::Int, &Ty::Float).len(),
@@ -395,7 +395,7 @@ fn ambiguous_coercion_error_carries_span() {
         for_type: ferric_common::ImplTy::Int,
         trait_args: vec![ferric_common::ImplTy::Float],
         methods: method_def_ids,
-        origin: ferric_common::TraitOrigin::User,
+        origin: ferric_common::CrateOrigin::User,
     });
 
     let type_result = typecheck(&parse_result, &resolve_result, &interner, &registry);

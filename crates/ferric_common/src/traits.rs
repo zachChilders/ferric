@@ -27,6 +27,24 @@ pub enum ImplTy {
 }
 
 impl ImplTy {
+    /// Crate that owns this type for orphan-rule purposes. Built-in
+    /// primitives, `ShellOutput`, and tuples are stdlib-owned (the language
+    /// defines them). User-declared structs and enums are user-owned. If
+    /// stdlib later defines a struct/enum, this mapping will need a known
+    /// stdlib-DefId set — for now no such types exist.
+    pub fn origin(&self) -> CrateOrigin {
+        match self {
+            ImplTy::Int
+            | ImplTy::Float
+            | ImplTy::Bool
+            | ImplTy::Str
+            | ImplTy::Unit
+            | ImplTy::ShellOutput
+            | ImplTy::Tuple(_) => CrateOrigin::Stdlib,
+            ImplTy::Struct(_) | ImplTy::Enum(_) => CrateOrigin::User,
+        }
+    }
+
     /// Maps a fully-resolved `Ty` to an `ImplTy`. Returns `None` for type
     /// variables (which means the receiver type wasn't concrete enough at
     /// dispatch time).
@@ -80,19 +98,25 @@ pub struct TraitDef {
     #[serde(default)]
     pub type_params: Vec<Symbol>,
     pub methods: HashMap<Symbol, MethodSignature>,
-    /// Whether this trait is built into the stdlib (and therefore stdlib-owned
-    /// for orphan-rule purposes).
+    /// Crate that registered this trait (stdlib or user). Drives the orphan
+    /// rule uniformly: an impl is allowed if at least one of its head types
+    /// or its trait shares the registering crate's origin.
     #[serde(default)]
-    pub origin: TraitOrigin,
+    pub origin: CrateOrigin,
 }
 
-/// Whether a trait or impl was registered by stdlib (built-in) or by user
-/// source code. Determines orphan-rule ownership.
+/// Identity of the crate that registered a trait, type, or impl. The orphan
+/// rule applies the same check to every impl: the registering crate must own
+/// at least one of (trait, source type, target args). Stdlib-seeded impls
+/// pass naturally because stdlib owns the built-in trait and types — no
+/// special-case bypass.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
-pub enum TraitOrigin {
-    /// Built into the standard library — stdlib owns the trait/impl.
+pub enum CrateOrigin {
+    /// Owned by the standard library (built-in primitives, `ShellOutput`,
+    /// stdlib-registered traits and impls).
     Stdlib,
-    /// Declared in user source code — the user crate owns the trait/impl.
+    /// Owned by user source code (declared structs/enums, user trait
+    /// declarations, user impl blocks).
     #[default]
     User,
 }
@@ -109,10 +133,9 @@ pub struct ImplDef {
     pub trait_args: Vec<ImplTy>,
     /// Method name → DefId of the concrete function that implements it.
     pub methods: HashMap<Symbol, DefId>,
-    /// Whether this impl was built into the stdlib (and therefore stdlib-owned
-    /// for orphan-rule purposes).
+    /// Crate that registered this impl (stdlib or user).
     #[serde(default)]
-    pub origin: TraitOrigin,
+    pub origin: CrateOrigin,
 }
 
 /// Registry of every trait and impl in the program.
@@ -187,6 +210,17 @@ impl TraitRegistry {
         None
     }
 
+    /// Origin of a trait by name. Defaults to `User` if the trait isn't in
+    /// the registry — being conservative; the orphan check only allows an
+    /// impl when *some* part has the registering origin, so an unknown
+    /// trait won't help a user impl pass.
+    pub fn trait_origin(&self, trait_name: Symbol) -> CrateOrigin {
+        self.traits
+            .get(&trait_name)
+            .map(|t| t.origin)
+            .unwrap_or(CrateOrigin::User)
+    }
+
     /// Returns the `DefId`s of every `to` method registered on a `To<target>
     /// for source` impl. Used by the type checker (Coercion Task 3) to look up
     /// candidate coercion methods.
@@ -217,4 +251,20 @@ impl TraitRegistry {
             .filter_map(|i| i.methods.get(&to_method).copied())
             .collect()
     }
+}
+
+/// Coherence check: an impl `Trait<args> for Source` registered by
+/// `registering` is allowed iff `registering` owns at least one of
+/// (trait, source, any target arg). Applies uniformly to stdlib-seeded and
+/// user impls — stdlib impls of stdlib traits over stdlib types pass
+/// because stdlib owns every piece, not because they're exempt.
+pub fn check_orphan(
+    registering: CrateOrigin,
+    trait_origin: CrateOrigin,
+    source_origin: CrateOrigin,
+    arg_origins: &[CrateOrigin],
+) -> bool {
+    trait_origin == registering
+        || source_origin == registering
+        || arg_origins.contains(&registering)
 }

@@ -9,8 +9,8 @@
 //! pipeline call [`seed_to_trait`] to install the same registry shape.
 
 use ferric_common::{
-    DefId, ImplDef, ImplTy, Interner, MethodSignature, ResolveResult, Symbol, TraitDef,
-    TraitOrigin, TraitRegistry, Ty, TyVar,
+    check_orphan, CrateOrigin, DefId, ImplDef, ImplTy, Interner, MethodSignature, ResolveResult,
+    Symbol, TraitDef, TraitRegistry, Ty, TyVar,
 };
 
 /// Internal name of the built-in `To<Float> for Int` method body.
@@ -79,7 +79,7 @@ pub fn extend_with_to_trait(
             name: to_trait_sym,
             type_params: vec![t_param_sym],
             methods,
-            origin: TraitOrigin::Stdlib,
+            origin: CrateOrigin::Stdlib,
         },
     );
     registry.to_trait = Some(to_trait_sym);
@@ -133,11 +133,30 @@ fn insert_impl(
     let mut method_def_ids: std::collections::HashMap<Symbol, DefId> =
         std::collections::HashMap::new();
     method_def_ids.insert(syms.method_sym, def_id);
+
+    // Sanity: the same uniform orphan check that gates user impls. Stdlib
+    // owns `To` and the source/target types here, so this always passes;
+    // a panic would mean someone tried to register a built-in impl over
+    // entirely user-owned types, which is a stdlib bug.
+    let trait_origin = registry.trait_origin(syms.trait_sym);
+    let source_origin = for_ty.origin();
+    let arg_origins = vec![target.origin()];
+    debug_assert!(
+        check_orphan(
+            CrateOrigin::Stdlib,
+            trait_origin,
+            source_origin,
+            &arg_origins,
+        ),
+        "stdlib-seeded impl `{}` violates the orphan rule",
+        native_name,
+    );
+
     registry.insert_impl(ImplDef {
         trait_name: syms.trait_sym,
         for_type: for_ty,
         trait_args: vec![target],
         methods: method_def_ids,
-        origin: TraitOrigin::Stdlib,
+        origin: CrateOrigin::Stdlib,
     });
 }
