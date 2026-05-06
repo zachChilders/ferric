@@ -9,8 +9,8 @@
 //! pipeline call [`seed_to_trait`] to install the same registry shape.
 
 use ferric_common::{
-    check_orphan, CrateOrigin, DefId, ImplDef, ImplTy, Interner, MethodSignature, ResolveResult,
-    Symbol, TraitDef, TraitRegistry, Ty, TyVar,
+    CrateOrigin, DefId, ImplDef, ImplTy, Interner, MethodSignature, ResolveResult, Symbol,
+    TraitDef, TraitRegistry, Ty, TyVar, check_orphan,
 };
 
 /// Internal name of the built-in `To<Float> for Int` method body.

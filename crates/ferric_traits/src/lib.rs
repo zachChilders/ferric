@@ -19,8 +19,8 @@
 //! types — there's no special-case bypass.
 
 use ferric_common::{
-    check_orphan, CrateOrigin, ImplDef, ImplTy, Interner, Item, MethodSignature, ParseResult,
-    ResolveError, ResolveResult, Symbol, TraitDef, TraitRegistry, Ty, TypeAnnotation,
+    CrateOrigin, ImplDef, ImplTy, Interner, Item, MethodSignature, ParseResult, ResolveError,
+    ResolveResult, Symbol, TraitDef, TraitRegistry, Ty, TypeAnnotation, check_orphan,
 };
 
 /// Output of the trait stage. Returned in addition to the registry so
