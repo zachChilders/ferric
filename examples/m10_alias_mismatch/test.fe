@@ -1,0 +1,11 @@
+// M10 Task 6 Part C: passing a `Url` where a `Str` is expected (without
+// casting) produces a `TypeError::AliasMismatch`.
+
+type Url = Str
+
+fn takes_str(s: Str) -> Unit {
+    println(s: s)
+}
+
+let url: Url = "https://example.com" as Url
+takes_str(s: url)   // ERROR: expected `Str`, got `Url`

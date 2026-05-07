@@ -13,6 +13,11 @@ pub struct NamedArg {
     pub span: Span,
     pub name: Symbol,
     pub value: Box<Expr>,
+    /// `true` when the parser inferred the name from a bare identifier
+    /// (M10 implicit named args). `false` for explicit `name: value` args.
+    /// Informational only — downstream stages do not branch on it.
+    #[serde(default)]
+    pub implicit: bool,
 }
 
 /// A part of a shell command line in the AST.
@@ -396,6 +401,109 @@ pub struct ResumeExpr {
     pub value: Box<Expr>,
 }
 
+/// A loop label, e.g. `'outer` in `'outer: while cond { ... }`.
+///
+/// M10 (Task 5). Carries the parsed identifier (without the leading tick) so
+/// the resolver can match `break 'outer` / `continue 'outer` against the label
+/// stack.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Label {
+    pub span: Span,
+    /// The identifier after the `'` sigil.
+    pub name: Symbol,
+}
+
+/// One segment of a parsed f-string literal. M10 (Task 2).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FStringSegment {
+    pub span: Span,
+    pub kind: FStringSegmentKind,
+}
+
+/// What an `FStringSegment` carries: a literal piece of text, or an embedded
+/// expression to be interpolated.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum FStringSegmentKind {
+    /// Literal text between `{...}` interpolations. The lexer handles `{{`/`}}`
+    /// escapes during emission so this is the post-escape string.
+    Lit(String),
+    /// `{expr}` — any Ferric expression. `to_str` coercion is applied later by
+    /// the type checker for non-`Str` operands.
+    Expr(Box<Expr>),
+}
+
+/// `f"..."` expression — a sequence of literal and interpolated segments
+/// concatenated into a single `Str` value. M10 (Task 2).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FStringExpr {
+    pub id: NodeId,
+    pub span: Span,
+    pub segments: Vec<FStringSegment>,
+}
+
+/// `lhs |> rhs` pipeline expression. The resolver desugars this to a
+/// `CallExpr` where `lhs` is prepended as an implicit first named argument
+/// (M10 Task 3); after the resolver, this variant no longer exists.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PipelineExpr {
+    pub span: Span,
+    pub lhs: Box<Expr>,
+    /// Must resolve to a `CallExpr` after desugaring.
+    pub rhs: Box<Expr>,
+}
+
+/// `expr?` propagation expression. The operand must be `Option<T>` or
+/// `Result<T, E>`; on `None` / `Err(_)` the enclosing function returns early.
+/// M10 (Task 4).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PropagateExpr {
+    pub span: Span,
+    pub operand: Box<Expr>,
+}
+
+/// `expr must` and `expr must <message>` unwrap expression. The operand must
+/// be `Option<T>` or `Result<T, E>`; on absence the VM panics with the given
+/// message (or a generic message when none is provided). M10 (Task 4).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MustExpr {
+    pub span: Span,
+    pub operand: Box<Expr>,
+    /// Optional `Str` panic message. `None` produces a generic "unwrap failed".
+    pub message: Option<Box<Expr>>,
+}
+
+/// The left-hand-side pattern of a `let` binding. M10 (Task 5).
+///
+/// Existing `let x = ...` becomes `LetPattern::Ident(x)`. Tuple and struct
+/// destructuring are added in Task 5; only irrefutable patterns are allowed
+/// in `let` (no enum patterns — those still require `match`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum LetPattern {
+    /// `let x = ...` — single-name binding (the existing form).
+    Ident(Symbol),
+    /// `let (a, b, c) = ...` — tuple destructuring.
+    Tuple(Vec<Symbol>),
+    /// `let Point { x, y } = ...` — struct destructuring with bare-name
+    /// shorthand fields only (no `field: alias` renaming in this milestone).
+    Struct { name: Symbol, fields: Vec<Symbol> },
+}
+
+/// `receiver.method(args...)` — a method call. M10 retroactive (Task 6 Part B).
+///
+/// Currently the AST encodes method calls inline as `Expr::MethodCall { ... }`
+/// using a struct-style enum variant. This standalone struct is provided for
+/// spec parity and may be used by Task 6 implementations and external tooling
+/// that prefer a single value type. The two forms are interchangeable: the
+/// fields match exactly except that this struct omits the `id`, which is
+/// produced fresh at construction time.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MethodCallExpr {
+    pub span: Span,
+    pub receiver: Box<Expr>,
+    pub method: Symbol,
+    pub args: Vec<NamedArg>,
+}
+
 /// Expression in Ferric.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Expr {
@@ -455,23 +563,43 @@ pub enum Expr {
         id: NodeId,
         span: Span,
     },
-    /// While loop: `while cond { body }`
+    /// While loop: `while cond { body }`. `label` is `Some` for labeled loops
+    /// like `'outer: while ...` (M10 Task 5).
     While {
         cond: Box<Expr>,
         body: Box<Expr>,
+        /// M10 Task 5 — `Some` for labeled loops, `None` otherwise.
+        #[serde(default)]
+        label: Option<Label>,
         id: NodeId,
         span: Span,
     },
-    /// Infinite loop: `loop { body }`
+    /// Infinite loop: `loop { body }`. `label` is `Some` for labeled loops
+    /// (M10 Task 5).
     Loop {
         body: Box<Expr>,
+        /// M10 Task 5 — `Some` for labeled loops, `None` otherwise.
+        #[serde(default)]
+        label: Option<Label>,
         id: NodeId,
         span: Span,
     },
-    /// Break expression
-    Break { id: NodeId, span: Span },
-    /// Continue expression
-    Continue { id: NodeId, span: Span },
+    /// Break expression. `label` targets a specific labeled enclosing loop
+    /// when `Some`; `None` means break the nearest enclosing loop (M10 Task 5).
+    Break {
+        #[serde(default)]
+        label: Option<Label>,
+        id: NodeId,
+        span: Span,
+    },
+    /// Continue expression. `label` targets a specific labeled enclosing loop
+    /// when `Some`; `None` means continue the nearest enclosing loop (M10 Task 5).
+    Continue {
+        #[serde(default)]
+        label: Option<Label>,
+        id: NodeId,
+        span: Span,
+    },
     /// Closure expression: `|| { body }`
     Closure {
         params: Vec<Param>,
@@ -563,6 +691,18 @@ pub enum Expr {
     /// `resume k with value` — resumes the continuation captured by an
     /// enclosing `HandlerClause`. Legal only inside a handler clause body.
     Resume(ResumeExpr),
+    /// `f"..."` interpolated string. M10 (Task 2). The parser produces this
+    /// directly; the type checker assigns `Ty::Str`.
+    FString(FStringExpr),
+    /// `lhs |> rhs` pipeline. M10 (Task 3). The resolver desugars this to a
+    /// `CallExpr` before downstream stages see it.
+    Pipeline(PipelineExpr),
+    /// `expr?` propagation. M10 (Task 4). Operand must be `Option<T>` or
+    /// `Result<T, E>`.
+    Propagate(PropagateExpr),
+    /// `expr must <msg>?` unwrap. M10 (Task 4). Operand must be `Option<T>` or
+    /// `Result<T, E>`; the VM panics with `message` on absence.
+    Must(MustExpr),
 }
 
 /// A single arm of a `match` expression.
@@ -649,6 +789,13 @@ impl Expr {
             Expr::Perform(p) => p.id,
             Expr::Handle(h) => h.id,
             Expr::Resume(r) => r.id,
+            Expr::FString(e) => e.id,
+            // M10 stubs: these variants aren't emitted by the parser yet
+            // (Tasks 3-4 wire them up). They carry no `id` field of their
+            // own yet — Task 1 was data-structure scaffolding only — so
+            // callers that hit them before downstream tasks land would
+            // have a bug; surface that with a sentinel `NodeId::new(0)`.
+            Expr::Pipeline(_) | Expr::Propagate(_) | Expr::Must(_) => NodeId::new(0),
         }
     }
 
@@ -682,6 +829,10 @@ impl Expr {
             Expr::Perform(p) => p.span,
             Expr::Handle(h) => h.span,
             Expr::Resume(r) => r.span,
+            Expr::FString(e) => e.span,
+            Expr::Pipeline(e) => e.span,
+            Expr::Propagate(e) => e.span,
+            Expr::Must(e) => e.span,
         }
     }
 }
@@ -689,9 +840,14 @@ impl Expr {
 /// Statement in Ferric.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Stmt {
-    /// Let binding: `let x: Type = expr` or `let mut x: Type = expr`
+    /// Let binding: `let x: Type = expr` or `let mut x: Type = expr`.
+    ///
+    /// As of M10 (Task 5) the LHS is a `LetPattern` rather than a single name
+    /// — existing single-name bindings carry `LetPattern::Ident(name)`, and
+    /// tuple/struct destructuring is supported via the other variants.
     Let {
-        name: Symbol,
+        /// LHS pattern. Single-name bindings use `LetPattern::Ident`.
+        pattern: LetPattern,
         mutable: bool,
         ty: Option<TypeAnnotation>,
         init: Expr,
@@ -709,12 +865,16 @@ pub enum Stmt {
     Expr { expr: Expr },
     /// Require statement
     Require(RequireStmt),
-    /// `for x in expr { body }` loop.
+    /// `for x in expr { body }` loop. `label` is `Some` for labeled `for`
+    /// loops like `'outer: for ...` (M10 Task 5).
     For {
         var: Symbol,
         var_id: NodeId,
         iter: Expr,
         body: Expr,
+        /// M10 Task 5 — `Some` for labeled loops, `None` otherwise.
+        #[serde(default)]
+        label: Option<Label>,
         id: NodeId,
         span: Span,
     },

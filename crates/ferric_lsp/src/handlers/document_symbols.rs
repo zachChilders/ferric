@@ -91,7 +91,7 @@ fn push_item_symbol(
         Item::Script {
             stmt:
                 Stmt::Let {
-                    name,
+                    pattern,
                     mutable,
                     span,
                     ..
@@ -103,11 +103,16 @@ fn push_item_symbol(
             } else {
                 SymbolKind::CONSTANT
             };
-            out.push(make_symbol(
-                snapshot.interner.resolve(*name).to_string(),
-                kind,
-                li.range_of(*span),
-            ));
+            // M10 Task 1: only the existing single-name form is wired up for
+            // outline entries. Tuple/struct destructuring lands in Task 5,
+            // at which point this branch will need a richer rendering.
+            if let ferric_common::LetPattern::Ident(name) = pattern {
+                out.push(make_symbol(
+                    snapshot.interner.resolve(*name).to_string(),
+                    kind,
+                    li.range_of(*span),
+                ));
+            }
         }
         // Top-level expression statements / assignments / requires / for-loops
         // are not meaningful as outline entries.

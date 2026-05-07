@@ -57,6 +57,10 @@ impl ImplTy {
             | Ty::Poll(_)
             | Ty::Eff(_, _)
             | Ty::EffVar(_) => return None,
+            // M10 scaffolding: `Ty::Alias` is added in Task 1 but not wired up
+            // until Task 6. Treat it like `Ty::Opaque` and dispatch on the
+            // underlying type so existing behaviour is preserved.
+            Ty::Alias(_, inner) => return ImplTy::from_ty(inner),
         })
     }
 }

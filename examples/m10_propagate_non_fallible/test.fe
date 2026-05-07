@@ -1,0 +1,14 @@
+// M10 Task 4: applying `?` to a non-fallible operand is a compile-time
+// error. The operand here is `Int`, not `Option<T>` or `Result<T, E>`,
+// so the type checker emits ResolveError::PropagateNonFallible.
+
+fn double(n: Int) -> Int {
+    n * 2
+}
+
+fn boom() -> Option<Int> {
+    let x = double(n: 21)?
+    Option::Some(x)
+}
+
+println(s: "unreachable")

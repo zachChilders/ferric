@@ -13,10 +13,11 @@
 
 use ferric_common::{
     AsyncBlockExpr, BinOp, CastExpr, EffectAnnotation, EffectDecl, EffectOp, ExportDecl, Expr,
-    FnItem, HandleExpr, HandlerClause, ImplMethod, ImportDecl, ImportItem, ImportItems, ImportPath,
-    Interner, Item, LexResult, Literal, MatchArm, NamedArg, NodeId, Param, ParseError, ParseResult,
-    ParseWarning, Pattern, PerformExpr, RequireMode, RequireStmt, ResumeExpr, ShellPart,
-    ShellTokenPart, Span, Stmt, Symbol, Token, TokenKind, TraitMethod, Ty, TypeAliasItem,
+    FStringExpr, FStringSegment, FStringSegmentKind, FnItem, HandleExpr, HandlerClause, ImplMethod,
+    ImportDecl, ImportItem, ImportItems, ImportPath, Interner, Item, Label, LetPattern, LexResult,
+    Literal, MatchArm, MustExpr, NamedArg, NodeId, Param, ParseError, ParseResult, ParseWarning,
+    Pattern, PerformExpr, PipelineExpr, PropagateExpr, RequireMode, RequireStmt, ResumeExpr,
+    ShellPart, ShellTokenPart, Span, Stmt, Symbol, Token, TokenKind, TraitMethod, Ty, TypeAliasItem,
     TypeAnnotation, TypeParam, UnOp,
 };
 
@@ -337,6 +338,15 @@ impl<'a> Parser<'a> {
             TokenKind::Let => self.parse_script_let(),
             TokenKind::Require => self.parse_script_require(),
             TokenKind::For => self.parse_script_for(),
+            // M10 Task 5: labeled `for` at script level — dispatch to the
+            // statement variant. `'label: while`/`'label: loop` are
+            // expressions and fall through to `parse_script_expr`.
+            TokenKind::Label(_) if self.label_then_for() => {
+                let stmt = self.parse_labeled_for_stmt()?;
+                let span = stmt.span();
+                let id = self.node_id_gen.next();
+                Some(Item::Script { stmt, id, span })
+            }
             TokenKind::Export => self.parse_export_decl(),
             TokenKind::Type => self.parse_type_alias().map(Item::TypeAlias),
             _ if self.is_expr_start() => self.parse_script_expr(),
@@ -1778,6 +1788,16 @@ impl<'a> Parser<'a> {
                 continue;
             }
 
+            // M10 Task 5: a label followed by `:` `for` is a labeled `for`
+            // statement. Other label-prefixed loops (`while`, `loop`) are
+            // expressions and are handled by `parse_expr` further below.
+            if self.label_then_for() {
+                if let Some(stmt) = self.parse_labeled_for_stmt() {
+                    stmts.push(stmt);
+                }
+                continue;
+            }
+
             // `export`, `import`, `type` are top-level only — emit a clear
             // error if they appear inside a block, then skip the keyword and
             // continue parsing the inner thing as if the modifier weren't
@@ -1900,7 +1920,9 @@ impl<'a> Parser<'a> {
                 | TokenKind::Yield     // prefix `yield expr`
                 | TokenKind::Perform   // `perform Effect::Op(...)`
                 | TokenKind::Handle    // `handle { ... } with { ... }`
-                | TokenKind::Resume // `resume k with v`
+                | TokenKind::Resume    // `resume k with v`
+                | TokenKind::FStringStart // `f"..."` interpolated string
+                | TokenKind::Label(_)  // labeled loop: `'outer: while ...`
         )
     }
 
@@ -1938,9 +1960,12 @@ impl<'a> Parser<'a> {
     /// `in` is not a reserved keyword — it's lexed as `Ident`. We accept any
     /// identifier whose interned name will later be `"in"`; mismatches produce
     /// an UnexpectedToken error.
-    fn parse_for_stmt(&mut self) -> Option<Stmt> {
-        let start_span = self.peek().span;
-        self.advance(); // 'for'
+    ///
+    /// `label` is set when the `for` was preceded by `'name:` (M10 Task 5).
+    fn parse_for_stmt_with_label(&mut self, label: Option<Label>) -> Option<Stmt> {
+        let kw_span = self.peek().span;
+        let start_span = label.as_ref().map(|l| l.span).unwrap_or(kw_span);
+        self.advance(); // consume 'for'
 
         let var_id = self.node_id_gen.next();
         let var = match self.peek().kind {
@@ -1998,12 +2023,61 @@ impl<'a> Parser<'a> {
             var_id,
             iter,
             body,
+            label,
             id,
             span,
         })
     }
 
-    /// Parses a let statement: `let name: type = expr;` or `let mut name: type = expr;`
+    /// Convenience wrapper: parses a non-labeled `for` loop. The caller has
+    /// peeked `Token::For` at the current position.
+    fn parse_for_stmt(&mut self) -> Option<Stmt> {
+        self.parse_for_stmt_with_label(None)
+    }
+
+    /// Returns true when the next three tokens are `Label`, `:`, `for`.
+    /// Used to dispatch to `parse_labeled_for_stmt` at statement positions.
+    fn label_then_for(&self) -> bool {
+        if !matches!(self.peek().kind, TokenKind::Label(_)) {
+            return false;
+        }
+        if self.current + 1 >= self.tokens.len()
+            || !matches!(self.tokens[self.current + 1].kind, TokenKind::Colon)
+        {
+            return false;
+        }
+        if self.current + 2 >= self.tokens.len() {
+            return false;
+        }
+        matches!(self.tokens[self.current + 2].kind, TokenKind::For)
+    }
+
+    /// Parses a labeled `for` statement: `'label: for x in iter { body }`.
+    /// The caller has verified `label_then_for()`.
+    fn parse_labeled_for_stmt(&mut self) -> Option<Stmt> {
+        let lab_tok = self.peek().clone();
+        let (name, lab_span) = match lab_tok.kind {
+            TokenKind::Label(s) => (s, lab_tok.span),
+            _ => unreachable!("parse_labeled_for_stmt called without Label token"),
+        };
+        self.advance(); // consume label
+        if self.expect(TokenKind::Colon, "':' after loop label").is_err() {
+            return None;
+        }
+        self.parse_for_stmt_with_label(Some(Label {
+            span: lab_span,
+            name,
+        }))
+    }
+
+    /// Parses a let statement: `let name: type = expr;` or `let mut name: type = expr;`.
+    ///
+    /// M10 Task 5: also handles destructuring patterns:
+    /// - `let (a, b, c) = expr` — tuple destructuring (`LetPattern::Tuple`).
+    /// - `let Point { x, y } = expr` — struct destructuring with bare-name
+    ///   field shorthand (`LetPattern::Struct`).
+    /// - `let Foo::Bar(...) = expr` — refutable enum patterns are rejected
+    ///   with `ParseError::DestructureIrrefutable`.
     fn parse_let_stmt(&mut self) -> Option<Stmt> {
         let start_span = self.peek().span;
         self.advance(); // consume 'let'
@@ -2011,25 +2085,11 @@ impl<'a> Parser<'a> {
         // Check for 'mut' keyword
         let mutable = self.match_token(&TokenKind::Mut);
 
-        // Parse variable name
-        let name = match &self.peek().kind {
-            TokenKind::Ident(sym) => {
-                let sym = *sym;
-                self.advance();
-                sym
-            }
-            _ => {
-                let token = self.peek().clone();
-                self.errors.push(ParseError::UnexpectedToken {
-                    expected: "variable name".to_string(),
-                    found: token.kind,
-                    span: token.span,
-                });
-                return None;
-            }
-        };
+        let pattern = self.parse_let_pattern()?;
 
-        // Parse optional type annotation
+        // Parse optional type annotation. Currently only legal for ident
+        // patterns; for destructuring patterns we accept it without
+        // checking — downstream stages infer from the RHS.
         let ty = if self.match_token(&TokenKind::Colon) {
             Some(self.parse_type()?)
         } else {
@@ -2051,7 +2111,7 @@ impl<'a> Parser<'a> {
         let id = self.node_id_gen.next();
 
         Some(Stmt::Let {
-            name,
+            pattern,
             mutable,
             ty,
             init,
@@ -2060,19 +2120,298 @@ impl<'a> Parser<'a> {
         })
     }
 
+    /// Parses the LHS pattern of a `let`. M10 Task 5.
+    fn parse_let_pattern(&mut self) -> Option<LetPattern> {
+        match self.peek().kind {
+            TokenKind::LParen => self.parse_let_tuple_pattern(),
+            TokenKind::Ident(sym) => {
+                // Look ahead: an identifier followed by `{` is a struct
+                // destructuring pattern. An identifier followed by `::` is a
+                // refutable enum pattern — emit DestructureIrrefutable.
+                // Anything else is an ident binding.
+                let next_kind = self
+                    .tokens
+                    .get(self.current + 1)
+                    .map(|t| &t.kind)
+                    .cloned();
+                match next_kind {
+                    Some(TokenKind::LBrace) => self.parse_let_struct_pattern(sym),
+                    Some(TokenKind::ColonColon) => {
+                        // Enum pattern: `let Foo::Bar(...) = ...` is refutable.
+                        let start_span = self.peek().span;
+                        // Consume the (likely) full enum-pattern shape so we
+                        // can produce a faithful `pattern` string for the
+                        // diagnostic and recover the parser state.
+                        let pretty = self.consume_refutable_pattern_text();
+                        let end_span = self
+                            .tokens
+                            .get(self.current.saturating_sub(1))
+                            .map(|t| t.span)
+                            .unwrap_or(start_span);
+                        self.errors.push(ParseError::DestructureIrrefutable {
+                            pattern: pretty,
+                            span: start_span.to(end_span),
+                        });
+                        // Recovery: bind a sentinel name so downstream stages
+                        // do not cascade. Use a bogus interned name; the
+                        // subsequent `=` requirement still applies.
+                        Some(LetPattern::Ident(sym))
+                    }
+                    _ => {
+                        // Plain ident binding.
+                        self.advance();
+                        Some(LetPattern::Ident(sym))
+                    }
+                }
+            }
+            _ => {
+                let token = self.peek().clone();
+                self.errors.push(ParseError::UnexpectedToken {
+                    expected: "variable name or destructuring pattern".to_string(),
+                    found: token.kind,
+                    span: token.span,
+                });
+                None
+            }
+        }
+    }
+
+    /// Parses `(a, b, c)` as `LetPattern::Tuple`. Caller has peeked `(`.
+    fn parse_let_tuple_pattern(&mut self) -> Option<LetPattern> {
+        self.advance(); // consume '('
+        let mut idents: Vec<Symbol> = Vec::new();
+        loop {
+            if self.check(&TokenKind::RParen) {
+                break;
+            }
+            match self.peek().kind {
+                TokenKind::Ident(s) => {
+                    self.advance();
+                    idents.push(s);
+                }
+                _ => {
+                    let token = self.peek().clone();
+                    self.errors.push(ParseError::UnexpectedToken {
+                        expected: "identifier in tuple destructuring pattern".to_string(),
+                        found: token.kind,
+                        span: token.span,
+                    });
+                    return None;
+                }
+            }
+            if !self.match_token(&TokenKind::Comma) {
+                break;
+            }
+        }
+        if self.expect(TokenKind::RParen, "')'").is_err() {
+            return None;
+        }
+        Some(LetPattern::Tuple(idents))
+    }
+
+    /// Parses `Name { f1, f2 }` as `LetPattern::Struct`. Caller has peeked
+    /// the struct name; this function consumes it and the brace block.
+    fn parse_let_struct_pattern(&mut self, name: Symbol) -> Option<LetPattern> {
+        self.advance(); // consume struct name ident
+        if self.expect(TokenKind::LBrace, "'{'").is_err() {
+            return None;
+        }
+        let mut fields: Vec<Symbol> = Vec::new();
+        loop {
+            if self.check(&TokenKind::RBrace) {
+                break;
+            }
+            match self.peek().kind {
+                TokenKind::Ident(s) => {
+                    self.advance();
+                    // Reject explicit `field: rename` — out of scope for M10
+                    // Task 5. (The spec lists this as a deliberately deferred
+                    // feature.)
+                    if self.check(&TokenKind::Colon) {
+                        let token = self.peek().clone();
+                        self.errors.push(ParseError::UnexpectedToken {
+                            expected: "',' or '}' (field rename `name: alias` is not supported)"
+                                .to_string(),
+                            found: token.kind,
+                            span: token.span,
+                        });
+                        return None;
+                    }
+                    fields.push(s);
+                }
+                _ => {
+                    let token = self.peek().clone();
+                    self.errors.push(ParseError::UnexpectedToken {
+                        expected: "field name in struct destructuring pattern".to_string(),
+                        found: token.kind,
+                        span: token.span,
+                    });
+                    return None;
+                }
+            }
+            if !self.match_token(&TokenKind::Comma) {
+                break;
+            }
+        }
+        if self.expect(TokenKind::RBrace, "'}'").is_err() {
+            return None;
+        }
+        Some(LetPattern::Struct { name, fields })
+    }
+
+    /// Best-effort textual capture of a refutable pattern at the start of a
+    /// `let` LHS. Walks tokens up to the next `=` or end-of-statement and
+    /// builds a printable representation. Used solely for diagnostics — the
+    /// parser then discards the consumed tokens.
+    fn consume_refutable_pattern_text(&mut self) -> String {
+        let mut s = String::new();
+        let mut depth: i32 = 0;
+        while !self.is_at_end() {
+            match &self.peek().kind {
+                TokenKind::Eq if depth == 0 => break,
+                TokenKind::Semi if depth == 0 => break,
+                TokenKind::LParen | TokenKind::LBrace | TokenKind::LBracket => {
+                    depth += 1;
+                    s.push(match self.peek().kind {
+                        TokenKind::LParen => '(',
+                        TokenKind::LBrace => '{',
+                        _ => '[',
+                    });
+                }
+                TokenKind::RParen | TokenKind::RBrace | TokenKind::RBracket => {
+                    depth -= 1;
+                    s.push(match self.peek().kind {
+                        TokenKind::RParen => ')',
+                        TokenKind::RBrace => '}',
+                        _ => ']',
+                    });
+                }
+                TokenKind::Ident(sym) => {
+                    if !s.is_empty() && !s.ends_with('(') && !s.ends_with('{') {
+                        s.push(' ');
+                    }
+                    if let Some(interner) = self.interner {
+                        s.push_str(interner.resolve(*sym));
+                    } else {
+                        s.push_str("<ident>");
+                    }
+                }
+                TokenKind::ColonColon => s.push_str("::"),
+                TokenKind::Comma => s.push_str(", "),
+                _ => break,
+            }
+            self.advance();
+        }
+        s
+    }
+
     /// Parses an expression.
     fn parse_expr(&mut self) -> Expr {
         // Handle control flow keywords as special cases
         match self.peek().kind {
             TokenKind::Return => self.parse_return_expr(),
             TokenKind::If => self.parse_if_expr(),
-            TokenKind::While => self.parse_while_expr(),
-            TokenKind::Loop => self.parse_loop_expr(),
+            TokenKind::While => self.parse_while_expr(None),
+            TokenKind::Loop => self.parse_loop_expr(None),
             TokenKind::Break => self.parse_break_expr(),
             TokenKind::Continue => self.parse_continue_expr(),
             TokenKind::Match => self.parse_match_expr(),
-            _ => self.parse_binary_expr(0),
+            // M10 Task 5: `'label: while|loop ...` — the parser sees a
+            // `Token::Label` followed by `:` and a loop keyword. `for` is
+            // statement-level only and is handled at the block/script
+            // dispatch sites.
+            TokenKind::Label(_) => self.parse_labeled_loop_expr(),
+            _ => self.parse_pipeline_expr(),
         }
+    }
+
+    /// Parses a labeled loop expression: `'name: while ...` or `'name: loop ...`.
+    /// The caller must have peeked a `TokenKind::Label`. If the label is not
+    /// followed by `:` and a loop keyword, an error is emitted and a unit
+    /// literal is returned for recovery. Labeled `for` is a statement, not an
+    /// expression — see `parse_labeled_for_stmt`.
+    fn parse_labeled_loop_expr(&mut self) -> Expr {
+        let label_token = self.peek().clone();
+        let (label_name, label_span) = match label_token.kind {
+            TokenKind::Label(s) => (s, label_token.span),
+            _ => unreachable!("parse_labeled_loop_expr called without a Label token"),
+        };
+        self.advance(); // consume label
+        let label = Some(Label {
+            span: label_span,
+            name: label_name,
+        });
+        // Expect `:` after the label.
+        if self.expect(TokenKind::Colon, "':' after loop label").is_err() {
+            let id = self.node_id_gen.next();
+            return Expr::Literal {
+                value: Literal::Unit,
+                id,
+                span: label_span,
+            };
+        }
+        match self.peek().kind {
+            TokenKind::While => self.parse_while_expr(label),
+            TokenKind::Loop => self.parse_loop_expr(label),
+            TokenKind::For => {
+                // Labeled `for` is a statement, but we got here from an
+                // expression context. Surface a clear error and recover by
+                // consuming the rest of the for-loop. The block- or script-level
+                // dispatch is responsible for picking up `Label : For`.
+                let bad = self.peek().clone();
+                self.errors.push(ParseError::UnexpectedToken {
+                    expected: "labeled `for` is a statement; use it where statements are allowed"
+                        .to_string(),
+                    found: bad.kind,
+                    span: bad.span,
+                });
+                let id = self.node_id_gen.next();
+                Expr::Literal {
+                    value: Literal::Unit,
+                    id,
+                    span: label_span,
+                }
+            }
+            _ => {
+                let bad = self.peek().clone();
+                self.errors.push(ParseError::UnexpectedToken {
+                    expected: "loop keyword (`while`, `loop`, or `for`) after label".to_string(),
+                    found: bad.kind,
+                    span: bad.span,
+                });
+                let id = self.node_id_gen.next();
+                Expr::Literal {
+                    value: Literal::Unit,
+                    id,
+                    span: label_span,
+                }
+            }
+        }
+    }
+
+    /// Parses pipeline expressions: `lhs |> rhs (|> rhs)*`. M10 (Task 3).
+    ///
+    /// `|>` is the lowest-precedence binary operator — strictly below `||`.
+    /// It is left-associative: `a |> f() |> g()` parses as `(a |> f()) |> g()`.
+    /// Each segment is parsed at full binary-expression precedence so binary
+    /// operators bind tighter inside both LHS and RHS sub-expressions.
+    ///
+    /// The parser does not require the RHS to syntactically be a call — that
+    /// validation is deferred to the resolver, which emits
+    /// `ResolveError::PipelineRhsNotCall` for invalid forms.
+    fn parse_pipeline_expr(&mut self) -> Expr {
+        let mut left = self.parse_binary_expr(0);
+        while matches!(self.peek().kind, TokenKind::Pipe2) {
+            self.advance(); // consume `|>`
+            let right = self.parse_binary_expr(0);
+            let span = left.span().to(right.span());
+            left = Expr::Pipeline(PipelineExpr {
+                span,
+                lhs: Box::new(left),
+                rhs: Box::new(right),
+            });
+        }
+        left
     }
 
     /// Parses a return expression: `return expr?`
@@ -2169,9 +2508,11 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// Parses a while loop: `while cond block`
-    fn parse_while_expr(&mut self) -> Expr {
-        let start_span = self.peek().span;
+    /// Parses a while loop: `while cond block`. `label` is set when the loop
+    /// was preceded by `'name:` (M10 Task 5).
+    fn parse_while_expr(&mut self, label: Option<Label>) -> Expr {
+        let kw_span = self.peek().span;
+        let start_span = label.as_ref().map(|l| l.span).unwrap_or(kw_span);
         self.advance(); // consume 'while'
 
         // Parse condition (no struct literals — `{` belongs to the body)
@@ -2203,14 +2544,17 @@ impl<'a> Parser<'a> {
         Expr::While {
             cond,
             body,
+            label,
             id,
             span,
         }
     }
 
-    /// Parses an infinite loop: `loop block`
-    fn parse_loop_expr(&mut self) -> Expr {
-        let start_span = self.peek().span;
+    /// Parses an infinite loop: `loop block`. `label` is set when the loop
+    /// was preceded by `'name:` (M10 Task 5).
+    fn parse_loop_expr(&mut self, label: Option<Label>) -> Expr {
+        let kw_span = self.peek().span;
+        let start_span = label.as_ref().map(|l| l.span).unwrap_or(kw_span);
         self.advance(); // consume 'loop'
 
         // Parse body (must be a block)
@@ -2236,25 +2580,59 @@ impl<'a> Parser<'a> {
         let span = start_span.to(body.span());
         let id = self.node_id_gen.next();
 
-        Expr::Loop { body, id, span }
+        Expr::Loop {
+            body,
+            label,
+            id,
+            span,
+        }
     }
 
-    /// Parses a break expression: `break`
+    /// Parses a break expression: `break` or `break 'label` (M10 Task 5).
     fn parse_break_expr(&mut self) -> Expr {
-        let span = self.peek().span;
+        let kw_span = self.peek().span;
         self.advance(); // consume 'break'
+        // Optional `'label` immediately following.
+        let (label, end_span) = if let TokenKind::Label(sym) = self.peek().kind {
+            let lab_span = self.peek().span;
+            self.advance();
+            (
+                Some(Label {
+                    span: lab_span,
+                    name: sym,
+                }),
+                lab_span,
+            )
+        } else {
+            (None, kw_span)
+        };
+        let span = kw_span.to(end_span);
         let id = self.node_id_gen.next();
 
-        Expr::Break { id, span }
+        Expr::Break { label, id, span }
     }
 
-    /// Parses a continue expression: `continue`
+    /// Parses a continue expression: `continue` or `continue 'label` (M10 Task 5).
     fn parse_continue_expr(&mut self) -> Expr {
-        let span = self.peek().span;
+        let kw_span = self.peek().span;
         self.advance(); // consume 'continue'
+        let (label, end_span) = if let TokenKind::Label(sym) = self.peek().kind {
+            let lab_span = self.peek().span;
+            self.advance();
+            (
+                Some(Label {
+                    span: lab_span,
+                    name: sym,
+                }),
+                lab_span,
+            )
+        } else {
+            (None, kw_span)
+        };
+        let span = kw_span.to(end_span);
         let id = self.node_id_gen.next();
 
-        Expr::Continue { id, span }
+        Expr::Continue { label, id, span }
     }
 
     /// Parses a match expression: `match scrutinee { pattern => body, ... }`
@@ -2539,7 +2917,44 @@ impl<'a> Parser<'a> {
     /// indexing, call). Chained casts (`x as A as B`) are an error
     /// (`ParseError::ChainedCast`).
     fn parse_cast_expr(&mut self) -> Expr {
-        let expr = self.parse_unary_expr();
+        let mut expr = self.parse_unary_expr();
+        // M10 Task 4: postfix `must` (unwrap). Binds at unary precedence —
+        // tighter than any binary operator, looser than postfix call/field.
+        //
+        // **Message-form ambiguity.** The spec allows a bare `must` (no
+        // message) and `must <str_expr>`. Without significant newlines or a
+        // mandatory statement terminator we cannot tell those apart in
+        // general — a greedy `must` would always swallow the next statement.
+        //
+        // Resolution: the optional message expression is restricted to a
+        // small, syntactically obvious starter set — a string literal, an
+        // f-string, or a parenthesised expression — and is parsed at unary
+        // precedence so `a must "msg" + tail` still parses as
+        // `(a must "msg") + tail`. Any other `Str` value can be wrapped in
+        // parens: `x must (some_str_var)`.
+        while matches!(self.peek().kind, TokenKind::Must) {
+            let must_tok_span = self.peek().span;
+            self.advance(); // consume `must`
+            let starts_message = matches!(
+                self.peek().kind,
+                TokenKind::StrLit(_) | TokenKind::FStringStart | TokenKind::LParen
+            );
+            let message = if starts_message {
+                Some(Box::new(self.parse_unary_expr()))
+            } else {
+                None
+            };
+            let end_span = match &message {
+                Some(m) => m.span(),
+                None => must_tok_span,
+            };
+            let span = expr.span().to(end_span);
+            expr = Expr::Must(MustExpr {
+                span,
+                operand: Box::new(expr),
+                message,
+            });
+        }
         if matches!(self.peek().kind, TokenKind::As) {
             let as_span = self.peek().span;
             self.advance(); // consume 'as'
@@ -2682,6 +3097,22 @@ impl<'a> Parser<'a> {
             && matches!(self.tokens[self.current + 1].kind, TokenKind::Colon)
     }
 
+    /// Returns true if the current position looks like an implicit-named-arg
+    /// bare identifier (M10 Task 6 Part A). The token must be a plain ident
+    /// followed by either `,` or `)` — anything else (`.`, `(`, operators,
+    /// etc.) means it's a more complex expression that must use an explicit
+    /// `name:` label.
+    fn is_implicit_named_arg_start(&self) -> bool {
+        if !matches!(self.peek().kind, TokenKind::Ident(_)) {
+            return false;
+        }
+        let next = match self.tokens.get(self.current + 1) {
+            Some(t) => &t.kind,
+            None => return false,
+        };
+        matches!(next, TokenKind::Comma | TokenKind::RParen)
+    }
+
     /// Checks if the upcoming `{ ... }` is a struct literal body.
     ///
     /// Called after we've consumed `Ident` and seen `{`. Disambiguates against
@@ -2736,6 +3167,28 @@ impl<'a> Parser<'a> {
                                 span,
                                 name,
                                 value: Box::new(value),
+                                implicit: false,
+                            });
+                        } else if self.is_implicit_named_arg_start() {
+                            // M10 Task 6 Part A: bare identifier — implicit named arg.
+                            // `foo` at a call site (not followed by `:`) becomes
+                            // `NamedArg { name: foo, value: Variable(foo), implicit: true }`.
+                            let (name, ident_span) = match self.peek().kind {
+                                TokenKind::Ident(sym) => (sym, self.peek().span),
+                                _ => unreachable!(),
+                            };
+                            self.advance(); // consume the identifier
+                            let id = self.node_id_gen.next();
+                            let value = Expr::Variable {
+                                name,
+                                id,
+                                span: ident_span,
+                            };
+                            args.push(NamedArg {
+                                span: ident_span,
+                                name,
+                                value: Box::new(value),
+                                implicit: true,
                             });
                         } else {
                             // Positional arg — error and recover
@@ -2748,6 +3201,7 @@ impl<'a> Parser<'a> {
                                 span,
                                 name: Symbol::new(0),
                                 value: Box::new(value),
+                                implicit: false,
                             });
                         }
 
@@ -2833,6 +3287,17 @@ impl<'a> Parser<'a> {
                         span,
                     };
                 }
+            } else if self.check(&TokenKind::Question) {
+                // Postfix `?` propagation. Binds tighter than any binary
+                // operator (M10 Task 4). Operand validity (Option<T> /
+                // Result<T,E>) is checked in the type checker.
+                let q_span = self.peek().span;
+                self.advance();
+                let span = expr.span().to(q_span);
+                expr = Expr::Propagate(PropagateExpr {
+                    span,
+                    operand: Box::new(expr),
+                });
             } else {
                 break;
             }
@@ -2866,6 +3331,26 @@ impl<'a> Parser<'a> {
                     span,
                     name,
                     value: Box::new(value),
+                    implicit: false,
+                });
+            } else if self.is_implicit_named_arg_start() {
+                // M10 Task 6 Part A: bare identifier as implicit named arg.
+                let (name, ident_span) = match self.peek().kind {
+                    TokenKind::Ident(sym) => (sym, self.peek().span),
+                    _ => unreachable!(),
+                };
+                self.advance();
+                let id = self.node_id_gen.next();
+                let value = Expr::Variable {
+                    name,
+                    id,
+                    span: ident_span,
+                };
+                args.push(NamedArg {
+                    span: ident_span,
+                    name,
+                    value: Box::new(value),
+                    implicit: true,
                 });
             } else {
                 self.errors
@@ -2876,6 +3361,7 @@ impl<'a> Parser<'a> {
                     span,
                     name: Symbol::new(0),
                     value: Box::new(value),
+                    implicit: false,
                 });
             }
             if !self.match_token(&TokenKind::Comma) {
@@ -3246,6 +3732,10 @@ impl<'a> Parser<'a> {
                     span: token.span,
                 }
             }
+            // `f"..."` interpolated string. M10 (Task 2). The lexer has
+            // already split the literal into FStringStart / alternating
+            // FStringLit + FStringExprStart..FStringExprEnd / FStringEnd.
+            TokenKind::FStringStart => self.parse_fstring_expr(id, token.span),
             // `perform Effect::Op(name: value, ...)`
             TokenKind::Perform => self.parse_perform_expr(id),
             // `handle { body } with { Effect::Op(args) => clause, ... }`
@@ -3348,6 +3838,112 @@ impl<'a> Parser<'a> {
 
     /// Converts lexer-level shell parts (with sub-token streams) into AST shell
     /// parts (with parsed `Expr` nodes for each interpolation).
+    /// Parses an `f"..."` interpolated string. The caller has confirmed the
+    /// next token is `FStringStart` and allocated `id`. M10 (Task 2).
+    ///
+    /// Token shape from the lexer:
+    /// `FStringStart  ( FStringLit | FStringExprStart <expr> FStringExprEnd )*  FStringEnd`
+    ///
+    /// On premature EOF (no `FStringEnd`), emits `ParseError::UnterminatedFString`.
+    fn parse_fstring_expr(&mut self, id: NodeId, start_span: Span) -> Expr {
+        self.advance(); // consume FStringStart
+        let mut segments: Vec<FStringSegment> = Vec::new();
+        let end_span;
+
+        loop {
+            // Bail out gracefully on EOF — the f-string was unterminated.
+            if matches!(self.peek().kind, TokenKind::Eof) {
+                let span = start_span.to(self.peek().span);
+                self.errors.push(ParseError::UnterminatedFString { span });
+                return Expr::FString(FStringExpr {
+                    id,
+                    span,
+                    segments,
+                });
+            }
+
+            let tok = self.peek().clone();
+            match tok.kind {
+                TokenKind::FStringEnd => {
+                    self.advance();
+                    end_span = tok.span;
+                    break;
+                }
+                TokenKind::FStringLit(s) => {
+                    self.advance();
+                    segments.push(FStringSegment {
+                        span: tok.span,
+                        kind: FStringSegmentKind::Lit(s),
+                    });
+                }
+                TokenKind::FStringExprStart => {
+                    let brace_span = tok.span;
+                    self.advance(); // consume `{`
+                    // The inner expression may itself be any Ferric expression,
+                    // including another f-string (the lexer pushes a fresh
+                    // FStringStart on the stack and we recurse via parse_expr).
+                    let prev_errors = self.errors.len();
+                    let expr = self.parse_expr();
+                    let new_errors = self.errors.len() - prev_errors;
+                    // Expect FStringExprEnd. If we don't see it (e.g. EOF or
+                    // some structural failure inside the expression), surface
+                    // InvalidFStringExpr.
+                    if matches!(self.peek().kind, TokenKind::FStringExprEnd) {
+                        let end_brace = self.peek().span;
+                        self.advance();
+                        if new_errors > 0 {
+                            // Inner expression had errors. Treat as invalid.
+                            self.errors.push(ParseError::InvalidFStringExpr {
+                                span: brace_span.to(end_brace),
+                            });
+                        }
+                        segments.push(FStringSegment {
+                            span: brace_span.to(end_brace),
+                            kind: FStringSegmentKind::Expr(Box::new(expr)),
+                        });
+                    } else {
+                        // Could not close the interpolation cleanly.
+                        let here = self.peek().span;
+                        self.errors.push(ParseError::InvalidFStringExpr {
+                            span: brace_span.to(here),
+                        });
+                        segments.push(FStringSegment {
+                            span: brace_span.to(here),
+                            kind: FStringSegmentKind::Expr(Box::new(expr)),
+                        });
+                        // Try to recover: if EOF, bail; otherwise loop and let
+                        // the outer match handle whatever comes next.
+                        if matches!(self.peek().kind, TokenKind::Eof) {
+                            let span = start_span.to(self.peek().span);
+                            self.errors.push(ParseError::UnterminatedFString { span });
+                            return Expr::FString(FStringExpr {
+                                id,
+                                span,
+                                segments,
+                            });
+                        }
+                    }
+                }
+                _ => {
+                    // Unexpected token inside f-string. Surface and bail.
+                    let span = start_span.to(tok.span);
+                    self.errors.push(ParseError::UnterminatedFString { span });
+                    return Expr::FString(FStringExpr {
+                        id,
+                        span,
+                        segments,
+                    });
+                }
+            }
+        }
+
+        Expr::FString(FStringExpr {
+            id,
+            span: start_span.to(end_span),
+            segments,
+        })
+    }
+
     fn cook_shell_parts(&mut self, parts: Vec<ShellTokenPart>) -> Vec<ShellPart> {
         let mut out = Vec::with_capacity(parts.len());
         for part in parts {

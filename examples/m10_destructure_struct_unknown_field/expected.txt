@@ -1,0 +1,10 @@
+error: struct `Point` has no field `z`
+  --> input:13:1
+   |
+13 | let Point { x, z } = make_point()
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+error: unknown argument name `z`
+  --> input:13:1
+   |
+13 | let Point { x, z } = make_point()
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

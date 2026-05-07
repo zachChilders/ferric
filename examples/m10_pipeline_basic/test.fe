@@ -1,0 +1,4 @@
+// Pipeline operator (M10 Task 3) — basic single-step pipeline.
+// `[1, 2, 3] |> list_len()` desugars to `list_len(l: [1, 2, 3])`.
+let result = [1, 2, 3] |> list_len()
+println(s: int_to_str(n: result))

@@ -110,10 +110,18 @@ pub enum TokenKind {
     Gen,
     /// `yield` keyword — generator yield, desugars to `perform Gen::Yield(...)`
     Yield,
+    /// `must` keyword. M10 (Task 4). Postfix unwrap: `expr must` panics with a
+    /// generic message on `None`/`Err`; `expr must <str>` panics with the given
+    /// message. Binds at unary precedence.
+    Must,
 
     // Identifiers and operators
     /// Identifier (variable/function name)
     Ident(Symbol),
+    /// Loop label: `'name`. M10 (Task 5). The `'` sigil is followed
+    /// immediately (no whitespace) by an identifier. Used in
+    /// `'outer: while ...`, `break 'outer`, and `continue 'outer`.
+    Label(Symbol),
 
     // Arithmetic operators
     /// `+` addition
@@ -152,6 +160,14 @@ pub enum TokenKind {
     OrOr,
     /// `|` (single pipe) — used for closure parameter delimiters.
     Pipe,
+    /// `|>` pipeline operator. M10 (Task 3). Lowest-precedence binary infix:
+    /// `lhs |> rhs_call(args...)` desugars to `rhs_call(lhs, args...)` with
+    /// the lhs prepended as the implicit first named argument.
+    Pipe2,
+    /// `?` propagation operator. M10 (Task 4). Postfix; binds tighter than any
+    /// binary operator. `expr?` desugars (in the compiler) to a match that
+    /// extracts the inner value or early-returns the failure variant.
+    Question,
 
     // Punctuation
     /// `(` left parenthesis
@@ -187,6 +203,22 @@ pub enum TokenKind {
     /// mode. The parts alternate between literal text and interpolated Ferric
     /// sub-token-streams (from `@{...}`).
     ShellLine(Vec<ShellTokenPart>),
+
+    /// Opening of an f-string: the lexer saw `f"`. M10 (Task 2). Followed by
+    /// alternating `FStringLit` / `FStringExprStart` / expression tokens /
+    /// `FStringExprEnd` until a matching `FStringEnd`.
+    FStringStart,
+    /// A literal text segment inside an f-string. M10 (Task 2). Already has
+    /// `{{` / `}}` escape sequences resolved to `{` / `}`.
+    FStringLit(String),
+    /// `{` inside an f-string — opens an interpolated expression. The lexer
+    /// re-enters normal expression mode until the matching `FStringExprEnd`.
+    /// M10 (Task 2).
+    FStringExprStart,
+    /// `}` closing an interpolated expression inside an f-string. M10 (Task 2).
+    FStringExprEnd,
+    /// Closing `"` of an f-string. M10 (Task 2).
+    FStringEnd,
 
     /// End of file marker
     Eof,
@@ -232,7 +264,9 @@ impl TokenKind {
             TokenKind::Resume => "keyword 'resume'".to_string(),
             TokenKind::Gen => "keyword 'gen'".to_string(),
             TokenKind::Yield => "keyword 'yield'".to_string(),
+            TokenKind::Must => "keyword 'must'".to_string(),
             TokenKind::Ident(_) => "identifier".to_string(),
+            TokenKind::Label(_) => "loop label".to_string(),
             TokenKind::Plus => "'+'".to_string(),
             TokenKind::Minus => "'-'".to_string(),
             TokenKind::Star => "'*'".to_string(),
@@ -249,6 +283,8 @@ impl TokenKind {
             TokenKind::AndAnd => "'&&'".to_string(),
             TokenKind::OrOr => "'||'".to_string(),
             TokenKind::Pipe => "'|'".to_string(),
+            TokenKind::Pipe2 => "'|>'".to_string(),
+            TokenKind::Question => "'?'".to_string(),
             TokenKind::LParen => "'('".to_string(),
             TokenKind::RParen => "')'".to_string(),
             TokenKind::LBrace => "'{'".to_string(),
@@ -264,6 +300,11 @@ impl TokenKind {
             TokenKind::Underscore => "'_'".to_string(),
             TokenKind::FatArrow => "'=>'".to_string(),
             TokenKind::ShellLine(_) => "shell expression".to_string(),
+            TokenKind::FStringStart => "f-string start `f\"`".to_string(),
+            TokenKind::FStringLit(_) => "f-string literal segment".to_string(),
+            TokenKind::FStringExprStart => "f-string `{`".to_string(),
+            TokenKind::FStringExprEnd => "f-string `}`".to_string(),
+            TokenKind::FStringEnd => "f-string end `\"`".to_string(),
             TokenKind::Eof => "end of file".to_string(),
         }
     }

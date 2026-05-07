@@ -13,7 +13,9 @@ use ferric_lexer::lex;
 use ferric_manifest::load_manifest;
 use ferric_module::resolve_modules;
 use ferric_parser::parse_with_interner;
-use ferric_resolve::{resolve_with_imports_and_builtins, resolve_with_natives_and_builtins};
+use ferric_resolve::{
+    desugar_pipelines, resolve_with_imports_and_builtins, resolve_with_natives_and_builtins,
+};
 use ferric_stdlib::{
     NativeRegistry, async_intrinsic_param_table, builtin_enum_table, register_stdlib,
 };
@@ -119,7 +121,12 @@ fn run_file(filename: &str) {
     // Parse — pre-intern desugar names so the parser can build effect
     // AST nodes with stable `Symbol` identities.
     ferric_parser::pre_intern_desugar_names(&mut interner);
-    let parse_result = parse_with_interner(&lex_result, &interner);
+    let mut parse_result = parse_with_interner(&lex_result, &interner);
+
+    // M10 Task 3: desugar `lhs |> rhs(args)` to `rhs(lhs, args)` in place
+    // before resolution runs. After this pass no `Expr::Pipeline` nodes
+    // remain in the AST.
+    let pipeline_errors = desugar_pipelines(&mut parse_result, &native_fns);
 
     // M7: load manifest (script mode if absent), then resolve imports.
     let entry_path = PathBuf::from(filename);
@@ -138,12 +145,16 @@ fn run_file(filename: &str) {
 
     // Re-resolve with imports wired into the global scope so import bindings
     // are visible during name resolution.
-    let resolve_result = resolve_with_imports_and_builtins(
+    let mut resolve_result = resolve_with_imports_and_builtins(
         &parse_result,
         &native_fns,
         &builtin_enums,
         &module_result,
     );
+
+    // Merge pipeline-desugar errors into the resolve errors so they render
+    // alongside other resolve diagnostics.
+    resolve_result.errors.extend(pipeline_errors);
 
     // Build trait registry (M5).
     let trait_registry = build_registry(&parse_result, &resolve_result, &interner);
@@ -312,7 +323,7 @@ fn run_session(source: &str) -> Result<(), String> {
             .join("\n"));
     }
 
-    let parse_result = parse_with_interner(&lex_result, &interner);
+    let mut parse_result = parse_with_interner(&lex_result, &interner);
     if !parse_result.errors.is_empty() {
         let r = Renderer::with_interner(source.to_string(), &interner);
         return Err(parse_result
@@ -323,8 +334,12 @@ fn run_session(source: &str) -> Result<(), String> {
             .join("\n"));
     }
 
-    let resolve_result =
+    // M10 Task 3: desugar pipelines before resolve.
+    let pipeline_errors = desugar_pipelines(&mut parse_result, &native_fns);
+
+    let mut resolve_result =
         resolve_with_natives_and_builtins(&parse_result, &native_fns, &builtin_enums);
+    resolve_result.errors.extend(pipeline_errors);
     if !resolve_result.errors.is_empty() {
         let r = Renderer::with_interner(source.to_string(), &interner);
         return Err(resolve_result
@@ -337,14 +352,20 @@ fn run_session(source: &str) -> Result<(), String> {
 
     let trait_registry = build_registry(&parse_result, &resolve_result, &interner);
     let type_result = typecheck(&parse_result, &resolve_result, &interner, &trait_registry);
-    if !type_result.errors.is_empty() {
+    if !type_result.errors.is_empty() || !type_result.resolve_errors.is_empty() {
         let r = Renderer::with_interner(source.to_string(), &interner);
-        return Err(type_result
+        let mut msgs: Vec<String> = type_result
             .errors
             .iter()
             .map(|e| r.render_type_error(e))
-            .collect::<Vec<_>>()
-            .join("\n"));
+            .collect();
+        msgs.extend(
+            type_result
+                .resolve_errors
+                .iter()
+                .map(|e| r.render_resolve_error(e)),
+        );
+        return Err(msgs.join("\n"));
     }
 
     let exhaust_result = check_exhaustiveness(&parse_result, &type_result);
@@ -482,6 +503,14 @@ fn report_errors(
 
     for error in &types.errors {
         eprintln!("{}", renderer.render_type_error(error));
+        has_errors = true;
+    }
+
+    // M10 Task 4: the inferencer can surface resolve-stage errors that
+    // require type information to diagnose (e.g. `?` on a non-fallible
+    // operand). Render them alongside the resolver's own diagnostics.
+    for error in &types.resolve_errors {
+        eprintln!("{}", renderer.render_resolve_error(error));
         has_errors = true;
     }
 

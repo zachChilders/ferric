@@ -1,0 +1,14 @@
+// M10 Task 6 Part A: implicit named args.
+// A bare identifier whose name matches a parameter name binds implicitly,
+// so `greet(name)` is shorthand for `greet(name: name)`.
+
+fn greet(name: Str, greeting: Str) -> Unit {
+    println(s: greeting + ", " + name + "!")
+}
+
+let name = "world"
+let greeting = "Hello"
+
+greet(name, greeting)             // both implicit
+greet(name, greeting: "Hey")      // mixed: implicit + explicit
+greet(name: "Ferric", greeting)   // mixed: explicit literal + implicit ident

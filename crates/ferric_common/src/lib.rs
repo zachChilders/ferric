@@ -188,7 +188,7 @@ mod ast_serde_tests {
 
         let items = vec![Item::Script {
             stmt: Stmt::Let {
-                name: x_sym,
+                pattern: LetPattern::Ident(x_sym),
                 mutable: false,
                 ty: Some(TypeAnnotation::Named(int_sym)),
                 init,

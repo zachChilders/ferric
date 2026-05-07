@@ -1,0 +1,14 @@
+// M10 Task 5: destructuring a struct with a name that doesn't exist on the
+// declared struct produces UnknownField.
+
+struct Point {
+    x: Int,
+    y: Int,
+}
+
+fn make_point() -> Point {
+    Point { x: 1, y: 2 }
+}
+
+let Point { x, z } = make_point()
+println(s: int_to_str(n: x))

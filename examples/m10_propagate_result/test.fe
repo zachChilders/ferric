@@ -1,0 +1,30 @@
+// M10 Task 4: `?` on Result<T, E> short-circuits with `Err(e)`.
+//
+// `parse_pos` validates a parsed integer is non-negative; `sum_two_pos`
+// uses `?` twice to short-circuit on the first failure.
+
+fn parse_pos(s: Str) -> Result<Int, Str> {
+    let n = str_parse_int(s: s)
+    if n < 0 {
+        Result::Err("negative")
+    } else {
+        Result::Ok(n)
+    }
+}
+
+fn sum_two_pos(a: Str, b: Str) -> Result<Int, Str> {
+    let x = parse_pos(s: a)?
+    let y = parse_pos(s: b)?
+    Result::Ok(x + y)
+}
+
+fn describe(r: Result<Int, Str>) -> Str {
+    match r {
+        Result::Ok(v)  => int_to_str(n: v),
+        Result::Err(e) => e,
+    }
+}
+
+println(s: describe(r: sum_two_pos(a: "10", b: "32")))
+println(s: describe(r: sum_two_pos(a: "10", b: "-1")))
+println(s: describe(r: sum_two_pos(a: "-7", b: "5")))

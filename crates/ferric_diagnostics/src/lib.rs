@@ -296,6 +296,60 @@ impl<'a> Renderer<'a> {
                         .to_string(),
                 ),
             }),
+            // M10 Task 2: f-string parse-time diagnostics.
+            ParseError::UnterminatedFString { span } => self.render(Diag {
+                kind: "error",
+                message: "unterminated f-string literal",
+                primary: Some(Label {
+                    span: *span,
+                    message: Some("starts here".to_string()),
+                }),
+                secondary: vec![],
+                notes: vec![],
+                help: Some(
+                    "an f-string must be closed with a matching `\"`; \
+                     `{{`/`}}` produce literal braces"
+                        .to_string(),
+                ),
+            }),
+            ParseError::InvalidFStringExpr { span } => self.render(Diag {
+                kind: "error",
+                message: "invalid expression inside f-string interpolation",
+                primary: Some(Label {
+                    span: *span,
+                    message: Some("in this `{...}` interpolation".to_string()),
+                }),
+                secondary: vec![],
+                notes: vec![],
+                help: Some(
+                    "the contents of `{...}` must be a valid Ferric expression"
+                        .to_string(),
+                ),
+            }),
+            ParseError::LabeledBreakOutside { span, .. } => self.render(Diag {
+                kind: "error",
+                message: "labeled `break`/`continue` has no matching enclosing labeled loop",
+                primary: Some(Label {
+                    span: *span,
+                    message: None,
+                }),
+                secondary: vec![],
+                notes: vec![],
+                help: None,
+            }),
+            ParseError::DestructureIrrefutable { pattern, span } => self.render(Diag {
+                kind: "error",
+                message: &format!(
+                    "let patterns must be irrefutable; `{pattern}` is refutable"
+                ),
+                primary: Some(Label {
+                    span: *span,
+                    message: Some("use `match` for refutable patterns".to_string()),
+                }),
+                secondary: vec![],
+                notes: vec![],
+                help: None,
+            }),
         }
     }
 
@@ -530,6 +584,82 @@ impl<'a> Renderer<'a> {
                 secondary: vec![],
                 notes: vec![],
                 help: Some(format!("add `export` to the definition in \"{path}\"")),
+            }),
+            // M10 Task 4: `?` and `must` are only valid on `Option<T>` or
+            // `Result<T, E>` operands.
+            ResolveError::PropagateNonFallible { ty, span } => self.render(Diag {
+                kind: "error",
+                message: &format!(
+                    "`?` requires `Option<T>` or `Result<T, E>`, got `{ty}`"
+                ),
+                primary: Some(Label {
+                    span: *span,
+                    message: Some(format!("operand has type `{ty}`")),
+                }),
+                secondary: vec![],
+                notes: vec![],
+                help: Some(
+                    "the `?` operator only short-circuits on fallible types; \
+                     wrap the value in `Option` or `Result`, or remove the `?`"
+                        .to_string(),
+                ),
+            }),
+            ResolveError::MustNonFallible { ty, span } => self.render(Diag {
+                kind: "error",
+                message: &format!(
+                    "`must` requires `Option<T>` or `Result<T, E>`, got `{ty}`"
+                ),
+                primary: Some(Label {
+                    span: *span,
+                    message: Some(format!("operand has type `{ty}`")),
+                }),
+                secondary: vec![],
+                notes: vec![],
+                help: Some(
+                    "`must` only unwraps fallible types; if you want to panic \
+                     on a different condition, use `require` instead"
+                        .to_string(),
+                ),
+            }),
+            ResolveError::PipelineRhsNotCall { span } => self.render(Diag {
+                kind: "error",
+                message: "right-hand side of `|>` must be a call expression",
+                primary: Some(Label { span: *span, message: None }),
+                secondary: vec![],
+                notes: vec![],
+                help: None,
+            }),
+            ResolveError::LabelNotFound { label, span } => self.render(Diag {
+                kind: "error",
+                message: &format!(
+                    "no enclosing loop with label `'{}`",
+                    self.name(*label)
+                ),
+                primary: Some(Label { span: *span, message: None }),
+                secondary: vec![],
+                notes: vec![],
+                help: None,
+            }),
+            ResolveError::DestructureArity { expected, got, span } => self.render(Diag {
+                kind: "error",
+                message: &format!(
+                    "destructuring arity mismatch: expected {expected} element(s), got {got}"
+                ),
+                primary: Some(Label { span: *span, message: None }),
+                secondary: vec![],
+                notes: vec![],
+                help: None,
+            }),
+            ResolveError::UnknownMethod { method, ty, span } => self.render(Diag {
+                kind: "error",
+                message: &format!(
+                    "no method `{}` on type `{ty}`",
+                    self.name(*method)
+                ),
+                primary: Some(Label { span: *span, message: None }),
+                secondary: vec![],
+                notes: vec![],
+                help: None,
             }),
         }
     }
@@ -1080,6 +1210,35 @@ impl<'a> Renderer<'a> {
                         .to_string(),
                 ),
             }),
+            // M10 Task 4: a `must` panic message must be a `Str`.
+            TypeError::MustMessageNotStr { span } => self.render(Diag {
+                kind: "error",
+                message: "the panic message after `must` must be a `Str`",
+                primary: Some(Label {
+                    span: *span,
+                    message: Some("expected `Str` here".to_string()),
+                }),
+                secondary: vec![],
+                notes: vec![],
+                help: Some(
+                    "use `f\"...\"` interpolation or call a `*_to_str` native \
+                     to produce a `Str` first"
+                        .to_string(),
+                ),
+            }),
+            TypeError::AliasMismatch { expected, got, span } => self.render(Diag {
+                kind: "error",
+                message: &format!(
+                    "type mismatch: expected `{expected}`, got `{got}`"
+                ),
+                primary: Some(Label { span: *span, message: None }),
+                secondary: vec![],
+                notes: vec![],
+                help: Some(
+                    "use an `as` cast to convert between an alias and its underlying type"
+                        .to_string(),
+                ),
+            }),
         }
     }
 
@@ -1377,6 +1536,20 @@ impl<'a> Renderer<'a> {
                 self.render(Diag {
                     kind: "error",
                     message: &format!("require failed: {msg}"),
+                    primary: nonzero_label(*span),
+                    secondary: vec![],
+                    notes: vec![],
+                    help: None,
+                })
+            }
+            RuntimeError::MustError { span, message } => {
+                let formatted = match message {
+                    Some(m) => format!("unwrap failed: {m}"),
+                    None => "unwrap failed".to_string(),
+                };
+                self.render(Diag {
+                    kind: "error",
+                    message: &formatted,
                     primary: nonzero_label(*span),
                     secondary: vec![],
                     notes: vec![],

@@ -9,10 +9,11 @@
 use std::collections::{HashMap, HashSet};
 
 use ferric_common::{
-    BinOp, DefId, EffectDecl, EffectOp, EffectRef, Expr, FnItem, HandleExpr, HandlerClause,
-    ImplMethod, Interner, Item, Literal, MatchArm, NamedArg, NodeId, Param, ParseResult, Pattern,
-    PerformExpr, RequireStmt, ResolveResult, ResumeExpr, ShellPart, Span, Stmt, Symbol,
-    TraitRegistry, Ty, TyVar, TypeAnnotation, TypeError, TypeParam, TypeResult, TypeScheme, UnOp,
+    BinOp, DefId, EffectDecl, EffectOp, EffectRef, Expr, FStringSegmentKind, FnItem, HandleExpr,
+    HandlerClause, ImplMethod, Interner, Item, LetPattern, Literal, MatchArm, NamedArg, NodeId,
+    Param, ParseResult, Pattern, PerformExpr, RequireStmt, ResolveResult, ResumeExpr, ShellPart,
+    Span, Stmt, Symbol, TraitRegistry, Ty, TyVar, TypeAnnotation, TypeError, TypeParam,
+    TypeResult, TypeScheme, UnOp,
 };
 
 /// Adapter that lets `ferric_stdlib_meta` polymorphic-signature builders
@@ -374,14 +375,26 @@ struct TypeInfer<'a> {
     node_types: HashMap<NodeId, Ty>,
     /// Output: each method-call NodeId → resolved impl method DefId.
     method_dispatch: HashMap<NodeId, DefId>,
+    /// Output: each method-call NodeId → stdlib function name `Symbol`. M10
+    /// (Task 6 Part B). The compiler reads this map first; if a NodeId is
+    /// present here, the method desugars to a native call rather than a
+    /// user-defined impl.
+    stdlib_method_dispatch: HashMap<NodeId, Symbol>,
     /// Pending method-call resolutions: receiver NodeId, method name,
     /// the call's MethodCall NodeId, and source span. Resolved post-pass
     /// after the substitution settles.
     pending_methods: Vec<(NodeId, Symbol, NodeId, Span)>,
     /// Shell interpolation expression IDs that need a Str-or-Int post-check.
     shell_interp_nodes: Vec<(NodeId, Span)>,
+    /// F-string interpolation expression IDs that need a Str/Int/Float/Bool
+    /// post-check. M10 (Task 2).
+    fstring_interp_nodes: Vec<(NodeId, Span)>,
     /// Output: type errors encountered.
     errors: Vec<TypeError>,
+    /// Output: resolve-stage errors that the inferencer detected because they
+    /// require type information to diagnose. M10 Task 4 uses this for
+    /// `?` and `must` on non-fallible operands.
+    resolve_errors: Vec<ferric_common::ResolveError>,
 }
 
 impl<'a> TypeInfer<'a> {
@@ -410,8 +423,11 @@ impl<'a> TypeInfer<'a> {
             type_alias_resolving: HashSet::new(),
             node_types: HashMap::new(),
             method_dispatch: HashMap::new(),
+            stdlib_method_dispatch: HashMap::new(),
             pending_methods: Vec::new(),
             shell_interp_nodes: Vec::new(),
+            fstring_interp_nodes: Vec::new(),
+            resolve_errors: Vec::new(),
             errors: Vec::new(),
         }
     }
@@ -837,6 +853,29 @@ impl<'a> TypeInfer<'a> {
                     "Unit" | "" => Ty::Unit,
                     "ShellOutput" => Ty::ShellOutput,
                     _ => {
+                        // M10 Task 6 Part C: if `sym` names a registered type
+                        // alias, wrap its inner type in `Ty::Alias` so the
+                        // alias and its underlying type stay distinct under
+                        // unification. We resolve the inner annotation
+                        // recursively against a fresh alias map (alias bodies
+                        // do not see the using site's generic parameters).
+                        if let Some(inner_ann) =
+                            self.resolve.type_aliases.get(sym).cloned()
+                        {
+                            if !self.type_alias_resolving.insert(*sym) {
+                                // Cycle: `type A = B` where `B = A`. Fall back
+                                // to a fresh tyvar to avoid infinite recursion.
+                                return self.fresh_tyvar();
+                            }
+                            let mut alias_inner_aliases: HashMap<Symbol, TyVar> =
+                                HashMap::new();
+                            let inner = self.resolve_type_annotation(
+                                &inner_ann,
+                                &mut alias_inner_aliases,
+                            );
+                            self.type_alias_resolving.remove(sym);
+                            return Ty::Alias(*sym, Box::new(inner));
+                        }
                         // Look up a user-defined struct or enum.
                         if let Some(ty) = self.lookup_user_type(*sym) {
                             return ty;
@@ -954,13 +993,25 @@ impl<'a> TypeInfer<'a> {
     fn check_stmt(&mut self, stmt: &Stmt) {
         match stmt {
             Stmt::Let {
-                name,
+                pattern,
                 ty,
                 init,
                 id,
                 span,
                 ..
             } => {
+                // M10 Task 5: destructuring patterns (`Tuple` / `Struct`) take
+                // a different code path — type-check the RHS, validate the
+                // shape against the pattern, and bind each ident to its
+                // matching field type.
+                if !matches!(pattern, LetPattern::Ident(_)) {
+                    self.check_destructure_let(pattern, ty.as_ref(), init, *id, *span);
+                    return;
+                }
+                let name = match pattern {
+                    LetPattern::Ident(name) => *name,
+                    _ => unreachable!(),
+                };
                 let init_ty = self.infer_expr(init);
 
                 let bound_ty = if let Some(ann) = ty {
@@ -1011,7 +1062,7 @@ impl<'a> TypeInfer<'a> {
                 // Generalise over any free vars not pinned by the surrounding
                 // monomorphic environment — classic let-polymorphism.
                 let scheme = self.generalize(&bound_ty);
-                self.env.define(*name, scheme);
+                self.env.define(name, scheme);
 
                 self.node_types.insert(*id, self.subst.apply(&bound_ty));
             }
@@ -1572,8 +1623,38 @@ impl<'a> TypeInfer<'a> {
                 let resolved = self.subst.apply(&receiver_ty);
                 let mut method_sig: Option<(Vec<Ty>, Ty)> = None;
 
-                // 1) Concrete receiver: look up an impl directly.
-                if ferric_common::ImplTy::from_ty(&resolved).is_some()
+                // 0) M10 Task 6 Part B: stdlib method dispatch table. If the
+                //    receiver is a concrete primitive shape (Str / [T]) and
+                //    the method is in the M10 table, desugar to the matching
+                //    stdlib function call.
+                if let Some(kind) = stdlib_receiver_kind(&resolved) {
+                    let method_name = self.interner.resolve(*method);
+                    if let Some(stdlib_name) = stdlib_method_for(kind, method_name)
+                        && let Some(stdlib_sym) = self.interner.lookup(stdlib_name)
+                    {
+                        // Look up the stdlib function's scheme and use it to
+                        // type-check the call as if it were
+                        // `stdlib_fn(receiver, args...)`.
+                        if let Some(scheme) = self.env.lookup(stdlib_sym).cloned() {
+                            let fn_ty = self.instantiate(&scheme);
+                            if let Ty::Fn { params, ret } = fn_ty {
+                                method_sig = Some((params, *ret));
+                            }
+                        }
+                        // Record dispatch unconditionally so the compiler
+                        // emits a native call even when the signature is
+                        // unknown (return type stays a free var).
+                        self.stdlib_method_dispatch.insert(*id, stdlib_sym);
+                    }
+                }
+
+                let mut stdlib_dispatched = self.stdlib_method_dispatch.contains_key(id);
+
+                // 1) Concrete receiver: look up an impl directly. Only fall
+                //    through to trait-impl dispatch if the stdlib path didn't
+                //    claim this call.
+                if !stdlib_dispatched
+                    && ferric_common::ImplTy::from_ty(&resolved).is_some()
                     && let Some((trait_name, def_id)) =
                         self.registry.find_method(&resolved, *method)
                 {
@@ -1588,7 +1669,8 @@ impl<'a> TypeInfer<'a> {
                 // 2) Receiver is a type variable bound by a trait — use the
                 //    trait's method signature for type-checking; dispatch is
                 //    resolved monomorphically at compile time.
-                if method_sig.is_none()
+                if !stdlib_dispatched
+                    && method_sig.is_none()
                     && let Ty::Var(v) = &resolved
                     && let Some(bounds) = self.bound_constraints.get(v).cloned()
                 {
@@ -1602,36 +1684,66 @@ impl<'a> TypeInfer<'a> {
                     }
                 }
 
-                // Always schedule a post-pass dispatch attempt for
-                // method_dispatch resolution. The post-pass also reports
-                // NoSuchMethod if the receiver type stays unbound.
-                if !self.method_dispatch.contains_key(id) {
+                // Always schedule a post-pass dispatch attempt for unresolved
+                // calls. The post-pass also reports NoSuchMethod if the
+                // receiver type stays unbound.
+                if !self.method_dispatch.contains_key(id) && !stdlib_dispatched {
                     self.pending_methods
                         .push((receiver.id(), *method, *id, *span));
                 }
 
+                // Re-check after the post-pass scheduling — if stdlib dispatch
+                // succeeded above, treat sig params as having a leading `self`.
+                let _ = stdlib_dispatched; // silence "unused" lints in branches
+                stdlib_dispatched = self.stdlib_method_dispatch.contains_key(id);
+
                 let ret_ty = if let Some((sig_params, sig_ret)) = method_sig {
-                    // sig_params[0] is the trait-method's `self`; we don't
-                    // unify it (the trait registry uses a sentinel TyVar(0)
-                    // which would collide with the inferer's allocations).
-                    // Match argument count and unify the remaining params.
-                    let rest = if sig_params.is_empty() {
-                        &[][..]
-                    } else {
-                        &sig_params[1..]
-                    };
-                    if rest.len() == arg_tys.len() {
-                        for (sig_t, arg_t) in rest.iter().zip(arg_tys.iter()) {
-                            self.unify(sig_t, arg_t, *span);
+                    // For trait dispatch, sig_params[0] is the `self` slot —
+                    // we skip unifying it since the trait registry uses a
+                    // sentinel TyVar that may collide with our allocations.
+                    // For stdlib dispatch we have full concrete signatures
+                    // (param 0 is the receiver: `s: Str`, `l: [T]`, …) and
+                    // unify the receiver too.
+                    if stdlib_dispatched {
+                        if !sig_params.is_empty() {
+                            self.unify(&sig_params[0], &receiver_ty, receiver.span());
                         }
+                        let rest = if sig_params.is_empty() {
+                            &[][..]
+                        } else {
+                            &sig_params[1..]
+                        };
+                        if rest.len() == arg_tys.len() {
+                            for (sig_t, arg_t) in rest.iter().zip(arg_tys.iter()) {
+                                self.unify(sig_t, arg_t, *span);
+                            }
+                        } else {
+                            self.errors.push(TypeError::WrongArgumentCount {
+                                expected: rest.len(),
+                                found: arg_tys.len(),
+                                span: *span,
+                            });
+                        }
+                        sig_ret
                     } else {
-                        self.errors.push(TypeError::WrongArgumentCount {
-                            expected: rest.len(),
-                            found: arg_tys.len(),
-                            span: *span,
-                        });
+                        let rest = if sig_params.is_empty() {
+                            &[][..]
+                        } else {
+                            &sig_params[1..]
+                        };
+                        if rest.len() == arg_tys.len() {
+                            for (sig_t, arg_t) in rest.iter().zip(arg_tys.iter()) {
+                                self.unify(sig_t, arg_t, *span);
+                            }
+                        } else {
+                            self.errors.push(TypeError::WrongArgumentCount {
+                                expected: rest.len(),
+                                found: arg_tys.len(),
+                                span: *span,
+                            });
+                        }
+                        sig_ret
                     }
-                    sig_ret
                 } else {
                     // No signature available. The post-pass will report
                     // NoSuchMethod if the receiver remains unbound.
@@ -1719,14 +1831,38 @@ impl<'a> TypeInfer<'a> {
                 self.node_types.insert(*id, resolved.clone());
                 resolved
             }
-            // Cast expressions are wired into the type checker in M7 Task 4.
-            // For now, treat them as identity: the result type is the inner
-            // expression's type. Real wrap/unwrap logic against `Ty::Opaque`
-            // arrives with the type-alias registry.
+            // M10 Task 6 Part C: `expr as TypeExpr` is the only way to bridge
+            // an opaque type alias with its underlying type. We resolve the
+            // target annotation (which may itself be a `Ty::Alias`) and
+            // accept the cast in either direction:
+            //   - inner-to-alias  (`raw as Url`)   — wrap
+            //   - alias-to-inner  (`url as Str`)   — unwrap
+            //   - alias-to-alias  (different aliases of the same inner type)
+            //   - any-to-anything where unification would also succeed
+            // Casts are a runtime no-op (the compiler emits the inner expr
+            // verbatim).
             Expr::Cast(c) => {
-                let inner = self.infer_expr(&c.expr);
-                self.node_types.insert(c.id, inner.clone());
-                inner
+                let inner_ty = self.infer_expr(&c.expr);
+                let mut tmp = HashMap::new();
+                let target = self.resolve_type_annotation(&c.target, &mut tmp);
+
+                // Decide whether the cast is well-formed. Allow:
+                //   * source/target are unifiable (no alias bridging needed)
+                //   * source unwraps an alias whose inner unifies with target
+                //   * target wraps an alias whose inner unifies with source
+                let inner_resolved = self.subst.apply(&inner_ty);
+                let target_resolved = self.subst.apply(&target);
+                let cast_ok = self.cast_is_valid(&inner_resolved, &target_resolved);
+                if !cast_ok {
+                    self.errors.push(TypeError::InvalidCast {
+                        from: inner_resolved.clone(),
+                        to: target_resolved.clone(),
+                        span: c.span,
+                    });
+                }
+
+                self.node_types.insert(c.id, target.clone());
+                target
             }
             Expr::AsyncBlock(b) => {
                 // M9: an `async { body }` block bumps `async_depth` so any
@@ -1753,7 +1889,147 @@ impl<'a> TypeInfer<'a> {
             Expr::Perform(p) => self.infer_perform(p),
             Expr::Handle(h) => self.infer_handle(h),
             Expr::Resume(r) => self.infer_resume(r),
+            // M10 Task 2: f-string interpolation. Always typed as `Str`. Each
+            // interpolated expression is type-checked for `Str`/`Int`/`Float`/
+            // `Bool` (the post-pass validates after inference settles, just
+            // like shell `@{...}` interpolation).
+            Expr::FString(e) => {
+                for seg in &e.segments {
+                    if let FStringSegmentKind::Expr(inner) = &seg.kind {
+                        let inner_ty = self.infer_expr(inner);
+                        self.fstring_interp_nodes.push((inner.id(), inner.span()));
+                        let _ = inner_ty;
+                    }
+                }
+                self.node_types.insert(e.id, Ty::Str);
+                Ty::Str
+            }
+            // M10 Task 1 scaffolding for the remaining variants; Task 3
+            // wires `Pipeline` up via the resolver desugar, so by the time
+            // the inferencer sees the AST every Pipeline node has been
+            // rewritten into a Call. Reaching this arm means the resolver
+            // pass was skipped (e.g. a unit test bypass) — fall back to
+            // `Ty::Unit` defensively.
+            Expr::Pipeline(_) => Ty::Unit,
+            // M10 Task 4: `expr?` propagation. Operand must be `Option<T>`
+            // or `Result<T, E>`; the enclosing function's return type must
+            // match shape (Option or Result with compatible payload).
+            Expr::Propagate(p) => self.infer_propagate(p),
+            // M10 Task 4: `expr must` / `expr must <msg>` unwrap. Operand
+            // must be Option/Result; optional message expression must be Str.
+            Expr::Must(m) => self.infer_must(m),
         }
+    }
+
+    /// M10 Task 4: type-check `expr?` propagation.
+    fn infer_propagate(&mut self, p: &ferric_common::PropagateExpr) -> Ty {
+        let operand_ty = self.infer_expr(&p.operand);
+        let operand_resolved = self.subst.apply(&operand_ty);
+
+        // Determine the inner success type and the propagated failure
+        // shape from the operand. If the operand is a fresh `Ty::Var`,
+        // assume `Option<?T>` so type variables that get pinned later
+        // still flow through. This matches the behaviour of
+        // `infer_builtin_variant_ctor` — `Option::None` produces a fresh
+        // option type — so a `?` on a `None` literal still propagates
+        // the inner var.
+        let (inner_ty, is_option) = match operand_resolved {
+            Ty::Option(inner) => (*inner, true),
+            Ty::Result(ok, _err) => (*ok, false),
+            Ty::Var(_) => {
+                let inner = self.fresh_tyvar();
+                let opt = Ty::Option(Box::new(inner.clone()));
+                self.unify(&operand_resolved, &opt, p.operand.span());
+                (inner, true)
+            }
+            other => {
+                self.resolve_errors
+                    .push(ferric_common::ResolveError::PropagateNonFallible {
+                        ty: format!("{other}"),
+                        span: p.span,
+                    });
+                // Recovery: treat as if the operand was `Option<?T>` so
+                // downstream type checking still has something to bind to.
+                let inner = self.fresh_tyvar();
+                (inner, true)
+            }
+        };
+
+        // The enclosing function's return type must also be Option/Result
+        // and unify with the operand's failure path. (`?` on `None` returns
+        // an `Option<U>`; on `Err(e)` returns a `Result<U, E>`.) Use the
+        // current_fn_ret as the unification target.
+        if let Some(ret) = self.current_fn_ret.clone() {
+            let ret_resolved = self.subst.apply(&ret);
+            // Strip an Eff<row, T> wrapper so a `?` inside an effectful
+            // function (`async fn` etc.) is still validated against T.
+            let ret_inner = match ret_resolved {
+                Ty::Eff(_, t) => *t,
+                other => other,
+            };
+            // Unify the function's return type against the operand type
+            // (so `Option`-vs-`Result` mismatches surface as a normal
+            // `TypeError::IncompatibleTypes`). For Option, the inner type
+            // can be anything; for Result, the error type must match.
+            if is_option {
+                let fresh_inner = self.fresh_tyvar();
+                let opt_ret = Ty::Option(Box::new(fresh_inner));
+                self.unify(&ret_inner, &opt_ret, p.span);
+            } else {
+                // Get the error type from the operand
+                let operand_resolved2 = self.subst.apply(&operand_ty);
+                let err_ty = match operand_resolved2 {
+                    Ty::Result(_, err) => *err,
+                    _ => self.fresh_tyvar(),
+                };
+                let fresh_ok = self.fresh_tyvar();
+                let res_ret = Ty::Result(Box::new(fresh_ok), Box::new(err_ty));
+                self.unify(&ret_inner, &res_ret, p.span);
+            }
+        }
+
+        inner_ty
+    }
+
+    /// M10 Task 4: type-check `expr must` / `expr must <msg>` unwrap.
+    fn infer_must(&mut self, m: &ferric_common::MustExpr) -> Ty {
+        let operand_ty = self.infer_expr(&m.operand);
+        let operand_resolved = self.subst.apply(&operand_ty);
+
+        let inner_ty = match operand_resolved {
+            Ty::Option(inner) => *inner,
+            Ty::Result(ok, _) => *ok,
+            Ty::Var(_) => {
+                // Same as `?`: assume Option<?T> so unbound vars still flow.
+                let inner = self.fresh_tyvar();
+                let opt = Ty::Option(Box::new(inner.clone()));
+                self.unify(&operand_resolved, &opt, m.operand.span());
+                inner
+            }
+            other => {
+                self.resolve_errors
+                    .push(ferric_common::ResolveError::MustNonFallible {
+                        ty: format!("{other}"),
+                        span: m.span,
+                    });
+                self.fresh_tyvar()
+            }
+        };
+
+        if let Some(msg) = &m.message {
+            let msg_ty = self.infer_expr(msg);
+            let msg_resolved = self.subst.apply(&msg_ty);
+            // Allow a free var (e.g. an inferred-from-context literal) to
+            // unify with Str rather than emitting a misleading error.
+            if matches!(msg_resolved, Ty::Var(_)) {
+                self.unify(&msg_resolved, &Ty::Str, msg.span());
+            } else if !matches!(msg_resolved, Ty::Str) {
+                self.errors
+                    .push(TypeError::MustMessageNotStr { span: msg.span() });
+            }
+        }
+
+        inner_ty
     }
 
     /// M9: when a call's return type is `Eff<R, T>`, validate that every
@@ -2265,6 +2541,116 @@ impl<'a> TypeInfer<'a> {
 
     /// Type-checks a single match arm: pattern must match scrutinee, body
     /// type must unify with the overall match result type.
+    /// Type-checks a destructuring `let` (M10 Task 5). Validates that the
+    /// RHS shape matches the pattern, emits diagnostics for arity / unknown
+    /// fields, and binds each pattern identifier in the env.
+    fn check_destructure_let(
+        &mut self,
+        pattern: &LetPattern,
+        ty_ann: Option<&TypeAnnotation>,
+        init: &Expr,
+        let_id: NodeId,
+        let_span: Span,
+    ) {
+        let init_ty = self.infer_expr(init);
+
+        // If the user wrote a type annotation, unify it with the RHS first.
+        // The annotation does not change destructuring semantics.
+        if let Some(ann) = ty_ann {
+            let mut tmp = HashMap::new();
+            let declared = self.resolve_type_annotation(ann, &mut tmp);
+            self.unify(&declared, &init_ty, let_span);
+        }
+
+        let resolved = self.subst.apply(&init_ty);
+
+        match pattern {
+            LetPattern::Ident(_) => unreachable!("ident pattern handled by caller"),
+            LetPattern::Tuple(idents) => {
+                // Build a fresh tuple skeleton with one fresh var per binding,
+                // then unify it with the RHS. This both checks the arity
+                // (when the RHS is concrete) and pushes the elem types
+                // through the substitution. We *also* emit
+                // `ResolveError::DestructureArity` when the RHS is already
+                // a Ty::Tuple of mismatched length, so the user gets the
+                // dedicated diagnostic instead of a generic Mismatch.
+                if let Ty::Tuple(elems) = &resolved
+                    && elems.len() != idents.len()
+                {
+                    self.resolve_errors
+                        .push(ferric_common::ResolveError::DestructureArity {
+                            expected: idents.len(),
+                            got: elems.len(),
+                            span: let_span,
+                        });
+                }
+                let elem_tys: Vec<Ty> = (0..idents.len()).map(|_| self.fresh_tyvar()).collect();
+                let tuple_ty = Ty::Tuple(elem_tys.clone());
+                self.unify(&tuple_ty, &init_ty, let_span);
+                for (name, ty) in idents.iter().zip(elem_tys.iter()) {
+                    let resolved_elem = self.subst.apply(ty);
+                    let scheme = self.generalize(&resolved_elem);
+                    self.env.define(*name, scheme);
+                }
+                self.node_types.insert(let_id, self.subst.apply(&init_ty));
+            }
+            LetPattern::Struct {
+                name: struct_name,
+                fields,
+            } => {
+                // Look up the struct's type and unify the RHS with it.
+                let struct_ty = self
+                    .lookup_user_type(*struct_name)
+                    .filter(|t| matches!(t, Ty::Struct { .. }))
+                    .unwrap_or_else(|| self.fresh_tyvar());
+                self.unify(&init_ty, &struct_ty, let_span);
+
+                // Bind each named field. UnknownField was already emitted by
+                // the resolver — reuse `ResolveError::UnknownArg` per the
+                // spec for consistency-with-the-spec-text purposes (but the
+                // resolver's UnknownField is the user-facing one; the
+                // error here would be redundant if the resolver fired). Use
+                // the declared field types when known.
+                if let Ty::Struct {
+                    fields: declared, ..
+                } = &struct_ty
+                {
+                    let declared = declared.clone();
+                    for fname in fields {
+                        let field_ty = declared
+                            .iter()
+                            .find(|(n, _)| *n == *fname)
+                            .map(|(_, t)| t.clone())
+                            .unwrap_or_else(|| {
+                                // Field doesn't exist on the struct; resolver
+                                // already produced UnknownField. Spec also
+                                // requests UnknownArg for parity — emit it
+                                // so callers that consume only resolve errors
+                                // still see the destructuring-specific case.
+                                self.resolve_errors.push(
+                                    ferric_common::ResolveError::UnknownArg {
+                                        name: *fname,
+                                        span: let_span,
+                                    },
+                                );
+                                self.fresh_tyvar()
+                            });
+                        let scheme = self.generalize(&field_ty);
+                        self.env.define(*fname, scheme);
+                    }
+                } else {
+                    // Struct unknown — bind each field to a fresh var.
+                    for fname in fields {
+                        let v = self.fresh_tyvar();
+                        self.env
+                            .define(*fname, TypeScheme::monomorphic(v));
+                    }
+                }
+                self.node_types.insert(let_id, self.subst.apply(&init_ty));
+            }
+        }
+    }
+
     fn check_match_arm(&mut self, arm: &MatchArm, scrutinee_ty: &Ty, result_ty: &Ty) {
         self.env.push_scope();
         self.check_pattern(&arm.pattern, scrutinee_ty);
@@ -2453,11 +2839,58 @@ impl<'a> TypeInfer<'a> {
             // specific one (e.g. InfiniteType, NotCallable).
             let lhs = self.subst.apply(a);
             let rhs = self.subst.apply(b);
-            self.errors.push(TypeError::Mismatch {
-                expected: lhs,
-                found: rhs,
-                span,
-            });
+            // M10 Task 6 Part C: locate the deepest alias-vs-non-alias
+            // mismatch inside the failing pair, and surface it as
+            // `AliasMismatch` so the user sees "expected `Url`, got `Str`"
+            // instead of a generic structural mismatch (whose `description()`
+            // helpfully elides alias wrappers and ends up reading
+            // "expected `Str`, got `Str`"). Falls back to `Mismatch` when no
+            // alias is involved.
+            if let Some((expected_ty, got_ty)) = find_alias_mismatch(&lhs, &rhs) {
+                self.errors.push(TypeError::AliasMismatch {
+                    expected: self.pretty_type(&expected_ty),
+                    got: self.pretty_type(&got_ty),
+                    span,
+                });
+            } else {
+                self.errors.push(TypeError::Mismatch {
+                    expected: lhs,
+                    found: rhs,
+                    span,
+                });
+            }
+        }
+    }
+
+    /// Renders a `Ty` for diagnostics, resolving alias-name `Symbol`s through
+    /// the interner so the user sees the source-level alias name (`Url`)
+    /// instead of `<alias#NN>` from `Display`.
+    fn pretty_type(&self, ty: &Ty) -> String {
+        match ty {
+            Ty::Alias(name, _) => self.interner.resolve(*name).to_string(),
+            other => format!("{other}"),
+        }
+    }
+
+    /// Returns true if `from as to` is well-formed. M10 (Task 6 Part C). The
+    /// cast bridges any opaque alias and its underlying type in either
+    /// direction; all other casts are accepted iff `from` and `to` would
+    /// otherwise unify. Type variables on either side defer to a unify
+    /// attempt — the cast is permissive when the substitution leaves room.
+    fn cast_is_valid(&mut self, from: &Ty, to: &Ty) -> bool {
+        // Same shape (or unifiable) — always valid.
+        if self.try_unify(from, to).is_ok() {
+            return true;
+        }
+        // Alias bridging: peel one alias layer off either side and retry.
+        match (from, to) {
+            (Ty::Alias(_, inner), other) => {
+                self.try_unify(inner, other).is_ok()
+            }
+            (other, Ty::Alias(_, inner)) => {
+                self.try_unify(other, inner).is_ok()
+            }
+            _ => false,
         }
     }
 
@@ -2577,6 +3010,16 @@ impl<'a> TypeInfer<'a> {
             // EffVar↔row inference is deferred. This arm is here so that
             // explicit annotations carrying `EffVar` don't blow up.
             (Ty::EffVar(n1), Ty::EffVar(n2)) if n1 == n2 => Ok(()),
+
+            // M10 Task 6 Part C: opaque aliases unify only with the same alias.
+            // `Ty::Alias` does NOT unify with its inner type — `as` casts
+            // bridge the two. This is what makes `type Url = Str` newtype-style.
+            (Ty::Alias(n1, inner1), Ty::Alias(n2, inner2)) => {
+                if n1 != n2 {
+                    return Err(());
+                }
+                self.try_unify(&inner1, &inner2)
+            }
 
             _ => Err(()),
         }
@@ -2753,27 +3196,68 @@ impl<'a> TypeInfer<'a> {
             }
         }
 
+        // Validate f-string interpolation parts — must be Str/Int/Float/Bool.
+        // Reuses TypeError::Mismatch with `expected: Ty::Str` as the canonical
+        // shape for "this is not a coercible-to-string scalar".
+        for (id, span) in &self.fstring_interp_nodes {
+            if let Some(ty) = resolved.get(id) {
+                match ty {
+                    Ty::Str | Ty::Int | Ty::Float | Ty::Bool => {}
+                    other => {
+                        self.errors.push(TypeError::Mismatch {
+                            expected: Ty::Str,
+                            found: other.clone(),
+                            span: *span,
+                        });
+                    }
+                }
+            }
+        }
+
         // Late-bound method dispatch. For any method call whose receiver
         // type wasn't concrete during inference, retry resolution now that
         // the substitution has settled and defaults have been applied.
         for (recv_id, method, call_id, span) in &self.pending_methods {
-            if self.method_dispatch.contains_key(call_id) {
+            if self.method_dispatch.contains_key(call_id)
+                || self.stdlib_method_dispatch.contains_key(call_id)
+            {
                 continue;
             }
             let recv_ty = resolved.get(recv_id).cloned().unwrap_or(Ty::Unit);
+
+            // M10 Task 6: try the stdlib method table first.
+            if let Some(kind) = stdlib_receiver_kind(&recv_ty) {
+                let method_name = self.interner.resolve(*method);
+                if let Some(stdlib_name) = stdlib_method_for(kind, method_name)
+                    && let Some(stdlib_sym) = self.interner.lookup(stdlib_name)
+                {
+                    self.stdlib_method_dispatch.insert(*call_id, stdlib_sym);
+                    continue;
+                }
+            }
+
             if let Some((_, def_id)) = self.registry.find_method(&recv_ty, *method) {
                 self.method_dispatch.insert(*call_id, def_id);
             } else if !matches!(recv_ty, Ty::Var(_)) {
-                self.errors.push(TypeError::NoSuchMethod {
-                    ty: recv_ty,
-                    method: *method,
-                    span: *span,
-                });
+                // M10 Task 6: report `ResolveError::UnknownMethod` as the
+                // canonical "unknown receiver/method" diagnostic. We use
+                // `resolve_errors` (the inferencer's escape hatch into the
+                // resolver-error renderer) so the message is a single clean
+                // line instead of the legacy `TypeError::NoSuchMethod` plus a
+                // resolve-stage echo.
+                self.resolve_errors
+                    .push(ferric_common::ResolveError::UnknownMethod {
+                        method: *method,
+                        ty: format!("{recv_ty}"),
+                        span: *span,
+                    });
             }
         }
 
         let mut result = TypeResult::new(resolved, self.errors);
         result.method_dispatch = self.method_dispatch;
+        result.stdlib_method_dispatch = self.stdlib_method_dispatch;
+        result.resolve_errors = self.resolve_errors;
         result
     }
 }
@@ -2785,6 +3269,137 @@ fn unwrap_export(item: &Item) -> &Item {
     match item {
         Item::Export(decl) => decl.item.as_ref(),
         other => other,
+    }
+}
+
+/// Identifies the receiver "kind" used to look up stdlib method dispatches.
+/// M10 (Task 6 Part B). Aliases unwrap to their inner type for dispatch
+/// purposes (the receiver of a `.len()` on an `Url = Str` still resolves
+/// to the `Str` table) — opacity affects argument unification, not the
+/// existence of methods on the underlying shape.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StdlibReceiverKind {
+    Str,
+    List,
+    /// Reserved for future Map dispatch — `Map<K, V>` does not yet have a
+    /// dedicated `Ty` variant; the typechecker treats it as a generic the
+    /// inferencer leaves as a free var. Listed in the table below so that
+    /// when a `Ty::Map` lands the wiring is already in place.
+    #[allow(dead_code)]
+    Map,
+}
+
+fn stdlib_receiver_kind(ty: &Ty) -> Option<StdlibReceiverKind> {
+    match ty {
+        Ty::Str => Some(StdlibReceiverKind::Str),
+        Ty::Array(_) => Some(StdlibReceiverKind::List),
+        // Maps are not yet a first-class `Ty` variant; the typechecker
+        // currently treats `Map<K,V>` annotations as fresh tyvars. Method
+        // dispatch on Map is handled below via the Generic annotation path
+        // when relevant; for the structural lookup here, we only match
+        // primitive-shaped receivers.
+        Ty::Alias(_, inner) | Ty::Opaque { inner, .. } => stdlib_receiver_kind(inner),
+        _ => None,
+    }
+}
+
+/// Returns the stdlib function name for `receiver.method(...)` if the pair is
+/// in the M10 method-dispatch table. Returning `None` means dispatch should
+/// fall through to user-defined trait-impl lookup. M10 (Task 6 Part B).
+///
+/// Only entries whose underlying stdlib function exists in
+/// `ferric_stdlib_meta` are listed — methods that would require a
+/// closure-accepting native (e.g. `.map`, `.filter`, `.fold`) are deliberately
+/// omitted because the project's natives cannot call into closures yet.
+fn stdlib_method_for(kind: StdlibReceiverKind, method: &str) -> Option<&'static str> {
+    match (kind, method) {
+        // Str — first param is `s: Str`.
+        (StdlibReceiverKind::Str, "len") => Some("str_len"),
+        (StdlibReceiverKind::Str, "contains") => Some("str_contains"),
+        (StdlibReceiverKind::Str, "starts_with") => Some("str_starts_with"),
+        (StdlibReceiverKind::Str, "ends_with") => Some("str_ends_with"),
+        (StdlibReceiverKind::Str, "split") => Some("str_split"),
+        (StdlibReceiverKind::Str, "trim") => Some("str_trim"),
+        (StdlibReceiverKind::Str, "to_upper") => Some("str_to_upper"),
+        (StdlibReceiverKind::Str, "to_lower") => Some("str_to_lower"),
+        (StdlibReceiverKind::Str, "replace") => Some("str_replace"),
+        (StdlibReceiverKind::Str, "parse_int") => Some("str_parse_int"),
+        (StdlibReceiverKind::Str, "parse_float") => Some("str_parse_float"),
+        (StdlibReceiverKind::Str, "is_empty") => Some("str_is_empty"),
+        (StdlibReceiverKind::Str, "lines") => Some("str_lines"),
+        (StdlibReceiverKind::Str, "chars") => Some("str_chars"),
+        (StdlibReceiverKind::Str, "slice") => Some("str_slice"),
+        // [T] — first param is `l: [T]`.
+        (StdlibReceiverKind::List, "len") => Some("list_len"),
+        (StdlibReceiverKind::List, "first") => Some("list_first"),
+        (StdlibReceiverKind::List, "last") => Some("list_last"),
+        (StdlibReceiverKind::List, "reverse") => Some("list_reverse"),
+        (StdlibReceiverKind::List, "take") => Some("list_take"),
+        (StdlibReceiverKind::List, "drop") => Some("list_drop"),
+        (StdlibReceiverKind::List, "append") => Some("list_append"),
+        (StdlibReceiverKind::List, "concat") => Some("list_concat"),
+        (StdlibReceiverKind::List, "is_empty") => Some("list_is_empty"),
+        (StdlibReceiverKind::List, "contains") => Some("list_contains"),
+        (StdlibReceiverKind::List, "slice") => Some("list_slice"),
+        // Map<K,V> — first param is `m: Map<K,V>`. Reserved for future
+        // dispatch when Maps gain a dedicated `Ty` variant.
+        (StdlibReceiverKind::Map, "get") => Some("map_get"),
+        (StdlibReceiverKind::Map, "get_or") => Some("map_get_or"),
+        (StdlibReceiverKind::Map, "insert") => Some("map_insert"),
+        (StdlibReceiverKind::Map, "remove") => Some("map_remove"),
+        (StdlibReceiverKind::Map, "contains_key") => Some("map_contains_key"),
+        (StdlibReceiverKind::Map, "keys") => Some("map_keys"),
+        (StdlibReceiverKind::Map, "values") => Some("map_values"),
+        (StdlibReceiverKind::Map, "len") => Some("map_len"),
+        (StdlibReceiverKind::Map, "is_empty") => Some("map_is_empty"),
+        (StdlibReceiverKind::Map, "merge") => Some("map_merge"),
+        _ => None,
+    }
+}
+
+/// Walks two structurally-shaped types in lockstep looking for the first
+/// position where one side is `Ty::Alias(..)` and the other is not (or where
+/// two aliases of different names meet). Returns `(expected, got)` for the
+/// `AliasMismatch` diagnostic, or `None` when no alias is involved at any
+/// position.
+///
+/// This is a one-shot diagnostic helper — it doesn't replace `try_unify`,
+/// which still drives the actual unification. M10 (Task 6 Part C).
+fn find_alias_mismatch(a: &Ty, b: &Ty) -> Option<(Ty, Ty)> {
+    match (a, b) {
+        (Ty::Alias(n1, i1), Ty::Alias(n2, i2)) => {
+            if n1 != n2 {
+                return Some((a.clone(), b.clone()));
+            }
+            find_alias_mismatch(i1, i2)
+        }
+        (Ty::Alias(..), _) | (_, Ty::Alias(..)) => Some((a.clone(), b.clone())),
+        (Ty::Fn { params: p1, ret: r1 }, Ty::Fn { params: p2, ret: r2 }) => {
+            for (x, y) in p1.iter().zip(p2.iter()) {
+                if let Some(m) = find_alias_mismatch(x, y) {
+                    return Some(m);
+                }
+            }
+            find_alias_mismatch(r1, r2)
+        }
+        (Ty::Tuple(xs), Ty::Tuple(ys)) => {
+            for (x, y) in xs.iter().zip(ys.iter()) {
+                if let Some(m) = find_alias_mismatch(x, y) {
+                    return Some(m);
+                }
+            }
+            None
+        }
+        (Ty::Array(x), Ty::Array(y))
+        | (Ty::Option(x), Ty::Option(y))
+        | (Ty::Async(x), Ty::Async(y))
+        | (Ty::Handle(x), Ty::Handle(y))
+        | (Ty::Poll(x), Ty::Poll(y)) => find_alias_mismatch(x, y),
+        (Ty::Result(ok1, err1), Ty::Result(ok2, err2)) => {
+            find_alias_mismatch(ok1, ok2).or_else(|| find_alias_mismatch(err1, err2))
+        }
+        (Ty::Eff(_r1, t1), Ty::Eff(_r2, t2)) => find_alias_mismatch(t1, t2),
+        _ => None,
     }
 }
 
@@ -3034,6 +3649,18 @@ fn span_in_expr(expr: &Expr, target: NodeId) -> Option<Span> {
                 .find_map(|c| span_in_expr(&c.handler, target))
         }),
         Expr::Resume(r) => span_in_expr(&r.value, target),
+        // M10 Task 1 scaffolding: walk children defensively. Parser does not
+        // emit these yet (Tasks 2-4 wire them up).
+        Expr::FString(e) => e.segments.iter().find_map(|seg| match &seg.kind {
+            ferric_common::FStringSegmentKind::Expr(inner) => span_in_expr(inner, target),
+            ferric_common::FStringSegmentKind::Lit(_) => None,
+        }),
+        Expr::Pipeline(e) => {
+            span_in_expr(&e.lhs, target).or_else(|| span_in_expr(&e.rhs, target))
+        }
+        Expr::Propagate(e) => span_in_expr(&e.operand, target),
+        Expr::Must(e) => span_in_expr(&e.operand, target)
+            .or_else(|| e.message.as_ref().and_then(|m| span_in_expr(m, target))),
     }
 }
 
@@ -3082,9 +3709,12 @@ mod tests {
             type_alias_resolving: HashSet::new(),
             node_types: HashMap::new(),
             method_dispatch: HashMap::new(),
+            stdlib_method_dispatch: HashMap::new(),
             pending_methods: Vec::new(),
             shell_interp_nodes: vec![],
+            fstring_interp_nodes: vec![],
             errors: vec![],
+            resolve_errors: vec![],
         };
         infer.unify(&Ty::Int, &Ty::Int, Span::new(0, 0));
         assert!(infer.errors.is_empty());
@@ -3112,9 +3742,12 @@ mod tests {
             type_alias_resolving: HashSet::new(),
             node_types: HashMap::new(),
             method_dispatch: HashMap::new(),
+            stdlib_method_dispatch: HashMap::new(),
             pending_methods: Vec::new(),
             shell_interp_nodes: vec![],
+            fstring_interp_nodes: vec![],
             errors: vec![],
+            resolve_errors: vec![],
         };
         let v = infer.fresh_tyvar();
         infer.unify(&v, &Ty::Int, Span::new(0, 0));
@@ -3144,9 +3777,12 @@ mod tests {
             type_alias_resolving: HashSet::new(),
             node_types: HashMap::new(),
             method_dispatch: HashMap::new(),
+            stdlib_method_dispatch: HashMap::new(),
             pending_methods: Vec::new(),
             shell_interp_nodes: vec![],
+            fstring_interp_nodes: vec![],
             errors: vec![],
+            resolve_errors: vec![],
         };
         let v = infer.fresh_tyvar();
         let inner = match v.clone() {
@@ -3186,9 +3822,12 @@ mod tests {
             type_alias_resolving: HashSet::new(),
             node_types: HashMap::new(),
             method_dispatch: HashMap::new(),
+            stdlib_method_dispatch: HashMap::new(),
             pending_methods: Vec::new(),
             shell_interp_nodes: vec![],
+            fstring_interp_nodes: vec![],
             errors: vec![],
+            resolve_errors: vec![],
         };
         let alpha = TyVar(99);
         let scheme = TypeScheme {
@@ -3511,6 +4150,7 @@ mod tests {
             span: Span::new(0, 0),
             name: interner.intern("value"),
             value: Box::new(lit_int(0, 0)),
+            implicit: false,
         };
         let perform = Expr::Perform(PerformExpr {
             id: NodeId::new(200),

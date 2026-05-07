@@ -1,0 +1,6 @@
+error: type mismatch: expected `Str`, got `Url`
+  --> input:11:1
+   |
+11 | takes_str(s: url)   // ERROR: expected `Str`, got `Url`
+   | ^^^^^^^^^^^^^^^^^
+   = help: use an `as` cast to convert between an alias and its underlying type

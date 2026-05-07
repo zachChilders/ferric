@@ -27,8 +27,8 @@
 
 use ferric_common::{
     AsyncBlockExpr, AsyncLowerError, AsyncResult, AsyncWarning, AsyncWarningKind, CastExpr,
-    ExportDecl, Expr, FnItem, ImplMethod, Item, Literal, MatchArm, NamedArg, NodeId, ParseResult,
-    PerformExpr, RequireStmt, ShellPart, Span, Stmt, Symbol, TypeResult,
+    ExportDecl, Expr, FStringSegmentKind, FnItem, ImplMethod, Item, Literal, MatchArm, NamedArg,
+    NodeId, ParseResult, PerformExpr, RequireStmt, ShellPart, Span, Stmt, Symbol, TypeResult,
 };
 
 /// Single public entry point for the async preparation stage.
@@ -206,14 +206,14 @@ impl Lowerer {
     fn lower_stmt(&mut self, stmt: &Stmt) -> Stmt {
         match stmt {
             Stmt::Let {
-                name,
+                pattern,
                 mutable,
                 ty,
                 init,
                 id,
                 span,
             } => Stmt::Let {
-                name: *name,
+                pattern: pattern.clone(),
                 mutable: *mutable,
                 ty: ty.clone(),
                 init: self.lower_expr(init),
@@ -246,6 +246,7 @@ impl Lowerer {
                 var_id,
                 iter,
                 body,
+                label,
                 id,
                 span,
             } => Stmt::For {
@@ -253,6 +254,7 @@ impl Lowerer {
                 var_id: *var_id,
                 iter: self.lower_expr(iter),
                 body: self.lower_expr(body),
+                label: label.clone(),
                 id: *id,
                 span: *span,
             },
@@ -357,6 +359,7 @@ impl Lowerer {
                         span: a.span,
                         name: a.name,
                         value: Box::new(self.lower_expr(&a.value)),
+                        implicit: a.implicit,
                     })
                     .collect(),
                 id: *id,
@@ -394,16 +397,24 @@ impl Lowerer {
             Expr::While {
                 cond,
                 body,
+                label,
                 id,
                 span,
             } => Expr::While {
                 cond: Box::new(self.lower_expr(cond)),
                 body: Box::new(self.lower_expr(body)),
+                label: label.clone(),
                 id: *id,
                 span: *span,
             },
-            Expr::Loop { body, id, span } => Expr::Loop {
+            Expr::Loop {
+                body,
+                label,
+                id,
+                span,
+            } => Expr::Loop {
                 body: Box::new(self.lower_expr(body)),
+                label: label.clone(),
                 id: *id,
                 span: *span,
             },
@@ -510,6 +521,7 @@ impl Lowerer {
                         span: a.span,
                         name: a.name,
                         value: Box::new(self.lower_expr(&a.value)),
+                        implicit: a.implicit,
                     })
                     .collect(),
                 id: *id,
@@ -521,6 +533,12 @@ impl Lowerer {
                 expr: Box::new(self.lower_expr(&c.expr)),
                 target: c.target.clone(),
             }),
+            // M10 Task 1 scaffolding: pass these through unchanged. The parser
+            // doesn't emit them yet (Tasks 2-4); when it does, this lowering
+            // pass will be revisited.
+            Expr::FString(_) | Expr::Pipeline(_) | Expr::Propagate(_) | Expr::Must(_) => {
+                expr.clone()
+            }
         }
     }
 
@@ -580,6 +598,7 @@ impl Lowerer {
                 span,
                 name: synth_symbol("cmd"),
                 value: Box::new(cmd_literal),
+                implicit: false,
             }],
             id: self.fresh_id(),
             span,
@@ -827,5 +846,26 @@ fn walk_node_ids_expr(expr: &Expr, f: &mut impl FnMut(NodeId)) {
             }
         }
         Expr::Resume(r) => walk_node_ids_expr(&r.value, f),
+        // M10 Task 1 scaffolding: parser does not emit these yet (Tasks 2-4
+        // wire them up). Walk children defensively so tooling that runs
+        // ahead of those tasks still produces complete coverage.
+        Expr::FString(e) => {
+            for seg in &e.segments {
+                if let FStringSegmentKind::Expr(inner) = &seg.kind {
+                    walk_node_ids_expr(inner, f);
+                }
+            }
+        }
+        Expr::Pipeline(e) => {
+            walk_node_ids_expr(&e.lhs, f);
+            walk_node_ids_expr(&e.rhs, f);
+        }
+        Expr::Propagate(e) => walk_node_ids_expr(&e.operand, f),
+        Expr::Must(e) => {
+            walk_node_ids_expr(&e.operand, f);
+            if let Some(m) = &e.message {
+                walk_node_ids_expr(m, f);
+            }
+        }
     }
 }

@@ -1,0 +1,28 @@
+// M10 Task 4: `?` on Option<T> short-circuits with `None`.
+//
+// `head` returns `Option::None` for an empty list, otherwise `Some(first)`.
+// `first_doubled` uses `?` to propagate `None` straight back to its caller
+// rather than writing a manual `match`.
+
+fn head(xs: [Int]) -> Option<Int> {
+    if list_len(l: xs) == 0 {
+        Option::None
+    } else {
+        Option::Some(xs[0])
+    }
+}
+
+fn first_doubled(xs: [Int]) -> Option<Int> {
+    let first = head(xs: xs)?
+    Option::Some(first * 2)
+}
+
+fn describe(o: Option<Int>) -> Str {
+    match o {
+        Option::Some(n) => int_to_str(n: n),
+        Option::None    => "none",
+    }
+}
+
+println(s: describe(o: first_doubled(xs: [21])))
+println(s: describe(o: first_doubled(xs: [])))

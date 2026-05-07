@@ -1,0 +1,6 @@
+error: `?` requires `Option<T>` or `Result<T, E>`, got `Int`
+  --> input:10:13
+   |
+10 |     let x = double(n: 21)?
+   |             ^^^^^^^^^^^^^^ operand has type `Int`
+   = help: the `?` operator only short-circuits on fallible types; wrap the value in `Option` or `Result`, or remove the `?`

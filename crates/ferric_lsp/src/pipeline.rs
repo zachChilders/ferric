@@ -184,20 +184,31 @@ pub fn run_pipeline(uri: String, version: i32, source: String) -> PipelineSnapsh
     // so the parser's `async fn` / `gen fn` desugaring produces effect AST
     // nodes with stable `Symbol` identities.
     ferric_parser::pre_intern_desugar_names(&mut interner);
-    let parse_result = match &lex_result {
+    let mut parse_result = match &lex_result {
         Some(lex) => catch_stage(std::panic::AssertUnwindSafe(|| {
             ferric_parser::parse_with_interner(lex, &interner)
         })),
         None => None,
     };
 
+    // M10 Task 3: desugar pipelines in-place. Errors are merged into the
+    // resolve result below.
+    let pipeline_errors = if let Some(ast) = parse_result.as_mut() {
+        ferric_resolve::desugar_pipelines(ast, &native_fns)
+    } else {
+        Vec::new()
+    };
+
     // Stage 3: resolve.
-    let resolve_result = match &parse_result {
+    let mut resolve_result = match &parse_result {
         Some(ast) => catch_stage(std::panic::AssertUnwindSafe(|| {
             ferric_resolve::resolve_with_natives_and_builtins(ast, &native_fns, &builtin_enums)
         })),
         None => None,
     };
+    if let Some(r) = resolve_result.as_mut() {
+        r.errors.extend(pipeline_errors);
+    }
 
     // Stage 4: typecheck. M5 inserted `ferric_traits::build_registry` between
     // resolve and infer; the LSP runs it inline so types involving traits

@@ -94,6 +94,13 @@ pub enum Ty {
     /// Effect-row unification variable. Like `Ty::Var`, but ranges over effect
     /// rows rather than ordinary types. Names are interned via `Symbol`.
     EffVar(Symbol),
+    /// Opaque-only type alias. M10 (Task 6 Part C). The alias name and its
+    /// underlying type are kept distinct so `type Url = Str` does not unify
+    /// with `Str` — `as` casts are required to convert between them.
+    ///
+    /// **Status:** scaffolding only in Task 1. Existing alias handling continues
+    /// to use `Ty::Opaque`; `Ty::Alias` is wired up in Task 6.
+    Alias(Symbol, Box<Ty>),
 }
 
 impl Ty {
@@ -178,6 +185,9 @@ impl Ty {
                 format!("Eff<[{}], {}>", row_str, t.description())
             }
             Ty::EffVar(name) => format!("?eff#{}", name.0),
+            Ty::Alias(name, inner) => {
+                format!("Alias#{}({})", name.0, inner.description())
+            }
         }
     }
 
@@ -265,6 +275,10 @@ impl std::fmt::Display for Ty {
                 write!(f, "], {t}>")
             }
             Ty::EffVar(name) => write!(f, "?{}", name.0),
+            // The Display impl has no interner, so we render with a symbol-id
+            // sentinel like `Ty::Struct`. Higher-level tooling formats with
+            // interner access for the user-facing alias name.
+            Ty::Alias(name, _) => write!(f, "<alias#{}>", name.0),
         }
     }
 }
