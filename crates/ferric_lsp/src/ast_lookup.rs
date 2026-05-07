@@ -5,7 +5,7 @@
 //! literals, keywords, whitespace, and operators — the LSP correctly returns
 //! "no hover" / "no definition" in those cases.
 
-use ferric_common::{Expr, Item, NodeId, ParseResult, Span, Stmt};
+use ferric_common::{Expr, FStringSegmentKind, Item, NodeId, ParseResult, Span, Stmt};
 
 /// Walk every top-level item, returning the deepest `Expr::Variable` whose
 /// span contains `byte`. Returns the variable's `(NodeId, Span)`.
@@ -101,6 +101,17 @@ fn walk_expr(expr: &Expr, byte: u32) -> Option<(NodeId, Span)> {
         Expr::Handle(h) => walk_expr(&h.body, byte)
             .or_else(|| h.clauses.iter().find_map(|c| walk_expr(&c.handler, byte))),
         Expr::Resume(r) => walk_expr(&r.value, byte),
+        // M10 nodes — recurse into interpolated expressions, pipeline lhs/rhs,
+        // and the operands of `?` and `must` so identifiers inside them are
+        // hoverable.
+        Expr::FString(fs) => fs.segments.iter().find_map(|s| match &s.kind {
+            FStringSegmentKind::Expr(e) => walk_expr(e, byte),
+            FStringSegmentKind::Lit(_) => None,
+        }),
+        Expr::Pipeline(p) => walk_expr(&p.lhs, byte).or_else(|| walk_expr(&p.rhs, byte)),
+        Expr::Propagate(p) => walk_expr(&p.operand, byte),
+        Expr::Must(m) => walk_expr(&m.operand, byte)
+            .or_else(|| m.message.as_deref().and_then(|msg| walk_expr(msg, byte))),
         // Variants without sub-expressions: Literal, Variable, Break, Continue, Shell.
         // Shell parts may contain interpolated tokens, but those aren't AST
         // expressions we'd hover over here — handled in a future task.
