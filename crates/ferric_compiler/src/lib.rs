@@ -1128,22 +1128,35 @@ impl<'a> Compiler<'a> {
 
         // The type checker records which impl method to invoke.
         let def_id = self.types.method_dispatch.get(&id).copied();
-        match def_id.and_then(|d| self.method_chunks.get(&d).copied()) {
-            Some(chunk_idx) => {
-                let cidx = self.add_constant(Constant::Fn(chunk_idx));
-                self.emit(Op::LoadConst(cidx));
-                let argc = u8::try_from(args.len() + 1).expect("method call argc exceeds u8");
-                self.emit(Op::Call(argc));
-            }
-            None => {
-                // No dispatch info — type checker should have rejected this.
-                // Pop pushed values to keep the stack balanced and push Unit.
-                for _ in 0..(args.len() + 1) {
-                    self.emit(Op::Pop);
-                }
-                self.emit(Op::Unit);
-            }
+        if let Some(chunk_idx) = def_id.and_then(|d| self.method_chunks.get(&d).copied()) {
+            // User impl: dispatch via the pre-allocated chunk.
+            let cidx = self.add_constant(Constant::Fn(chunk_idx));
+            self.emit(Op::LoadConst(cidx));
+            let argc = u8::try_from(args.len() + 1).expect("method call argc exceeds u8");
+            self.emit(Op::Call(argc));
+            return;
         }
+
+        // No chunk for this DefId — fall back to native-by-symbol dispatch
+        // for stdlib-built-in impls (Coercion task 2). The resolver records a
+        // `DefInfo { name, .. }` for every native, including the synthetic
+        // `__to_*` natives that back built-in `To<T>` impls.
+        if let Some(def_id) = def_id
+            && let Some(name) = self.resolve.def(def_id).map(|info| info.name)
+        {
+            let cidx = self.add_constant(Constant::NativeFn(name));
+            self.emit(Op::LoadConst(cidx));
+            let argc = u8::try_from(args.len() + 1).expect("method call argc exceeds u8");
+            self.emit(Op::Call(argc));
+            return;
+        }
+
+        // No dispatch info — type checker should have rejected this. Pop
+        // pushed values to keep the stack balanced and push Unit.
+        for _ in 0..(args.len() + 1) {
+            self.emit(Op::Pop);
+        }
+        self.emit(Op::Unit);
     }
 
     /// Compiles a single impl block method into its pre-allocated chunk.
@@ -1628,8 +1641,14 @@ impl<'a> Compiler<'a> {
         let effective_args: &[NamedArg] = canonical.as_deref().unwrap_or(args);
 
         // Args left-to-right; the VM pops-and-reverses to recover order.
+        // For each arg the type checker recorded in `types.coercions`,
+        // wrap the pushed value with a `Call(1)` to the resolved `To<T>::to`
+        // method before the outer call consumes it.
         for arg in effective_args {
             self.compile_expr(&arg.value);
+            if let Some(&to_def) = self.types.coercions.get(&arg.value.id()) {
+                self.emit_coercion_call(to_def);
+            }
         }
 
         // Push the callable last (Op::Call pops it first).
@@ -1637,6 +1656,34 @@ impl<'a> Compiler<'a> {
 
         let argc = u8::try_from(effective_args.len()).expect("argc exceeds u8");
         self.emit(Op::Call(argc));
+    }
+
+    /// Emits a one-arg call to the `to` method identified by `def_id`. The
+    /// value being coerced must already sit on top of the operand stack.
+    ///
+    /// The `to` `DefId` may resolve to either a user impl method (already
+    /// compiled to its own chunk via `method_chunks`) or a stdlib-built-in
+    /// `To<T>` impl backed by a native (e.g. `__to_int_to_float`,
+    /// `__to_shellout_to_str`). The dispatch mirrors the fallback in
+    /// `compile_method_call`.
+    fn emit_coercion_call(&mut self, def_id: DefId) {
+        if let Some(&chunk_idx) = self.method_chunks.get(&def_id) {
+            let cidx = self.add_constant(Constant::Fn(chunk_idx));
+            self.emit(Op::LoadConst(cidx));
+            self.emit(Op::Call(1));
+            return;
+        }
+        // Fallback: built-in `To<T>` impl backed by a stdlib native. The
+        // resolver records the native's name on its `DefInfo`, which is the
+        // exact symbol the VM dispatches on for `Constant::NativeFn`.
+        // If neither path applies (no dispatch info recorded), the type
+        // checker should have rejected this; we leave the value on the
+        // stack untouched so the outer call still has something to consume.
+        if let Some(name) = self.resolve.def(def_id).map(|info| info.name) {
+            let cidx = self.add_constant(Constant::NativeFn(name));
+            self.emit(Op::LoadConst(cidx));
+            self.emit(Op::Call(1));
+        }
     }
 }
 
@@ -1889,5 +1936,119 @@ mod tests {
         assert!(entry_code(&p).contains(&Op::LtInt));
         let (p, _) = compile_source("1.0 < 2.0");
         assert!(entry_code(&p).contains(&Op::LtFloat));
+    }
+
+    /// Drives the same pipeline as `compile_source` but with the stdlib
+    /// natives registered and the built-in `To<T>` impls seeded into the
+    /// trait registry. Required for coercion tests, which depend on
+    /// `__to_int_to_float` / `__to_shellout_to_str` being addressable as
+    /// `Constant::NativeFn` and on `find_to_impls` returning the matching
+    /// stdlib impl.
+    fn compile_source_with_traits(src: &str) -> (Program, Interner) {
+        use ferric_stdlib::{NativeRegistry, register_builtin_traits, register_stdlib};
+        use ferric_traits::build_registry_seeded;
+
+        let mut interner = Interner::new();
+        let mut natives = NativeRegistry::new();
+        register_stdlib(&mut natives, &mut interner);
+        let native_fns = natives.fn_table();
+
+        let lex_result = lex(src, &mut interner);
+        assert!(
+            lex_result.errors.is_empty(),
+            "lex errors: {:?}",
+            lex_result.errors
+        );
+        let parse_result = parse(&lex_result);
+        assert!(
+            parse_result.errors.is_empty(),
+            "parse errors: {:?}",
+            parse_result.errors
+        );
+        let resolve_result = resolve_with_natives(&parse_result, &native_fns);
+        assert!(
+            resolve_result.errors.is_empty(),
+            "resolve errors: {:?}",
+            resolve_result.errors
+        );
+        let seeded = register_builtin_traits(&mut interner, &resolve_result);
+        let traits_result =
+            build_registry_seeded(&parse_result, &resolve_result, &interner, seeded);
+        let type_result = typecheck(
+            &parse_result,
+            &resolve_result,
+            &interner,
+            &traits_result.registry,
+        );
+        assert!(
+            type_result.errors.is_empty(),
+            "type errors: {:?}",
+            type_result.errors
+        );
+        let program = compile(&parse_result, &resolve_result, &type_result, &interner);
+        (program, interner)
+    }
+
+    #[test]
+    fn int_to_float_coercion_emits_to_native_call() {
+        // `take_float` takes a Float; passing `1` provokes the implicit
+        // `To<Float> for Int` coercion. The compiler should emit:
+        //   LoadConst 1                  // push the Int arg
+        //   LoadConst NativeFn(__to_int_to_float)
+        //   Call(1)                      // run the coercion
+        //   LoadConst Fn(take_float)
+        //   Call(1)                      // outer call
+        let src = "fn take_float(x: Float) -> Float { x }\ntake_float(x: 1)";
+        let (program, interner) = compile_source_with_traits(src);
+        let entry = &program.chunks[program.entry as usize];
+
+        let to_native_sym = interner
+            .lookup("__to_int_to_float")
+            .expect("__to_int_to_float must be interned by register_stdlib");
+
+        let has_to_native = entry
+            .constants
+            .iter()
+            .any(|c| matches!(c, Constant::NativeFn(s) if *s == to_native_sym));
+        assert!(
+            has_to_native,
+            "expected Constant::NativeFn(__to_int_to_float) in entry chunk: {:?}",
+            entry.constants
+        );
+
+        // The bytecode should contain at least two `Call(1)`s: the coercion
+        // call and the outer call.
+        let call1_count = entry
+            .code
+            .iter()
+            .filter(|op| matches!(op, Op::Call(1)))
+            .count();
+        assert!(
+            call1_count >= 2,
+            "expected ≥2 Call(1)s (coercion + outer): {:?}",
+            entry.code
+        );
+    }
+
+    #[test]
+    fn no_coercion_means_no_extra_call() {
+        // Same shape as the test above, but the arg already matches the
+        // param type — no coercion entry, no extra Call(1).
+        let src = "fn take_float(x: Float) -> Float { x }\ntake_float(x: 1.0)";
+        let (program, interner) = compile_source_with_traits(src);
+        let entry = &program.chunks[program.entry as usize];
+
+        let to_native_sym = interner
+            .lookup("__to_int_to_float")
+            .expect("__to_int_to_float must be interned");
+        let has_to_native = entry
+            .constants
+            .iter()
+            .any(|c| matches!(c, Constant::NativeFn(s) if *s == to_native_sym));
+        assert!(
+            !has_to_native,
+            "did not expect __to_int_to_float native in entry chunk: {:?}",
+            entry.constants
+        );
     }
 }

@@ -222,6 +222,9 @@ pub enum Item {
     TraitDef {
         id: NodeId,
         name: Symbol,
+        /// Generic type parameters declared on the trait itself (e.g. `T`
+        /// in `trait To<T>`). Empty for non-generic traits like `Describable`.
+        type_params: Vec<TypeParam>,
         methods: Vec<TraitMethod>,
         span: Span,
     },
@@ -232,6 +235,10 @@ pub enum Item {
     ImplBlock {
         id: NodeId,
         trait_name: Symbol,
+        /// Concrete type arguments supplied to the trait at the impl site
+        /// (e.g. `[Str]` in `impl To<Str> for ShellOutput`). Empty for
+        /// non-generic traits.
+        trait_args: Vec<TypeAnnotation>,
         type_name: Symbol,
         methods: Vec<ImplMethod>,
         span: Span,

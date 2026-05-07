@@ -1,9 +1,11 @@
 //! `textDocument/inlayHint`.
 //!
-//! Renders inferred-type hints inline at two sites:
+//! Renders inferred-type hints inline at three sites:
 //!
 //!   1. Unannotated `let` bindings — `let x = 1` shows `: Int`
 //!   2. Closure parameters with no explicit type — `|x| x * 2` shows `: Int`
+//!   3. Implicitly coerced call arguments — `f(x: 5)` where `f` takes
+//!      `Float` shows `as Float` immediately after the argument.
 //!
 //! Hints require a *current* `TypeResult`. If the type checker couldn't run
 //! (parse errors, panic), no hints are returned — stale hints on actively
@@ -22,7 +24,9 @@
 //!   - The AST has no separate name-span for binders, so the hint position
 //!     is computed by scanning forward over the source text.
 
-use ferric_common::{Expr, Item, NodeId, Param, Span, Stmt, Ty, TypeAnnotation, TypeResult};
+use ferric_common::{
+    Expr, Item, NamedArg, NodeId, Param, ResolveResult, Span, Stmt, Ty, TypeAnnotation, TypeResult,
+};
 use tower_lsp::lsp_types::{InlayHint, InlayHintKind, InlayHintLabel, Position, Range};
 
 use crate::pipeline::{LineIndex, PipelineSnapshot};
@@ -38,6 +42,10 @@ pub fn inlay_hints(snapshot: &PipelineSnapshot, range: Range) -> Vec<InlayHint> 
     let cx = Ctx {
         source: &snapshot.source,
         types,
+        // `resolve` is optional: coercion hints only fire when the resolver
+        // produced canonical-arg metadata. The other hint sites do not need
+        // it.
+        resolve: snapshot.resolve.as_ref(),
         li: &snapshot.line_index,
         range,
     };
@@ -52,6 +60,7 @@ pub fn inlay_hints(snapshot: &PipelineSnapshot, range: Range) -> Vec<InlayHint> 
 struct Ctx<'a> {
     source: &'a str,
     types: &'a TypeResult,
+    resolve: Option<&'a ResolveResult>,
     li: &'a LineIndex,
     range: Range,
 }
@@ -139,11 +148,17 @@ fn collect_for_expr(expr: &Expr, cx: &Ctx, hints: &mut Vec<InlayHint>) {
             collect_for_expr(right, cx, hints);
         }
         Expr::Unary { expr: inner, .. } => collect_for_expr(inner, cx, hints),
-        Expr::Call { callee, args, .. } => {
+        Expr::Call {
+            callee,
+            args,
+            id: call_id,
+            ..
+        } => {
             for a in args {
                 collect_for_expr(&a.value, cx, hints);
             }
             collect_for_expr(callee, cx, hints);
+            push_coercion_hints(*call_id, callee, args, cx, hints);
         }
         Expr::Return { expr: Some(e), .. } => collect_for_expr(e, cx, hints),
         Expr::Closure {
@@ -292,6 +307,81 @@ fn make_hint(position: Position, ty: &Ty) -> InlayHint {
         padding_left: Some(false),
         padding_right: Some(false),
         data: None,
+    }
+}
+
+/// Inlay hint for an implicit `To<T>` coercion at a call argument position.
+/// Renders ` as T` immediately after the argument expression so the editor
+/// surfaces what the type checker silently inserted.
+fn make_coercion_hint(position: Position, ty: &Ty) -> InlayHint {
+    InlayHint {
+        position,
+        label: InlayHintLabel::String(format!(" as {ty}")),
+        // The hint reflects the *target* type the value is converted to, so
+        // it shares the same kind as the inferred-type hints.
+        kind: Some(InlayHintKind::TYPE),
+        text_edits: None,
+        tooltip: None,
+        padding_left: Some(false),
+        padding_right: Some(false),
+        data: None,
+    }
+}
+
+/// Walks the arguments of a call and emits an `as T` hint for every argument
+/// the type checker recorded in `coercions`. The target `T` is read off the
+/// callee's `Ty::Fn { params, .. }` at the same canonical position the
+/// resolver assigned.
+///
+/// Implementation detail: the canonical-arg list (definition order, defaults
+/// inserted) is what the type checker indexed against `params`, so coercions
+/// are keyed on canonical-arg `NodeId`s. A canonical arg cloned from a
+/// source arg keeps its original `NodeId`, so we can iterate the resolver's
+/// canonical list and the source list both — the source list is what we
+/// need to compute the hint *position* (defaults aren't visible in source).
+fn push_coercion_hints(
+    call_id: NodeId,
+    callee: &Expr,
+    args: &[NamedArg],
+    cx: &Ctx,
+    hints: &mut Vec<InlayHint>,
+) {
+    if cx.types.coercions.is_empty() {
+        return;
+    }
+    let Some(resolve) = cx.resolve else {
+        return;
+    };
+    let Some(callee_ty) = cx.types.node_types.get(&callee.id()) else {
+        return;
+    };
+    let Ty::Fn { params, .. } = callee_ty else {
+        return;
+    };
+    let Some(canonical) = resolve.canonical_call_args.get(&call_id) else {
+        return;
+    };
+    if canonical.len() != params.len() {
+        return; // shape mismatch — skip rather than guess
+    }
+
+    for (canon_idx, canon_arg) in canonical.iter().enumerate() {
+        let arg_id = canon_arg.value.id();
+        if !cx.types.coercions.contains_key(&arg_id) {
+            continue;
+        }
+        // The argument may have been written explicitly or filled in from a
+        // default — only show a hint when the user actually wrote it,
+        // otherwise the hint floats on the call-site span (the default's
+        // span is the call's own span by construction).
+        let Some(source_arg) = args.iter().find(|a| a.name == canon_arg.name) else {
+            continue;
+        };
+        let position = cx.li.position_of(source_arg.value.span().end);
+        if !position_in_range(position, cx.range) {
+            continue;
+        }
+        hints.push(make_coercion_hint(position, &params[canon_idx]));
     }
 }
 
@@ -533,6 +623,48 @@ mod tests {
         assert!(
             param_hint.is_none(),
             "annotated closure param produced a hint: {param_hint:?}",
+        );
+    }
+
+    #[test]
+    fn coerced_int_to_float_arg_emits_as_float_hint() {
+        // The integer literal `1` is implicitly coerced to `Float` because
+        // `take_float`'s `x` param is `Float`. The inlay hint should land
+        // immediately after the `1` and read ` as Float`.
+        let src = "fn take_float(x: Float) -> Float { x }\nlet r = take_float(x: 1)";
+        let h = hints_for(src);
+
+        let coercion_hint = h.iter().find(|h| label(h) == " as Float");
+        assert!(
+            coercion_hint.is_some(),
+            "expected ` as Float` coercion hint, got {h:?}",
+        );
+
+        // Source layout: the line `let r = take_float(x: 1)` is line 1 and
+        // the `1` literal sits at column 22; its span end (exclusive) is
+        // column 23, where the hint should land.
+        let hint = coercion_hint.unwrap();
+        assert_eq!(
+            hint.position,
+            Position {
+                line: 1,
+                character: 23,
+            },
+            "coercion hint at unexpected position: {hint:?}",
+        );
+        assert_eq!(hint.kind, Some(InlayHintKind::TYPE));
+    }
+
+    #[test]
+    fn matching_arg_type_emits_no_coercion_hint() {
+        // `1.0` already has type `Float`; no coercion is recorded, so no
+        // ` as ...` hint should appear.
+        let src = "fn take_float(x: Float) -> Float { x }\nlet r = take_float(x: 1.0)";
+        let h = hints_for(src);
+        let coercion_hint = h.iter().find(|h| label(h).starts_with(" as "));
+        assert!(
+            coercion_hint.is_none(),
+            "did not expect a coercion hint, got {coercion_hint:?}",
         );
     }
 }

@@ -213,10 +213,17 @@ pub fn run_pipeline(uri: String, version: i32, source: String) -> PipelineSnapsh
     // Stage 4: typecheck. M5 inserted `ferric_traits::build_registry` between
     // resolve and infer; the LSP runs it inline so types involving traits
     // resolve correctly.
+    //
+    // Coercion task 4: the registry must also include the built-in `To<T>`
+    // impls so the inferencer can record `Int → Float` / `ShellOutput → Str`
+    // coercions. We can't link `ferric_stdlib::register_builtin_traits`
+    // (heavy runtime deps); the seeding logic lives in
+    // `ferric_stdlib_meta::coercion` for this reason.
     let typecheck_result = match (&parse_result, &resolve_result) {
         (Some(ast), Some(res)) => catch_stage(std::panic::AssertUnwindSafe(|| {
-            let registry = ferric_traits::build_registry(ast, res, &interner);
-            ferric_infer::typecheck(ast, res, &interner, &registry)
+            let seeded = ferric_stdlib_meta::coercion::seed_to_trait(&mut interner, res);
+            let traits = ferric_traits::build_registry_seeded(ast, res, &interner, seeded);
+            ferric_infer::typecheck(ast, res, &interner, &traits.registry)
         })),
         _ => None,
     };
@@ -291,16 +298,21 @@ fn stdlib_builtin_enum_table(
 /// source of truth shared with `ferric_stdlib::register_stdlib` and
 /// `ferric_infer::register_native_signatures`. Includes the async
 /// intrinsics (which the VM dispatches but the resolver still has to
-/// recognise).
+/// recognise) and the synthetic `__to_*` natives that back the built-in
+/// `To<T>` coercion impls.
 fn stdlib_native_fn_table(interner: &mut Interner) -> Vec<(Symbol, Vec<Symbol>)> {
-    ferric_stdlib_meta::iter_all()
+    let mut table: Vec<(Symbol, Vec<Symbol>)> = ferric_stdlib_meta::iter_all()
         .chain(ferric_stdlib_meta::async_intrinsics::ASYNC_INTRINSICS.iter())
         .map(|m| {
             let n = interner.intern(m.name);
             let ps = m.params.iter().map(|p| interner.intern(p)).collect();
             (n, ps)
         })
-        .collect()
+        .collect();
+    table.extend(ferric_stdlib_meta::coercion::to_native_param_table(
+        interner,
+    ));
+    table
 }
 
 // ---------------------------------------------------------------------------

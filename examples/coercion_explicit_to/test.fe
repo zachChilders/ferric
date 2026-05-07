@@ -1,0 +1,13 @@
+// Coercion task 2: explicit `.to()` via the built-in `To<T>` trait.
+//
+// `(5).to()` invokes the stdlib `impl To<Float> for Int { ... }` and the
+// `let f: Float = ...` annotation pins the target type so the compiler
+// dispatches to the correct method.
+let f: Float = (5).to()
+println(s: float_to_str(n: f))
+
+// `output.to()` on a ShellOutput uses `impl To<Str> for ShellOutput`, which
+// returns the captured stdout.
+let output = $ printf hello
+let s: Str = output.to()
+println(s: s)

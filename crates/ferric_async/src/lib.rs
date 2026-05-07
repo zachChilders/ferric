@@ -151,6 +151,7 @@ impl Lowerer {
             Item::ImplBlock {
                 id,
                 trait_name,
+                trait_args,
                 type_name,
                 methods,
                 span,
@@ -165,6 +166,7 @@ impl Lowerer {
                 Item::ImplBlock {
                     id: *id,
                     trait_name: *trait_name,
+                    trait_args: trait_args.clone(),
                     type_name: *type_name,
                     methods,
                     span: *span,

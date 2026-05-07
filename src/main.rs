@@ -17,9 +17,10 @@ use ferric_resolve::{
     desugar_pipelines, resolve_with_imports_and_builtins, resolve_with_natives_and_builtins,
 };
 use ferric_stdlib::{
-    NativeRegistry, async_intrinsic_param_table, builtin_enum_table, register_stdlib,
+    NativeRegistry, async_intrinsic_param_table, builtin_enum_table, register_builtin_traits,
+    register_stdlib,
 };
-use ferric_traits::build_registry;
+use ferric_traits::build_registry_seeded;
 use ferric_vm::{BytecodeVM, Executor, Value};
 use std::env;
 use std::fs;
@@ -156,8 +157,15 @@ fn run_file(filename: &str) {
     // alongside other resolve diagnostics.
     resolve_result.errors.extend(pipeline_errors);
 
-    // Build trait registry (M5).
-    let trait_registry = build_registry(&parse_result, &resolve_result, &interner);
+    // Build trait registry: seed with stdlib's built-in `To<T>` trait + impls
+    // (Coercion task 2), then layer user-declared traits/impls on top with
+    // orphan-rule enforcement.
+    let seeded = register_builtin_traits(&mut interner, &resolve_result);
+    let traits_result = build_registry_seeded(&parse_result, &resolve_result, &interner, seeded);
+    let trait_registry = traits_result.registry;
+    // Surface orphan-rule violations through the resolver's error stream so
+    // they render alongside other resolve errors.
+    resolve_result.errors.extend(traits_result.errors);
 
     // Type check
     let type_result = typecheck(&parse_result, &resolve_result, &interner, &trait_registry);
@@ -340,6 +348,15 @@ fn run_session(source: &str) -> Result<(), String> {
     let mut resolve_result =
         resolve_with_natives_and_builtins(&parse_result, &native_fns, &builtin_enums);
     resolve_result.errors.extend(pipeline_errors);
+
+    // Seed built-in `To<T>` (Coercion task 2) before checking resolve errors,
+    // since orphan-rule diagnostics from `build_registry_seeded` flow into
+    // `resolve_result.errors`.
+    let seeded = register_builtin_traits(&mut interner, &resolve_result);
+    let traits_result = build_registry_seeded(&parse_result, &resolve_result, &interner, seeded);
+    let trait_registry = traits_result.registry;
+    resolve_result.errors.extend(traits_result.errors);
+
     if !resolve_result.errors.is_empty() {
         let r = Renderer::with_interner(source.to_string(), &interner);
         return Err(resolve_result
@@ -350,7 +367,6 @@ fn run_session(source: &str) -> Result<(), String> {
             .join("\n"));
     }
 
-    let trait_registry = build_registry(&parse_result, &resolve_result, &interner);
     let type_result = typecheck(&parse_result, &resolve_result, &interner, &trait_registry);
     if !type_result.errors.is_empty() || !type_result.resolve_errors.is_empty() {
         let r = Renderer::with_interner(source.to_string(), &interner);
