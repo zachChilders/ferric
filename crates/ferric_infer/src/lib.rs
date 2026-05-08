@@ -12,8 +12,8 @@ use ferric_common::{
     BinOp, DefId, EffectDecl, EffectOp, EffectRef, Expr, FStringSegmentKind, FnItem, HandleExpr,
     HandlerClause, ImplMethod, Interner, Item, LetPattern, Literal, MatchArm, NamedArg, NodeId,
     Param, ParseResult, Pattern, PerformExpr, RequireStmt, ResolveResult, ResumeExpr, ShellPart,
-    Span, Stmt, Symbol, TraitRegistry, Ty, TyVar, TypeAnnotation, TypeError, TypeParam,
-    TypeResult, TypeScheme, UnOp,
+    Span, Stmt, Symbol, TraitRegistry, Ty, TyVar, TypeAnnotation, TypeError, TypeParam, TypeResult,
+    TypeScheme, UnOp,
 };
 
 /// Adapter that lets `ferric_stdlib_meta` polymorphic-signature builders
@@ -972,20 +972,15 @@ impl<'a> TypeInfer<'a> {
                         // unification. We resolve the inner annotation
                         // recursively against a fresh alias map (alias bodies
                         // do not see the using site's generic parameters).
-                        if let Some(inner_ann) =
-                            self.resolve.type_aliases.get(sym).cloned()
-                        {
+                        if let Some(inner_ann) = self.resolve.type_aliases.get(sym).cloned() {
                             if !self.type_alias_resolving.insert(*sym) {
                                 // Cycle: `type A = B` where `B = A`. Fall back
                                 // to a fresh tyvar to avoid infinite recursion.
                                 return self.fresh_tyvar();
                             }
-                            let mut alias_inner_aliases: HashMap<Symbol, TyVar> =
-                                HashMap::new();
-                            let inner = self.resolve_type_annotation(
-                                &inner_ann,
-                                &mut alias_inner_aliases,
-                            );
+                            let mut alias_inner_aliases: HashMap<Symbol, TyVar> = HashMap::new();
+                            let inner =
+                                self.resolve_type_annotation(&inner_ann, &mut alias_inner_aliases);
                             self.type_alias_resolving.remove(sym);
                             return Ty::Alias(*sym, Box::new(inner));
                         }
@@ -2831,12 +2826,11 @@ impl<'a> TypeInfer<'a> {
                                 // requests UnknownArg for parity — emit it
                                 // so callers that consume only resolve errors
                                 // still see the destructuring-specific case.
-                                self.resolve_errors.push(
-                                    ferric_common::ResolveError::UnknownArg {
+                                self.resolve_errors
+                                    .push(ferric_common::ResolveError::UnknownArg {
                                         name: *fname,
                                         span: let_span,
-                                    },
-                                );
+                                    });
                                 self.fresh_tyvar()
                             });
                         let scheme = self.generalize(&field_ty);
@@ -2846,8 +2840,7 @@ impl<'a> TypeInfer<'a> {
                     // Struct unknown — bind each field to a fresh var.
                     for fname in fields {
                         let v = self.fresh_tyvar();
-                        self.env
-                            .define(*fname, TypeScheme::monomorphic(v));
+                        self.env.define(*fname, TypeScheme::monomorphic(v));
                     }
                 }
                 self.node_types.insert(let_id, self.subst.apply(&init_ty));
@@ -3088,12 +3081,8 @@ impl<'a> TypeInfer<'a> {
         }
         // Alias bridging: peel one alias layer off either side and retry.
         match (from, to) {
-            (Ty::Alias(_, inner), other) => {
-                self.try_unify(inner, other).is_ok()
-            }
-            (other, Ty::Alias(_, inner)) => {
-                self.try_unify(other, inner).is_ok()
-            }
+            (Ty::Alias(_, inner), other) => self.try_unify(inner, other).is_ok(),
+            (other, Ty::Alias(_, inner)) => self.try_unify(other, inner).is_ok(),
             _ => false,
         }
     }
@@ -3579,7 +3568,16 @@ fn find_alias_mismatch(a: &Ty, b: &Ty) -> Option<(Ty, Ty)> {
             find_alias_mismatch(i1, i2)
         }
         (Ty::Alias(..), _) | (_, Ty::Alias(..)) => Some((a.clone(), b.clone())),
-        (Ty::Fn { params: p1, ret: r1 }, Ty::Fn { params: p2, ret: r2 }) => {
+        (
+            Ty::Fn {
+                params: p1,
+                ret: r1,
+            },
+            Ty::Fn {
+                params: p2,
+                ret: r2,
+            },
+        ) => {
             for (x, y) in p1.iter().zip(p2.iter()) {
                 if let Some(m) = find_alias_mismatch(x, y) {
                     return Some(m);
@@ -3860,9 +3858,7 @@ fn span_in_expr(expr: &Expr, target: NodeId) -> Option<Span> {
             ferric_common::FStringSegmentKind::Expr(inner) => span_in_expr(inner, target),
             ferric_common::FStringSegmentKind::Lit(_) => None,
         }),
-        Expr::Pipeline(e) => {
-            span_in_expr(&e.lhs, target).or_else(|| span_in_expr(&e.rhs, target))
-        }
+        Expr::Pipeline(e) => span_in_expr(&e.lhs, target).or_else(|| span_in_expr(&e.rhs, target)),
         Expr::Propagate(e) => span_in_expr(&e.operand, target),
         Expr::Must(e) => span_in_expr(&e.operand, target)
             .or_else(|| e.message.as_ref().and_then(|m| span_in_expr(m, target))),

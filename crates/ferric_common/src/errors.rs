@@ -458,9 +458,9 @@ impl ResolveError {
                 "right-hand side of `|>` must be a call expression".to_string()
             }
             ResolveError::LabelNotFound { .. } => "label not found".to_string(),
-            ResolveError::DestructureArity { expected, got, .. } => format!(
-                "destructuring arity mismatch: expected {expected} elements, got {got}"
-            ),
+            ResolveError::DestructureArity { expected, got, .. } => {
+                format!("destructuring arity mismatch: expected {expected} elements, got {got}")
+            }
             ResolveError::UnknownMethod { ty, .. } => {
                 format!("no method found on type {ty}")
             }
@@ -551,9 +551,9 @@ impl ResolveError {
             ResolveError::LabelNotFound { label, .. } => {
                 format!("no enclosing loop with label `'{}`", name(*label))
             }
-            ResolveError::DestructureArity { expected, got, .. } => format!(
-                "destructuring arity mismatch: expected {expected} element(s), got {got}"
-            ),
+            ResolveError::DestructureArity { expected, got, .. } => {
+                format!("destructuring arity mismatch: expected {expected} element(s), got {got}")
+            }
             ResolveError::UnknownMethod { method, ty, .. } => {
                 format!("no method `{}` on type `{ty}`", name(*method))
             }
@@ -928,9 +928,7 @@ impl TypeError {
                 expected.description(),
                 found.description()
             ),
-            TypeError::MustMessageNotStr { .. } => {
-                "`must` message must be Str".to_string()
-            }
+            TypeError::MustMessageNotStr { .. } => "`must` message must be Str".to_string(),
             TypeError::AliasMismatch { expected, got, .. } => {
                 format!("alias type mismatch: expected {expected}, got {got}")
             }
@@ -1091,12 +1089,10 @@ impl TypeError {
                 expected.description(),
                 found.description()
             ),
-            TypeError::MustMessageNotStr { .. } => {
-                "`must` message must be `Str`".to_string()
+            TypeError::MustMessageNotStr { .. } => "`must` message must be `Str`".to_string(),
+            TypeError::AliasMismatch { expected, got, .. } => {
+                format!("type mismatch: expected `{expected}`, got `{got}`")
             }
-            TypeError::AliasMismatch { expected, got, .. } => format!(
-                "type mismatch: expected `{expected}`, got `{got}`"
-            ),
             TypeError::AmbiguousCoercion {
                 found,
                 expected,

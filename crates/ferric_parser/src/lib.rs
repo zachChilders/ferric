@@ -17,8 +17,8 @@ use ferric_common::{
     ImportDecl, ImportItem, ImportItems, ImportPath, Interner, Item, Label, LetPattern, LexResult,
     Literal, MatchArm, MustExpr, NamedArg, NodeId, Param, ParseError, ParseResult, ParseWarning,
     Pattern, PerformExpr, PipelineExpr, PropagateExpr, RequireMode, RequireStmt, ResumeExpr,
-    ShellPart, ShellTokenPart, Span, Stmt, Symbol, Token, TokenKind, TraitMethod, Ty, TypeAliasItem,
-    TypeAnnotation, TypeParam, UnOp,
+    ShellPart, ShellTokenPart, Span, Stmt, Symbol, Token, TokenKind, TraitMethod, Ty,
+    TypeAliasItem, TypeAnnotation, TypeParam, UnOp,
 };
 
 /// Generates unique NodeIds for AST nodes.
@@ -1952,7 +1952,7 @@ impl<'a> Parser<'a> {
                 | TokenKind::Handle    // `handle { ... } with { ... }`
                 | TokenKind::Resume    // `resume k with v`
                 | TokenKind::FStringStart // `f"..."` interpolated string
-                | TokenKind::Label(_)  // labeled loop: `'outer: while ...`
+                | TokenKind::Label(_) // labeled loop: `'outer: while ...`
         )
     }
 
@@ -2091,7 +2091,10 @@ impl<'a> Parser<'a> {
             _ => unreachable!("parse_labeled_for_stmt called without Label token"),
         };
         self.advance(); // consume label
-        if self.expect(TokenKind::Colon, "':' after loop label").is_err() {
+        if self
+            .expect(TokenKind::Colon, "':' after loop label")
+            .is_err()
+        {
             return None;
         }
         self.parse_for_stmt_with_label(Some(Label {
@@ -2159,11 +2162,7 @@ impl<'a> Parser<'a> {
                 // destructuring pattern. An identifier followed by `::` is a
                 // refutable enum pattern — emit DestructureIrrefutable.
                 // Anything else is an ident binding.
-                let next_kind = self
-                    .tokens
-                    .get(self.current + 1)
-                    .map(|t| &t.kind)
-                    .cloned();
+                let next_kind = self.tokens.get(self.current + 1).map(|t| &t.kind).cloned();
                 match next_kind {
                     Some(TokenKind::LBrace) => self.parse_let_struct_pattern(sym),
                     Some(TokenKind::ColonColon) => {
@@ -2372,7 +2371,10 @@ impl<'a> Parser<'a> {
             name: label_name,
         });
         // Expect `:` after the label.
-        if self.expect(TokenKind::Colon, "':' after loop label").is_err() {
+        if self
+            .expect(TokenKind::Colon, "':' after loop label")
+            .is_err()
+        {
             let id = self.node_id_gen.next();
             return Expr::Literal {
                 value: Literal::Unit,
@@ -3885,11 +3887,7 @@ impl<'a> Parser<'a> {
             if matches!(self.peek().kind, TokenKind::Eof) {
                 let span = start_span.to(self.peek().span);
                 self.errors.push(ParseError::UnterminatedFString { span });
-                return Expr::FString(FStringExpr {
-                    id,
-                    span,
-                    segments,
-                });
+                return Expr::FString(FStringExpr { id, span, segments });
             }
 
             let tok = self.peek().clone();
@@ -3946,11 +3944,7 @@ impl<'a> Parser<'a> {
                         if matches!(self.peek().kind, TokenKind::Eof) {
                             let span = start_span.to(self.peek().span);
                             self.errors.push(ParseError::UnterminatedFString { span });
-                            return Expr::FString(FStringExpr {
-                                id,
-                                span,
-                                segments,
-                            });
+                            return Expr::FString(FStringExpr { id, span, segments });
                         }
                     }
                 }
@@ -3958,11 +3952,7 @@ impl<'a> Parser<'a> {
                     // Unexpected token inside f-string. Surface and bail.
                     let span = start_span.to(tok.span);
                     self.errors.push(ParseError::UnterminatedFString { span });
-                    return Expr::FString(FStringExpr {
-                        id,
-                        span,
-                        segments,
-                    });
+                    return Expr::FString(FStringExpr { id, span, segments });
                 }
             }
         }
