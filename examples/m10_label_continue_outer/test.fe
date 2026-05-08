@@ -1,0 +1,24 @@
+// M10 Task 5: `continue 'outer` skips the rest of the labeled outer loop's
+// body and re-tests the outer condition. We use it to skip even outer i
+// values that have any j divisible by 4, leaving only odd outer i values
+// (and then capping the work via a side counter) to print.
+
+let mut i = 0
+let mut printed = 0
+
+'outer: while i < 6 {
+    i = i + 1
+    let mut j = 0
+    while j < 4 {
+        if i == 2 || i == 4 {
+            // Skip rest of outer body for these values.
+            continue 'outer
+        }
+        j = j + 1
+    }
+    // Reachable only when the inner loop ran to completion (no continue 'outer).
+    println(s: int_to_str(n: i))
+    printed = printed + 1
+}
+
+println(s: f"printed={printed}")

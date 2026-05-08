@@ -199,6 +199,40 @@ fn collect_for_expr(expr: &Expr, cx: &Ctx, hints: &mut Vec<InlayHint>) {
             }
         }
         Expr::Cast(c) => collect_for_expr(&c.expr, cx, hints),
+        // M9 effect AST nodes — recurse into argument values, body, and
+        // clause bodies so type hints inside them still fire.
+        Expr::Perform(p) => {
+            for (_, e) in &p.args {
+                collect_for_expr(e, cx, hints);
+            }
+        }
+        Expr::Handle(h) => {
+            collect_for_expr(&h.body, cx, hints);
+            for c in &h.clauses {
+                collect_for_expr(&c.handler, cx, hints);
+            }
+        }
+        Expr::Resume(r) => collect_for_expr(&r.value, cx, hints),
+        // M10 nodes — recurse into interpolated expressions, pipeline lhs/rhs,
+        // and the operands of `?` and `must`.
+        Expr::FString(fs) => {
+            for s in &fs.segments {
+                if let ferric_common::FStringSegmentKind::Expr(e) = &s.kind {
+                    collect_for_expr(e, cx, hints);
+                }
+            }
+        }
+        Expr::Pipeline(p) => {
+            collect_for_expr(&p.lhs, cx, hints);
+            collect_for_expr(&p.rhs, cx, hints);
+        }
+        Expr::Propagate(p) => collect_for_expr(&p.operand, cx, hints),
+        Expr::Must(m) => {
+            collect_for_expr(&m.operand, cx, hints);
+            if let Some(msg) = m.message.as_deref() {
+                collect_for_expr(msg, cx, hints);
+            }
+        }
         // Leaves: Literal, Variable, Break, Continue, Shell — no hints.
         _ => {}
     }

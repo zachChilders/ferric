@@ -1,0 +1,12 @@
+// M10 Task 6 Part B: method syntax on Str. Each method desugars to the
+// equivalent `str_*` stdlib call; both forms remain valid.
+
+let s = "Hello, World"
+
+println(s: s.to_upper())
+println(s: s.to_lower())
+println(s: int_to_str(n: s.len()))
+println(s: bool_to_str(b: s.starts_with(prefix: "Hello")))
+println(s: bool_to_str(b: s.ends_with(suffix: "World")))
+println(s: bool_to_str(b: s.contains(sub: ",")))
+println(s: s.trim())

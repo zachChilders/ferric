@@ -104,6 +104,31 @@ counter = counter + 1
 
 Bindings are lexically scoped. `let` in a nested block shadows the outer binding within that block.
 
+### F-strings
+
+`f"..."` produces a `Str` by interpolating embedded expressions. Use `{expr}` for any Ferric expression; `{{` and `}}` escape literal braces.
+
+```ferric
+let name = "world"
+let greeting = f"Hello, {name}!"
+
+let n = 42
+println(s: f"the answer is {n + 1}")
+```
+
+Interpolated expressions must be one of `Str`, `Int`, `Float`, or `Bool`; any other type is a `TypeError::Mismatch`. Numeric and bool values use their canonical formatting; `Str` values are inserted verbatim.
+
+### Destructuring
+
+`let` can destructure tuples and structs in the binding pattern:
+
+```ferric
+let (a, b, c) = (1, 2, 3)         // tuple destructure
+let Point { x, y } = origin       // struct destructure (field shorthand)
+```
+
+Only irrefutable patterns are allowed in `let` — enum variants still require `match`.
+
 ---
 
 ## Operators
@@ -124,16 +149,47 @@ Bindings are lexically scoped. `let` in a nested block shadows the outer binding
 
 `-expr` — numeric negation. `!expr` — logical negation.
 
+### Pipeline
+
+`lhs |> rhs_call(args...)` is sugar for `rhs_call(<first param>: lhs, args...)` — the left-hand side becomes the first named argument of the call on the right. The resolver desugars pipelines before type-checking; downstream stages see only ordinary calls.
+
+```ferric
+let n = " 42 " |> str_trim() |> str_to_int()
+// equivalent to: str_to_int(s: str_trim(s: " 42 "))
+```
+
+The right-hand side must be a call expression. `|>` has the lowest precedence of all binary operators, so chains read left-to-right without parens.
+
+### Propagation and `must`
+
+`expr?` propagates `Option<T>` / `Result<T, E>` failures: on `None` / `Err(_)` the enclosing function returns early with the same failure value. On `Some(v)` / `Ok(v)` the expression evaluates to `v`.
+
+```ferric
+fn parse_user(line: Str) -> Option<User> {
+    let parts = split_csv(s: line)?
+    let name = parts[0]?
+    Some(User { name: name })
+}
+```
+
+`expr must` and `expr must "message"` unwrap an `Option<T>` / `Result<T, E>` or panic at runtime if the value is absent. Use `must` when the absence indicates a programming error rather than a recoverable condition.
+
+```ferric
+let port = parse_int(s: env_get(name: "PORT")) must "PORT must be an integer"
+```
+
 ### Precedence (highest to lowest)
 
-| Level | Operators              |
-|-------|------------------------|
-| 6     | `*`, `/`, `%`          |
-| 5     | `+`, `-`               |
-| 4     | `<`, `<=`, `>`, `>=`  |
-| 3     | `==`, `!=`             |
-| 2     | `&&`                   |
-| 1     | `\|\|`                 |
+| Level | Operators                       |
+|-------|---------------------------------|
+| 8     | `?` (postfix), `must` (postfix) |
+| 7     | `*`, `/`, `%`                   |
+| 6     | `+`, `-`                        |
+| 5     | `<`, `<=`, `>`, `>=`           |
+| 4     | `==`, `!=`                      |
+| 3     | `&&`                            |
+| 2     | `\|\|`                          |
+| 1     | `\|>`                            |
 
 Use parentheses to override precedence.
 
@@ -198,6 +254,21 @@ for name in names {
 `break` exits the nearest enclosing `while` or `loop`.
 `continue` jumps to the next iteration.
 
+### Labeled loops
+
+A `while` or `loop` may carry a label introduced with `'name:`; `break 'name` and `continue 'name` then refer to that loop instead of the innermost one.
+
+```ferric
+'outer: loop {
+    'inner: while have_work() {
+        if should_abort() { break 'outer }
+        if should_skip()  { continue 'outer }
+        do_step()
+    }
+    cleanup()
+}
+```
+
 ### Return
 
 ```ferric
@@ -229,6 +300,17 @@ fn add(a: Int, b: Int) -> Int { a + b }
 add(a: 3, b: 4)    // definition order
 add(b: 10, a: 5)   // out of order — same result
 ```
+
+**Implicit-name shorthand.** When an argument is a bare identifier whose name matches a parameter, the `name:` label is optional:
+
+```ferric
+let a = 3
+let b = 4
+add(a, b)          // shorthand for add(a: a, b: b)
+add(a, b: 9)       // shorthand and explicit can be mixed
+```
+
+The shorthand only fires for bare identifiers immediately followed by `,` or `)`. Anything more complex (field access, calls, operators) still needs an explicit label.
 
 ### Default parameters
 

@@ -7,9 +7,9 @@
 //! Public API: Only the `resolve()` function is exposed.
 
 use ferric_common::{
-    DefId, DefInfo, Expr, ImplMethod, Item, ModuleResult, NamedArg, NodeId, Param, ParseResult,
-    Pattern, RequireStmt, ResolveError, ResolveResult, ShellPart, Span, Stmt, Symbol,
-    TypeAnnotation,
+    DefId, DefInfo, Expr, FStringSegmentKind, ImplMethod, Item, LetPattern, ModuleResult, NamedArg,
+    NodeId, Param, ParseResult, Pattern, PipelineExpr, RequireStmt, ResolveError, ResolveResult,
+    ShellPart, Span, Stmt, Symbol, TypeAnnotation,
 };
 use std::collections::HashMap;
 
@@ -107,6 +107,340 @@ pub fn resolve_with_imports_and_builtins(
     }
 
     resolver.into_result()
+}
+
+/// M10 Task 3 — desugars every `Expr::Pipeline` node in the AST into an
+/// `Expr::Call` whose first argument is the LHS, prepended as an implicit
+/// named arg keyed by the callee's first parameter name.
+///
+/// This pass runs **before** name resolution so the resolver and every
+/// downstream stage see only `Expr::Call` nodes — no Pipeline survives. It
+/// mutates `ast.items` in place. Errors (RHS not a call, or callee with no
+/// known first param) are returned as a `Vec<ResolveError>` and should be
+/// merged into the resolver's error list by the caller.
+///
+/// The synthetic NamedArg uses the lhs span and is marked `implicit: true`.
+/// Param names are looked up by callee name from a table built from:
+///   - user-defined `fn` items in `ast.items`,
+///   - impl-block methods in `ast.items`,
+///   - native functions registered through `native_fns`,
+///   - imported names listed in `module_imports` (each entry maps a callee
+///     name to its first param name; pass `&[]` if no module info is available).
+///
+/// If a callee's first param cannot be determined the pipeline is replaced
+/// with the LHS unchanged and a `PipelineRhsNotCall`-style diagnostic is
+/// emitted (we reuse `PipelineRhsNotCall` since the spec adds no separate
+/// "unknown callee" variant).
+pub fn desugar_pipelines(
+    ast: &mut ParseResult,
+    native_fns: &[(Symbol, Vec<Symbol>)],
+) -> Vec<ResolveError> {
+    let mut first_params: HashMap<Symbol, Symbol> = HashMap::new();
+
+    // Native fns
+    for (name, params) in native_fns {
+        if let Some(first) = params.first() {
+            first_params.insert(*name, *first);
+        }
+    }
+    // User-defined fns and impl methods
+    for item in &ast.items {
+        collect_first_params(item, &mut first_params);
+    }
+
+    let mut errors: Vec<ResolveError> = Vec::new();
+    for item in &mut ast.items {
+        rewrite_pipelines_in_item(item, &first_params, &mut errors);
+    }
+    errors
+}
+
+fn collect_first_params(item: &Item, out: &mut HashMap<Symbol, Symbol>) {
+    match item {
+        Item::Fn(f) => {
+            if let Some(p) = f.params.first() {
+                out.insert(f.name, p.name);
+            }
+        }
+        Item::ImplBlock { methods, .. } => {
+            for m in methods {
+                if let Some(p) = m.params.first() {
+                    out.insert(m.name, p.name);
+                }
+            }
+        }
+        Item::Export(d) => collect_first_params(&d.item, out),
+        _ => {}
+    }
+}
+
+fn rewrite_pipelines_in_item(
+    item: &mut Item,
+    first_params: &HashMap<Symbol, Symbol>,
+    errors: &mut Vec<ResolveError>,
+) {
+    match item {
+        Item::Fn(f) => rewrite_pipelines_in_expr(&mut f.body, first_params, errors),
+        Item::ImplBlock { methods, .. } => {
+            for m in methods {
+                rewrite_pipelines_in_expr(&mut m.body, first_params, errors);
+            }
+        }
+        Item::Script { stmt, .. } => rewrite_pipelines_in_stmt(stmt, first_params, errors),
+        Item::Export(d) => rewrite_pipelines_in_item(&mut d.item, first_params, errors),
+        Item::StructDef { .. }
+        | Item::EnumDef { .. }
+        | Item::TraitDef { .. }
+        | Item::Import(_)
+        | Item::TypeAlias(_)
+        | Item::EffectDecl(_) => {}
+    }
+}
+
+fn rewrite_pipelines_in_stmt(
+    stmt: &mut Stmt,
+    first_params: &HashMap<Symbol, Symbol>,
+    errors: &mut Vec<ResolveError>,
+) {
+    match stmt {
+        Stmt::Let { init, .. } => rewrite_pipelines_in_expr(init, first_params, errors),
+        Stmt::Assign { target, value, .. } => {
+            rewrite_pipelines_in_expr(target, first_params, errors);
+            rewrite_pipelines_in_expr(value, first_params, errors);
+        }
+        Stmt::Expr { expr } => rewrite_pipelines_in_expr(expr, first_params, errors),
+        Stmt::Require(req) => {
+            rewrite_pipelines_in_expr(&mut req.expr, first_params, errors);
+            if let Some(m) = req.message.as_mut() {
+                rewrite_pipelines_in_expr(m, first_params, errors);
+            }
+            if let Some(s) = req.set_fn.as_mut() {
+                rewrite_pipelines_in_expr(s, first_params, errors);
+            }
+        }
+        Stmt::For { iter, body, .. } => {
+            rewrite_pipelines_in_expr(iter, first_params, errors);
+            rewrite_pipelines_in_expr(body, first_params, errors);
+        }
+    }
+}
+
+fn rewrite_pipelines_in_expr(
+    expr: &mut Expr,
+    first_params: &HashMap<Symbol, Symbol>,
+    errors: &mut Vec<ResolveError>,
+) {
+    // First, recurse into children so inner pipelines are rewritten before
+    // we transform an outer pipeline (which lifts a child Call into the new
+    // outer Call's args list).
+    walk_children_mut(expr, first_params, errors);
+
+    // Now check if this node itself is a pipeline that needs rewriting.
+    // We use a `take` pattern via `mem::replace` to swap the node out of place.
+    if matches!(expr, Expr::Pipeline(_)) {
+        let placeholder = Expr::Literal {
+            value: ferric_common::Literal::Unit,
+            id: NodeId::new(0),
+            span: Span::new(0, 0),
+        };
+        let pipeline = std::mem::replace(expr, placeholder);
+        let Expr::Pipeline(PipelineExpr { span, lhs, rhs }) = pipeline else {
+            unreachable!()
+        };
+
+        // RHS must be a Call.
+        let Expr::Call {
+            callee,
+            args,
+            id,
+            span: call_span,
+        } = *rhs
+        else {
+            errors.push(ResolveError::PipelineRhsNotCall { span });
+            // Replace with the LHS so downstream stages keep walking. The
+            // typecheck on the LHS may surface its own errors but at least
+            // we don't leave a Pipeline node behind.
+            *expr = *lhs;
+            return;
+        };
+
+        // Look up the callee's first param name. The callee at parse time is
+        // either a Variable (named function) or some other expression. Pipeline
+        // currently only supports the Variable form; for any other callee we
+        // can't infer the implicit param name, so emit PipelineRhsNotCall.
+        let first_param_name = match callee.as_ref() {
+            Expr::Variable { name, .. } => first_params.get(name).copied(),
+            _ => None,
+        };
+
+        let Some(param_name) = first_param_name else {
+            errors.push(ResolveError::PipelineRhsNotCall { span });
+            // Restore as a plain call without the piped value (best-effort
+            // recovery so downstream typecheck surfaces additional errors).
+            *expr = Expr::Call {
+                callee,
+                args,
+                id,
+                span: call_span,
+            };
+            return;
+        };
+
+        let lhs_span = lhs.span();
+        let synthetic = NamedArg {
+            span: lhs_span,
+            name: param_name,
+            value: lhs,
+            implicit: true,
+        };
+
+        let mut new_args = Vec::with_capacity(args.len() + 1);
+        new_args.push(synthetic);
+        new_args.extend(args);
+
+        *expr = Expr::Call {
+            callee,
+            args: new_args,
+            id,
+            span: call_span,
+        };
+    }
+}
+
+fn walk_children_mut(
+    expr: &mut Expr,
+    first_params: &HashMap<Symbol, Symbol>,
+    errors: &mut Vec<ResolveError>,
+) {
+    match expr {
+        Expr::Literal { .. }
+        | Expr::Variable { .. }
+        | Expr::Break { .. }
+        | Expr::Continue { .. } => {}
+        Expr::Binary { left, right, .. } => {
+            rewrite_pipelines_in_expr(left, first_params, errors);
+            rewrite_pipelines_in_expr(right, first_params, errors);
+        }
+        Expr::Unary { expr: inner, .. } => {
+            rewrite_pipelines_in_expr(inner, first_params, errors);
+        }
+        Expr::Call { callee, args, .. } => {
+            rewrite_pipelines_in_expr(callee, first_params, errors);
+            for a in args {
+                rewrite_pipelines_in_expr(&mut a.value, first_params, errors);
+            }
+        }
+        Expr::If {
+            cond,
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            rewrite_pipelines_in_expr(cond, first_params, errors);
+            rewrite_pipelines_in_expr(then_branch, first_params, errors);
+            if let Some(e) = else_branch.as_mut() {
+                rewrite_pipelines_in_expr(e, first_params, errors);
+            }
+        }
+        Expr::Block { stmts, expr, .. } => {
+            for s in stmts {
+                rewrite_pipelines_in_stmt(s, first_params, errors);
+            }
+            if let Some(e) = expr.as_mut() {
+                rewrite_pipelines_in_expr(e, first_params, errors);
+            }
+        }
+        Expr::Return { expr, .. } => {
+            if let Some(e) = expr.as_mut() {
+                rewrite_pipelines_in_expr(e, first_params, errors);
+            }
+        }
+        Expr::While { cond, body, .. } => {
+            rewrite_pipelines_in_expr(cond, first_params, errors);
+            rewrite_pipelines_in_expr(body, first_params, errors);
+        }
+        Expr::Loop { body, .. } => {
+            rewrite_pipelines_in_expr(body, first_params, errors);
+        }
+        Expr::Closure { body, .. } => {
+            rewrite_pipelines_in_expr(body, first_params, errors);
+        }
+        Expr::Shell { parts, .. } => {
+            for p in parts {
+                if let ShellPart::Interpolated(inner) = p {
+                    rewrite_pipelines_in_expr(inner, first_params, errors);
+                }
+            }
+        }
+        Expr::StructLit { fields, .. } => {
+            for (_, fexpr) in fields {
+                rewrite_pipelines_in_expr(fexpr, first_params, errors);
+            }
+        }
+        Expr::FieldAccess { expr: inner, .. } => {
+            rewrite_pipelines_in_expr(inner, first_params, errors);
+        }
+        Expr::Match {
+            scrutinee, arms, ..
+        } => {
+            rewrite_pipelines_in_expr(scrutinee, first_params, errors);
+            for arm in arms {
+                rewrite_pipelines_in_expr(&mut arm.body, first_params, errors);
+            }
+        }
+        Expr::Tuple { elements, .. } | Expr::ArrayLit { elements, .. } => {
+            for e in elements {
+                rewrite_pipelines_in_expr(e, first_params, errors);
+            }
+        }
+        Expr::VariantCtor { args, .. } => {
+            for a in args {
+                rewrite_pipelines_in_expr(a, first_params, errors);
+            }
+        }
+        Expr::MethodCall { receiver, args, .. } => {
+            rewrite_pipelines_in_expr(receiver, first_params, errors);
+            for a in args {
+                rewrite_pipelines_in_expr(&mut a.value, first_params, errors);
+            }
+        }
+        Expr::Index { array, index, .. } => {
+            rewrite_pipelines_in_expr(array, first_params, errors);
+            rewrite_pipelines_in_expr(index, first_params, errors);
+        }
+        Expr::Cast(c) => rewrite_pipelines_in_expr(&mut c.expr, first_params, errors),
+        Expr::AsyncBlock(b) => rewrite_pipelines_in_expr(&mut b.block, first_params, errors),
+        Expr::Perform(p) => {
+            for (_, v) in &mut p.args {
+                rewrite_pipelines_in_expr(v, first_params, errors);
+            }
+        }
+        Expr::Handle(h) => {
+            rewrite_pipelines_in_expr(&mut h.body, first_params, errors);
+            for clause in &mut h.clauses {
+                rewrite_pipelines_in_expr(&mut clause.handler, first_params, errors);
+            }
+        }
+        Expr::Resume(r) => rewrite_pipelines_in_expr(&mut r.value, first_params, errors),
+        Expr::FString(e) => {
+            for seg in &mut e.segments {
+                if let FStringSegmentKind::Expr(inner) = &mut seg.kind {
+                    rewrite_pipelines_in_expr(inner, first_params, errors);
+                }
+            }
+        }
+        Expr::Pipeline(p) => {
+            rewrite_pipelines_in_expr(&mut p.lhs, first_params, errors);
+            rewrite_pipelines_in_expr(&mut p.rhs, first_params, errors);
+        }
+        Expr::Propagate(p) => rewrite_pipelines_in_expr(&mut p.operand, first_params, errors),
+        Expr::Must(m) => {
+            rewrite_pipelines_in_expr(&mut m.operand, first_params, errors);
+            if let Some(msg) = m.message.as_mut() {
+                rewrite_pipelines_in_expr(msg, first_params, errors);
+            }
+        }
+    }
 }
 
 // ============================================================================
@@ -211,6 +545,11 @@ struct Resolver {
     /// Output: each impl method's declared params, keyed by the method's NodeId.
     method_params: HashMap<NodeId, Vec<Param>>,
 
+    /// Output: each `type` alias name → its raw inner annotation. M10 (Task 6
+    /// Part C). The inferencer consults this to wrap alias use sites in
+    /// `Ty::Alias(name, inner)` so they remain distinct from `inner`.
+    type_aliases: HashMap<Symbol, TypeAnnotation>,
+
     /// Output: per-DefId metadata (name + source span). Populated at every
     /// DefId-allocation site. Consumed by tooling (LSP hover, completion,
     /// goto-def). `span: None` marks native definitions with no source.
@@ -221,6 +560,12 @@ struct Resolver {
 
     /// Depth of loop nesting (for validating break/continue)
     loop_depth: u32,
+
+    /// Stack of active labeled loops (innermost last). Each labeled `while` /
+    /// `loop` / `for` pushes its label name on entry and pops on exit. Used
+    /// by `resolve_expr` to check that `break 'label` / `continue 'label`
+    /// targets a real enclosing labeled loop. M10 Task 5.
+    label_stack: Vec<Symbol>,
 
     /// Depth of function nesting (for validating return)
     fn_depth: u32,
@@ -245,9 +590,11 @@ impl Resolver {
             enum_variants: HashMap::new(),
             method_def_ids: HashMap::new(),
             method_params: HashMap::new(),
+            type_aliases: HashMap::new(),
             defs: HashMap::new(),
             errors: Vec::new(),
             loop_depth: 0,
+            label_stack: Vec::new(),
             fn_depth: 0,
         }
     }
@@ -272,6 +619,7 @@ impl Resolver {
         result.enum_variants = self.enum_variants;
         result.method_def_ids = self.method_def_ids;
         result.method_params = self.method_params;
+        result.type_aliases = self.type_aliases;
         result.captures = self.captures;
         result.defs = self.defs;
         result
@@ -530,7 +878,23 @@ impl Resolver {
                 Item::Script { .. } => {}
                 // Module-system items are emitted starting with M7 Task 2; the
                 // resolver does not yet collect their definitions.
-                Item::Import(_) | Item::Export(_) | Item::TypeAlias(_) => {}
+                Item::Import(_) => {}
+                // M10 Task 6 Part C: register every `type Foo = Inner` alias
+                // so the inferencer can resolve `Foo` as a `Ty::Alias` at use
+                // sites. Generic aliases (`type Foo<T> = Bar<T>`) and the
+                // `opaque` flag are not differentiated here — Task 6 makes
+                // every alias opaque.
+                Item::TypeAlias(alias) => {
+                    self.type_aliases.insert(alias.name, alias.ty.clone());
+                }
+                // `export type Foo = Inner` — unwrap and register the alias
+                // the same way as the bare form. Other exported items are
+                // collected by their own arms via the second pass.
+                Item::Export(decl) => {
+                    if let Item::TypeAlias(alias) = decl.item.as_ref() {
+                        self.type_aliases.insert(alias.name, alias.ty.clone());
+                    }
+                }
                 // M9 Task 1: AST type added but parser does not yet emit it.
                 // Wired up in M9 Task 2.
                 Item::EffectDecl(_) => {}
@@ -637,7 +1001,7 @@ impl Resolver {
     fn resolve_stmt(&mut self, stmt: &Stmt) {
         match stmt {
             Stmt::Let {
-                name,
+                pattern,
                 mutable,
                 init,
                 span,
@@ -646,13 +1010,65 @@ impl Resolver {
                 // Resolve initializer first (before defining the variable)
                 self.resolve_expr(init);
 
-                // Define the variable in the current scope
-                let def_id = self.define(*name, *mutable, *span);
+                // M10 Task 5: tuple/struct destructuring binds each named
+                // identifier as if it were its own `let`. The type checker
+                // is responsible for arity / field-existence verification
+                // against the RHS type; the resolver only validates names
+                // it can see syntactically.
+                match pattern {
+                    LetPattern::Ident(name) => {
+                        let def_id = self.define(*name, *mutable, *span);
 
-                // Assign variable slot
-                let slot = self.next_slot;
-                self.next_slot += 1;
-                self.def_slots.insert(def_id, slot);
+                        // Assign variable slot
+                        let slot = self.next_slot;
+                        self.next_slot += 1;
+                        self.def_slots.insert(def_id, slot);
+                    }
+                    LetPattern::Tuple(idents) => {
+                        for name in idents {
+                            let def_id = self.define(*name, *mutable, *span);
+                            let slot = self.next_slot;
+                            self.next_slot += 1;
+                            self.def_slots.insert(def_id, slot);
+                        }
+                    }
+                    LetPattern::Struct {
+                        name: struct_name,
+                        fields,
+                    } => {
+                        // Validate that the struct is known and each named
+                        // field exists on it. Unknown structs / fields are
+                        // soft errors (we still bind the identifiers so the
+                        // rest of the program type-checks usefully).
+                        let def_id = self.type_defs.get(struct_name).copied();
+                        if def_id.is_none() {
+                            self.errors.push(ResolveError::UndefinedType {
+                                name: *struct_name,
+                                span: *span,
+                            });
+                        }
+                        let declared_fields: Vec<Symbol> = def_id
+                            .and_then(|id| self.struct_fields.get(&id))
+                            .map(|fs| fs.iter().map(|(n, _)| *n).collect())
+                            .unwrap_or_default();
+
+                        for fname in fields {
+                            if def_id.is_some() && !declared_fields.contains(fname) {
+                                self.errors.push(ResolveError::UnknownField {
+                                    struct_name: *struct_name,
+                                    field: *fname,
+                                    span: *span,
+                                });
+                            }
+                            // Bind the ident either way — the bound name is
+                            // independent of whether the field check passed.
+                            let bound = self.define(*fname, *mutable, *span);
+                            let slot = self.next_slot;
+                            self.next_slot += 1;
+                            self.def_slots.insert(bound, slot);
+                        }
+                    }
+                }
             }
             Stmt::Assign {
                 target,
@@ -708,6 +1124,7 @@ impl Resolver {
                 var_id,
                 iter,
                 body,
+                label,
                 span,
                 ..
             } => {
@@ -723,7 +1140,13 @@ impl Resolver {
                 self.resolutions.insert(*var_id, def_id);
 
                 self.loop_depth += 1;
+                if let Some(lab) = label {
+                    self.label_stack.push(lab.name);
+                }
                 self.resolve_expr(body);
+                if label.is_some() {
+                    self.label_stack.pop();
+                }
                 self.loop_depth -= 1;
 
                 self.pop_scope();
@@ -819,6 +1242,7 @@ impl Resolver {
                                 span: *span,
                                 name: param.name,
                                 value: default.clone(),
+                                implicit: false,
                             });
                         } else {
                             self.errors.push(ResolveError::MissingArg {
@@ -868,32 +1292,65 @@ impl Resolver {
                     self.resolve_expr(e);
                 }
             }
-            Expr::While { cond, body, .. } => {
+            Expr::While {
+                cond, body, label, ..
+            } => {
                 self.resolve_expr(cond);
 
                 // Increment loop depth before resolving body
                 self.loop_depth += 1;
+                if let Some(lab) = label {
+                    self.label_stack.push(lab.name);
+                }
                 self.resolve_expr(body);
+                if label.is_some() {
+                    self.label_stack.pop();
+                }
                 self.loop_depth -= 1;
             }
-            Expr::Loop { body, .. } => {
+            Expr::Loop { body, label, .. } => {
                 // Increment loop depth before resolving body
                 self.loop_depth += 1;
+                if let Some(lab) = label {
+                    self.label_stack.push(lab.name);
+                }
                 self.resolve_expr(body);
+                if label.is_some() {
+                    self.label_stack.pop();
+                }
                 self.loop_depth -= 1;
             }
-            Expr::Break { span, .. } => {
+            Expr::Break { label, span, .. } => {
                 // Check if we're inside a loop
                 if self.loop_depth == 0 {
                     self.errors
                         .push(ResolveError::BreakOutsideLoop { span: *span });
                 }
+                // M10 Task 5: labeled break must target an enclosing labeled
+                // loop. Walk the label stack — if not found, emit
+                // LabelNotFound.
+                if let Some(lab) = label
+                    && !self.label_stack.iter().rev().any(|s| *s == lab.name)
+                {
+                    self.errors.push(ResolveError::LabelNotFound {
+                        label: lab.name,
+                        span: lab.span,
+                    });
+                }
             }
-            Expr::Continue { span, .. } => {
+            Expr::Continue { label, span, .. } => {
                 // Check if we're inside a loop
                 if self.loop_depth == 0 {
                     self.errors
                         .push(ResolveError::ContinueOutsideLoop { span: *span });
+                }
+                if let Some(lab) = label
+                    && !self.label_stack.iter().rev().any(|s| *s == lab.name)
+                {
+                    self.errors.push(ResolveError::LabelNotFound {
+                        label: lab.name,
+                        span: lab.span,
+                    });
                 }
             }
             Expr::Closure {
@@ -1110,6 +1567,27 @@ impl Resolver {
                 }
                 self.resolve_expr(&r.value);
             }
+            // M10 Task 1 scaffolding: parser does not emit these yet (Tasks
+            // 2-4 wire them up). Walk children defensively so any in-progress
+            // experimental construction is still covered.
+            Expr::FString(e) => {
+                for seg in &e.segments {
+                    if let ferric_common::FStringSegmentKind::Expr(inner) = &seg.kind {
+                        self.resolve_expr(inner);
+                    }
+                }
+            }
+            Expr::Pipeline(e) => {
+                self.resolve_expr(&e.lhs);
+                self.resolve_expr(&e.rhs);
+            }
+            Expr::Propagate(e) => self.resolve_expr(&e.operand),
+            Expr::Must(e) => {
+                self.resolve_expr(&e.operand);
+                if let Some(m) = &e.message {
+                    self.resolve_expr(m);
+                }
+            }
         }
     }
 
@@ -1243,7 +1721,7 @@ mod tests {
             vec![
                 Item::Script {
                     stmt: Stmt::Let {
-                        name: make_sym(0), // x
+                        pattern: LetPattern::Ident(make_sym(0)), // x
                         mutable: false,
                         ty: None,
                         init: Expr::Literal {
@@ -1320,7 +1798,7 @@ mod tests {
             vec![
                 Item::Script {
                     stmt: Stmt::Let {
-                        name: make_sym(0), // x
+                        pattern: LetPattern::Ident(make_sym(0)), // x
                         mutable: false,
                         ty: None,
                         init: Expr::Literal {
@@ -1338,7 +1816,7 @@ mod tests {
                     stmt: Stmt::Expr {
                         expr: Expr::Block {
                             stmts: vec![Stmt::Let {
-                                name: make_sym(0), // x (shadows outer x)
+                                pattern: LetPattern::Ident(make_sym(0)), // x (shadows outer x)
                                 mutable: false,
                                 ty: None,
                                 init: Expr::Literal {
@@ -1379,7 +1857,7 @@ mod tests {
         let ast = ParseResult::new(
             vec![Item::Script {
                 stmt: Stmt::Let {
-                    name: make_sym(0), // x
+                    pattern: LetPattern::Ident(make_sym(0)), // x
                     mutable: false,
                     ty: None,
                     init: Expr::Variable {
@@ -1411,7 +1889,7 @@ mod tests {
             vec![
                 Item::Script {
                     stmt: Stmt::Let {
-                        name: make_sym(0), // x
+                        pattern: LetPattern::Ident(make_sym(0)), // x
                         mutable: false,
                         ty: None,
                         init: Expr::Literal {
@@ -1427,7 +1905,7 @@ mod tests {
                 },
                 Item::Script {
                     stmt: Stmt::Let {
-                        name: make_sym(0), // x (duplicate)
+                        pattern: LetPattern::Ident(make_sym(0)), // x (duplicate)
                         mutable: false,
                         ty: None,
                         init: Expr::Literal {
@@ -1460,7 +1938,7 @@ mod tests {
             vec![
                 Item::Script {
                     stmt: Stmt::Let {
-                        name: make_sym(0), // x
+                        pattern: LetPattern::Ident(make_sym(0)), // x
                         mutable: false,
                         ty: None,
                         init: Expr::Literal {
@@ -1508,7 +1986,7 @@ mod tests {
                     stmt: Stmt::Expr {
                         expr: Expr::Block {
                             stmts: vec![Stmt::Let {
-                                name: make_sym(0), // x
+                                pattern: LetPattern::Ident(make_sym(0)), // x
                                 mutable: false,
                                 ty: None,
                                 init: Expr::Literal {
@@ -1562,7 +2040,7 @@ mod tests {
                 ret_ty: TypeAnnotation::Named(make_sym(2)), // Int
                 body: Expr::Block {
                     stmts: vec![Stmt::Let {
-                        name: make_sym(3), // y
+                        pattern: LetPattern::Ident(make_sym(3)), // y
                         mutable: false,
                         ty: None,
                         init: Expr::Variable {
@@ -1590,5 +2068,121 @@ mod tests {
         assert_eq!(result.errors.len(), 0);
         assert!(result.resolutions.contains_key(&make_node_id(1))); // x
         assert!(result.resolutions.contains_key(&make_node_id(3))); // y
+    }
+
+    // ---- M10 Task 3: pipeline desugar tests ---------------------------------
+
+    /// Builds an `[1] |> f()` pipeline where `f(x: Int)` is a user-defined
+    /// fn. Confirms the desugar pass rewrites Pipeline → Call with the lhs
+    /// prepended as an implicit `x:` arg.
+    #[test]
+    fn desugar_basic_pipeline() {
+        let f_name = make_sym(10);
+        let x_param = make_sym(11);
+        let int_ty = TypeAnnotation::Named(make_sym(12));
+
+        // fn f(x: Int) -> Int { x }
+        let fn_item = Item::Fn(FnItem {
+            id: make_node_id(0),
+            name: f_name,
+            type_params: vec![],
+            params: vec![Param {
+                span: make_span(),
+                name: x_param,
+                ty: int_ty.clone(),
+                default: None,
+            }],
+            ret_ty: int_ty,
+            body: Expr::Variable {
+                name: x_param,
+                id: make_node_id(1),
+                span: make_span(),
+            },
+            span: make_span(),
+        });
+
+        // Script: 1 |> f()
+        let pipeline = Expr::Pipeline(PipelineExpr {
+            span: make_span(),
+            lhs: Box::new(Expr::Literal {
+                value: Literal::Int(1),
+                id: make_node_id(2),
+                span: make_span(),
+            }),
+            rhs: Box::new(Expr::Call {
+                callee: Box::new(Expr::Variable {
+                    name: f_name,
+                    id: make_node_id(3),
+                    span: make_span(),
+                }),
+                args: vec![],
+                id: make_node_id(4),
+                span: make_span(),
+            }),
+        });
+
+        let mut ast = ParseResult::new(
+            vec![
+                fn_item,
+                Item::Script {
+                    stmt: Stmt::Expr { expr: pipeline },
+                    id: make_node_id(5),
+                    span: make_span(),
+                },
+            ],
+            vec![],
+        );
+
+        let errors = desugar_pipelines(&mut ast, &[]);
+        assert!(errors.is_empty(), "expected no errors, got {errors:?}");
+
+        // After desugar, Item::Script should hold a Call (not a Pipeline).
+        let stmt = match &ast.items[1] {
+            Item::Script { stmt, .. } => stmt,
+            _ => panic!("expected Script"),
+        };
+        let expr = match stmt {
+            Stmt::Expr { expr } => expr,
+            _ => panic!("expected expression statement"),
+        };
+        match expr {
+            Expr::Call { args, .. } => {
+                assert_eq!(args.len(), 1, "expected one synthetic arg");
+                assert_eq!(args[0].name, x_param);
+                assert!(args[0].implicit);
+                assert!(matches!(*args[0].value, Expr::Literal { .. }));
+            }
+            other => panic!("expected Call after desugar, got {other:?}"),
+        }
+    }
+
+    /// `1 |> 2` — RHS is not a call. Desugar should emit
+    /// `PipelineRhsNotCall` and leave the LHS in place.
+    #[test]
+    fn desugar_pipeline_rhs_not_call() {
+        let pipeline = Expr::Pipeline(PipelineExpr {
+            span: make_span(),
+            lhs: Box::new(Expr::Literal {
+                value: Literal::Int(1),
+                id: make_node_id(0),
+                span: make_span(),
+            }),
+            rhs: Box::new(Expr::Literal {
+                value: Literal::Int(2),
+                id: make_node_id(1),
+                span: make_span(),
+            }),
+        });
+        let mut ast = ParseResult::new(
+            vec![Item::Script {
+                stmt: Stmt::Expr { expr: pipeline },
+                id: make_node_id(2),
+                span: make_span(),
+            }],
+            vec![],
+        );
+        let errors = desugar_pipelines(&mut ast, &[]);
+        assert_eq!(errors.len(), 1);
+        assert!(matches!(errors[0], ResolveError::PipelineRhsNotCall { .. }));
     }
 }

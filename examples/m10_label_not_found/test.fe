@@ -1,0 +1,6 @@
+// M10 Task 5: `break 'undefined` produces ResolveError::LabelNotFound.
+
+let mut i = 0
+'outer: while i < 3 {
+    break 'inner
+}

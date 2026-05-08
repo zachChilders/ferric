@@ -180,6 +180,26 @@ impl<'a> Checker<'a> {
             Expr::AsyncBlock(_) => {}
             // M9 Task 1: parser does not yet emit perform / handle / resume.
             Expr::Perform(_) | Expr::Handle(_) | Expr::Resume(_) => {}
+            // M10 Task 1 scaffolding: parser does not emit these yet (Tasks
+            // 2-4 wire them up). Walk children defensively.
+            Expr::FString(e) => {
+                for seg in &e.segments {
+                    if let ferric_common::FStringSegmentKind::Expr(inner) = &seg.kind {
+                        self.check_expr(inner);
+                    }
+                }
+            }
+            Expr::Pipeline(e) => {
+                self.check_expr(&e.lhs);
+                self.check_expr(&e.rhs);
+            }
+            Expr::Propagate(e) => self.check_expr(&e.operand),
+            Expr::Must(e) => {
+                self.check_expr(&e.operand);
+                if let Some(m) = &e.message {
+                    self.check_expr(m);
+                }
+            }
         }
     }
 

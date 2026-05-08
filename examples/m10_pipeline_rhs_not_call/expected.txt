@@ -1,0 +1,5 @@
+error: right-hand side of `|>` must be a call expression
+  --> input:3:9
+   |
+ 3 | let x = 1 |> 2
+   |         ^^^^^^

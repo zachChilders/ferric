@@ -1,0 +1,19 @@
+// M10 Task 5: `break 'outer` exits the labeled outer loop, not just the
+// innermost. The expected output shows that the "after inner" line never
+// prints for the iteration where the break fires.
+
+let mut found = 0
+
+'outer: while found < 100 {
+    let mut j = 0
+    while j < 5 {
+        if j == 3 {
+            found = 42
+            break 'outer
+        }
+        j = j + 1
+    }
+    found = found + 1
+}
+
+println(s: int_to_str(n: found))

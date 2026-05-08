@@ -1,0 +1,16 @@
+// M10 Task 6 Part C: opaque-only type aliases. `Url` and `Str` are distinct
+// types — `as` casts (zero-cost at runtime) are required to bridge them.
+
+type Url = Str
+
+fn print_url(u: Url) -> Unit {
+    // Inside this function, `u` is a `Url`; cast to `Str` to print.
+    println(s: u as Str)
+}
+
+let raw: Str = "https://example.com"
+let url: Url = raw as Url     // wrap
+print_url(u: url)
+
+let back: Str = url as Str    // unwrap
+println(s: back)

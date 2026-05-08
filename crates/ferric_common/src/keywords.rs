@@ -14,7 +14,7 @@ pub const KEYWORDS: &[&str] = &[
     "let", "mut", "fn", "return", "if", "else", "while", "loop", "break", "continue", "true",
     "false", "require", "struct", "enum", "match", "trait", "impl", "for", "import", "export",
     "from", "type", "as", "async", "await", "effect", "perform", "handle", "with", "resume", "gen",
-    "yield",
+    "yield", "must",
 ];
 
 /// Built-in primitive type names. These are NOT lexer keywords — they are

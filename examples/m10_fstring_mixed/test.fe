@@ -1,0 +1,5 @@
+let s = "hello"
+let i = 7
+let f = 3.5
+let b = true
+println(s: f"str={s} int={i} float={f} bool={b}")

@@ -122,6 +122,17 @@ pub enum ParseError {
     /// `resume` appeared outside of any handler clause body. The parser
     /// statically tracks handler-clause scope so this is caught early.
     ResumeOutsideHandler { span: Span },
+    /// An f-string literal had no closing `"` before EOF. M10 (Task 2).
+    UnterminatedFString { span: Span },
+    /// A `{...}` interpolation inside an f-string failed to parse as an
+    /// expression. M10 (Task 2).
+    InvalidFStringExpr { span: Span },
+    /// A `break 'label` or `continue 'label` referenced a label that has no
+    /// matching enclosing labeled loop. M10 (Task 5).
+    LabeledBreakOutside { label: Symbol, span: Span },
+    /// A `let` pattern was refutable (e.g. an enum variant pattern), which is
+    /// not allowed in `let`. Use `match` for refutable patterns. M10 (Task 5).
+    DestructureIrrefutable { pattern: String, span: Span },
 }
 
 impl ParseError {
@@ -143,6 +154,10 @@ impl ParseError {
             ParseError::AsyncOnNonFn { span } => *span,
             ParseError::EffectDeclInsideFn { span } => *span,
             ParseError::ResumeOutsideHandler { span } => *span,
+            ParseError::UnterminatedFString { span } => *span,
+            ParseError::InvalidFStringExpr { span } => *span,
+            ParseError::LabeledBreakOutside { span, .. } => *span,
+            ParseError::DestructureIrrefutable { span, .. } => *span,
         }
     }
 
@@ -199,6 +214,16 @@ impl ParseError {
             ParseError::ResumeOutsideHandler { .. } => {
                 "`resume` is only legal inside a handler clause body".to_string()
             }
+            ParseError::UnterminatedFString { .. } => "unterminated f-string literal".to_string(),
+            ParseError::InvalidFStringExpr { .. } => {
+                "invalid expression inside f-string interpolation".to_string()
+            }
+            ParseError::LabeledBreakOutside { .. } => {
+                "labeled `break`/`continue` has no matching enclosing labeled loop".to_string()
+            }
+            ParseError::DestructureIrrefutable { pattern, .. } => format!(
+                "let patterns must be irrefutable; `{pattern}` is refutable — use `match` instead"
+            ),
         }
     }
 }
@@ -326,6 +351,32 @@ pub enum ResolveError {
         path: String,
         span: Span,
     },
+    /// `expr?` was applied to a non-fallible operand (anything other than
+    /// `Option<T>` or `Result<T, E>`). M10 (Task 4).
+    PropagateNonFallible { ty: String, span: Span },
+    /// `expr must` was applied to a non-fallible operand. M10 (Task 4).
+    MustNonFallible { ty: String, span: Span },
+    /// The right-hand side of `lhs |> rhs` was not a call expression. M10
+    /// (Task 3).
+    PipelineRhsNotCall { span: Span },
+    /// `break 'label` / `continue 'label` referenced a label that has no
+    /// matching enclosing labeled loop. M10 (Task 5).
+    LabelNotFound { label: Symbol, span: Span },
+    /// A tuple destructuring `let` pattern had a different arity than the
+    /// RHS tuple type. M10 (Task 5).
+    DestructureArity {
+        expected: usize,
+        got: usize,
+        span: Span,
+    },
+    /// A method-call `receiver.method(...)` did not resolve to either an
+    /// stdlib method-table entry for the receiver's type nor a user-defined
+    /// trait impl. M10 (Task 6 Part B).
+    UnknownMethod {
+        method: Symbol,
+        ty: String,
+        span: Span,
+    },
     /// A trait `impl` violated the orphan rule: neither the source type nor
     /// the target type parameter is owned by the crate that declared the impl.
     /// Coercion task 1; emitted by `ferric_traits` orphan-rule enforcement
@@ -361,6 +412,12 @@ impl ResolveError {
             ResolveError::UnknownVariant { span, .. } => *span,
             ResolveError::VariantArity { span, .. } => *span,
             ResolveError::PrivateImport { span, .. } => *span,
+            ResolveError::PropagateNonFallible { span, .. } => *span,
+            ResolveError::MustNonFallible { span, .. } => *span,
+            ResolveError::PipelineRhsNotCall { span } => *span,
+            ResolveError::LabelNotFound { span, .. } => *span,
+            ResolveError::DestructureArity { span, .. } => *span,
+            ResolveError::UnknownMethod { span, .. } => *span,
             ResolveError::OrphanImpl { span, .. } => *span,
         }
     }
@@ -390,6 +447,22 @@ impl ResolveError {
             }
             ResolveError::PrivateImport { path, .. } => {
                 format!("imported name is not exported from \"{path}\"")
+            }
+            ResolveError::PropagateNonFallible { ty, .. } => {
+                format!("`?` requires Option<T> or Result<T, E>, got {ty}")
+            }
+            ResolveError::MustNonFallible { ty, .. } => {
+                format!("`must` requires Option<T> or Result<T, E>, got {ty}")
+            }
+            ResolveError::PipelineRhsNotCall { .. } => {
+                "right-hand side of `|>` must be a call expression".to_string()
+            }
+            ResolveError::LabelNotFound { .. } => "label not found".to_string(),
+            ResolveError::DestructureArity { expected, got, .. } => {
+                format!("destructuring arity mismatch: expected {expected} elements, got {got}")
+            }
+            ResolveError::UnknownMethod { ty, .. } => {
+                format!("no method found on type {ty}")
             }
             ResolveError::OrphanImpl { .. } => "orphan trait impl".to_string(),
         }
@@ -465,6 +538,24 @@ impl ResolveError {
             ),
             ResolveError::PrivateImport { name: n, path, .. } => {
                 format!("`{}` is not exported from \"{}\"", name(*n), path)
+            }
+            ResolveError::PropagateNonFallible { ty, .. } => {
+                format!("`?` requires `Option<T>` or `Result<T, E>`, got `{ty}`")
+            }
+            ResolveError::MustNonFallible { ty, .. } => {
+                format!("`must` requires `Option<T>` or `Result<T, E>`, got `{ty}`")
+            }
+            ResolveError::PipelineRhsNotCall { .. } => {
+                "right-hand side of `|>` must be a call expression".to_string()
+            }
+            ResolveError::LabelNotFound { label, .. } => {
+                format!("no enclosing loop with label `'{}`", name(*label))
+            }
+            ResolveError::DestructureArity { expected, got, .. } => {
+                format!("destructuring arity mismatch: expected {expected} element(s), got {got}")
+            }
+            ResolveError::UnknownMethod { method, ty, .. } => {
+                format!("no method `{}` on type `{ty}`", name(*method))
             }
             ResolveError::OrphanImpl {
                 trait_name,
@@ -622,6 +713,16 @@ pub enum TypeError {
     /// `resume k with v` had a value whose type does not match the declared
     /// `EffectOp::resume_type` of the handled operation. M9.
     ResumeTypeMismatch { expected: Ty, found: Ty, span: Span },
+    /// The message expression of `expr must <msg>` had a type other than `Str`.
+    /// M10 (Task 4).
+    MustMessageNotStr { span: Span },
+    /// An opaque type alias was used where the underlying type (or a different
+    /// alias) was expected — `as` was missing. M10 (Task 6 Part C).
+    AliasMismatch {
+        expected: String,
+        got: String,
+        span: Span,
+    },
     /// More than one `To<T>` impl was eligible to coerce `found` into
     /// `expected` at a call argument position. The implicit-coercion
     /// machinery refuses to silently pick one — the user must resolve the
@@ -672,6 +773,8 @@ impl TypeError {
             TypeError::UnhandledEffect { span, .. } => *span,
             TypeError::EffectRowMismatch { span, .. } => *span,
             TypeError::ResumeTypeMismatch { span, .. } => *span,
+            TypeError::MustMessageNotStr { span } => *span,
+            TypeError::AliasMismatch { span, .. } => *span,
             TypeError::AmbiguousCoercion { span, .. } => *span,
         }
     }
@@ -825,6 +928,10 @@ impl TypeError {
                 expected.description(),
                 found.description()
             ),
+            TypeError::MustMessageNotStr { .. } => "`must` message must be Str".to_string(),
+            TypeError::AliasMismatch { expected, got, .. } => {
+                format!("alias type mismatch: expected {expected}, got {got}")
+            }
             TypeError::AmbiguousCoercion { .. } => "ambiguous implicit coercion".to_string(),
         }
     }
@@ -982,6 +1089,10 @@ impl TypeError {
                 expected.description(),
                 found.description()
             ),
+            TypeError::MustMessageNotStr { .. } => "`must` message must be `Str`".to_string(),
+            TypeError::AliasMismatch { expected, got, .. } => {
+                format!("type mismatch: expected `{expected}`, got `{got}`")
+            }
             TypeError::AmbiguousCoercion {
                 found,
                 expected,

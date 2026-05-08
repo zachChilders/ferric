@@ -111,6 +111,22 @@ fn offset_lex_error(err: LexError, offset: u32) -> LexError {
     }
 }
 
+/// One active f-string frame on the lexer stack.
+///
+/// An f-string is in one of two modes:
+/// - **Literal mode** (`expr_brace_depth == None`) — accumulating literal
+///   characters until the next `{` (interpolation start) or `"` (end).
+/// - **Expression mode** (`expr_brace_depth == Some(d)`) — re-using the
+///   normal expression lexer; `d` tracks the running `{`/`}` balance so we
+///   know which `}` closes the interpolation. Nested f-strings push their
+///   own frame and pop back to this one at their closing `"`.
+#[derive(Debug)]
+struct FStringFrame {
+    /// `Some(depth)` means we are inside `{...}` interpolation. `None` means
+    /// we are accumulating literal text (handled by `lex_fstring_literal`).
+    expr_brace_depth: Option<u32>,
+}
+
 /// Internal lexer implementation.
 ///
 /// All members are private - only the public `lex` function is exposed.
@@ -128,6 +144,9 @@ struct Lexer<'a> {
     /// Side-channel: `(token_index, raw_parts)` for shell-line placeholders
     /// awaiting sub-lexing of their `@{...}` interpolations in phase 2.
     raw_shell_parts: Vec<(usize, Vec<RawShellPart>)>,
+    /// Stack of active f-strings. Empty in normal lexing mode. The top frame
+    /// describes the innermost f-string the lexer is currently inside.
+    fstring_stack: Vec<FStringFrame>,
 }
 
 impl<'a> Lexer<'a> {
@@ -140,7 +159,20 @@ impl<'a> Lexer<'a> {
             tokens: Vec::new(),
             errors: Vec::new(),
             raw_shell_parts: Vec::new(),
+            fstring_stack: Vec::new(),
         }
+    }
+
+    /// Returns `true` if the current f-string frame is in literal mode (i.e.
+    /// the lexer should consume characters into a `FStringLit` until either a
+    /// `{` interpolation marker or the closing `"` is seen).
+    fn in_fstring_literal_mode(&self) -> bool {
+        matches!(
+            self.fstring_stack.last(),
+            Some(FStringFrame {
+                expr_brace_depth: None
+            })
+        )
     }
 
     /// Advances to the next character and returns it.
@@ -356,6 +388,7 @@ impl<'a> Lexer<'a> {
             "resume" => TokenKind::Resume,
             "gen" => TokenKind::Gen,
             "yield" => TokenKind::Yield,
+            "must" => TokenKind::Must,
             "true" => TokenKind::True,
             "false" => TokenKind::False,
             "_" => TokenKind::Underscore,
@@ -562,8 +595,121 @@ impl<'a> Lexer<'a> {
         }
     }
 
+    /// Lexes one literal segment of an f-string up to the next `{`, `"`, or
+    /// EOF, handling `{{`/`}}` escape sequences. Emits an `FStringLit` token
+    /// (always — even for an empty literal between adjacent `}{` markers, so
+    /// the parser sees a uniform alternating sequence). On hitting `{` it
+    /// emits `FStringExprStart` and switches the top frame to expression
+    /// mode. On hitting `"` it emits the literal and `FStringEnd` and pops
+    /// the frame. On EOF it emits `FStringEnd` (the parser surfaces
+    /// `UnterminatedFString`).
+    fn lex_fstring_literal_segment(&mut self) {
+        let lit_start = self.position;
+        let mut buf = String::new();
+
+        loop {
+            match self.peek() {
+                None => {
+                    // Unterminated: flush whatever we have. Do NOT emit
+                    // `FStringEnd` — the parser uses the absence of a
+                    // closing token to surface `UnterminatedFString`.
+                    let span = Span::new(lit_start, self.position);
+                    self.tokens
+                        .push(Token::new(TokenKind::FStringLit(buf), span));
+                    self.fstring_stack.pop();
+                    return;
+                }
+                Some('"') => {
+                    let lit_end = self.position;
+                    let lit_span = Span::new(lit_start, lit_end);
+                    self.tokens
+                        .push(Token::new(TokenKind::FStringLit(buf), lit_span));
+                    let end_start = self.position;
+                    self.advance(); // consume closing `"`
+                    let end_span = Span::new(end_start, self.position);
+                    self.tokens
+                        .push(Token::new(TokenKind::FStringEnd, end_span));
+                    self.fstring_stack.pop();
+                    return;
+                }
+                Some('{') => {
+                    // `{{` is an escape for a literal `{`.
+                    let mut look = self.chars.clone();
+                    look.next();
+                    if look.peek() == Some(&'{') {
+                        buf.push('{');
+                        self.advance();
+                        self.advance();
+                        continue;
+                    }
+                    // Real interpolation start.
+                    let lit_end = self.position;
+                    let lit_span = Span::new(lit_start, lit_end);
+                    self.tokens
+                        .push(Token::new(TokenKind::FStringLit(buf), lit_span));
+                    let brace_start = self.position;
+                    self.advance(); // consume `{`
+                    let brace_span = Span::new(brace_start, self.position);
+                    self.tokens
+                        .push(Token::new(TokenKind::FStringExprStart, brace_span));
+                    if let Some(frame) = self.fstring_stack.last_mut() {
+                        frame.expr_brace_depth = Some(0);
+                    }
+                    return;
+                }
+                Some('}') => {
+                    // `}}` is an escape for a literal `}`. A bare `}` in
+                    // f-string literal mode is ill-formed but we accept it
+                    // as a literal `}` for now (parsers in similar languages
+                    // typically warn; we err on the side of permissive).
+                    let mut look = self.chars.clone();
+                    look.next();
+                    if look.peek() == Some(&'}') {
+                        buf.push('}');
+                        self.advance();
+                        self.advance();
+                    } else {
+                        // Treat lone `}` as literal — best-effort recovery.
+                        buf.push('}');
+                        self.advance();
+                    }
+                }
+                Some('\\') => {
+                    // Reuse the regular string-literal escape rules.
+                    self.advance();
+                    if let Some(escaped) = self.peek() {
+                        let escaped_char = match escaped {
+                            'n' => '\n',
+                            't' => '\t',
+                            '\\' => '\\',
+                            '"' => '"',
+                            '{' => '{',
+                            '}' => '}',
+                            other => other,
+                        };
+                        buf.push(escaped_char);
+                        self.advance();
+                    }
+                }
+                Some(ch) => {
+                    buf.push(ch);
+                    self.advance();
+                }
+            }
+        }
+    }
+
     /// Lexes a single token.
     fn lex_token(&mut self) -> Option<Token> {
+        // Inside an f-string in literal mode the normal lexer is bypassed —
+        // accumulate characters into an `FStringLit` segment.
+        if self.in_fstring_literal_mode() {
+            self.lex_fstring_literal_segment();
+            // The segment lexer pushed tokens directly; signal "no further
+            // token from this call" so the caller's loop continues.
+            return None;
+        }
+
         self.skip_whitespace();
 
         let start = self.position;
@@ -578,6 +724,22 @@ impl<'a> Lexer<'a> {
         // Handle numbers
         if ch.is_ascii_digit() {
             return Some(self.lex_number(start));
+        }
+
+        // Handle f-string start: `f"` with no whitespace between.
+        if ch == 'f' {
+            let mut look = self.chars.clone();
+            look.next();
+            if look.peek() == Some(&'"') {
+                self.advance(); // consume `f`
+                let f_span_start = start;
+                self.advance(); // consume `"`
+                let span = Span::new(f_span_start, self.position);
+                self.fstring_stack.push(FStringFrame {
+                    expr_brace_depth: None,
+                });
+                return Some(Token::new(TokenKind::FStringStart, span));
+            }
         }
 
         // Handle strings
@@ -596,6 +758,36 @@ impl<'a> Lexer<'a> {
             return Some(self.lex_shell_line(start));
         }
 
+        // Handle `'identifier` loop labels (M10 Task 5).
+        // A `'` followed immediately by an identifier-start character
+        // produces a single `Token::Label`. There is no character-literal
+        // syntax in Ferric, so `'` is unambiguous here. A bare `'` (or `'`
+        // followed by something that isn't an identifier start) falls into
+        // the unexpected-character recovery path.
+        if ch == '\'' {
+            let mut look = self.chars.clone();
+            look.next(); // skip `'`
+            if let Some(&next_ch) = look.peek()
+                && (next_ch.is_alphabetic() || next_ch == '_')
+            {
+                self.advance(); // consume `'`
+                let ident_start = self.position;
+                let mut text = String::new();
+                while let Some(c) = self.peek() {
+                    if c.is_alphanumeric() || c == '_' {
+                        text.push(c);
+                        self.advance();
+                    } else {
+                        break;
+                    }
+                }
+                let sym = self.interner.intern(&text);
+                let span = Span::new(start, self.position);
+                let _ = ident_start;
+                return Some(Token::new(TokenKind::Label(sym), span));
+            }
+        }
+
         // Handle operators and punctuation
         self.advance();
 
@@ -606,8 +798,36 @@ impl<'a> Lexer<'a> {
             '%' => TokenKind::Percent,
             '(' => TokenKind::LParen,
             ')' => TokenKind::RParen,
-            '{' => TokenKind::LBrace,
-            '}' => TokenKind::RBrace,
+            '{' => {
+                // Inside an f-string interpolation, track brace nesting so we
+                // can recognise the matching `}` as `FStringExprEnd`.
+                if let Some(FStringFrame {
+                    expr_brace_depth: Some(d),
+                }) = self.fstring_stack.last_mut()
+                {
+                    *d += 1;
+                }
+                TokenKind::LBrace
+            }
+            '}' => {
+                if let Some(FStringFrame {
+                    expr_brace_depth: Some(d),
+                }) = self.fstring_stack.last_mut()
+                {
+                    if *d == 0 {
+                        // This `}` closes the f-string interpolation. Switch
+                        // back to literal mode and emit FStringExprEnd.
+                        if let Some(frame) = self.fstring_stack.last_mut() {
+                            frame.expr_brace_depth = None;
+                        }
+                        let end = self.position;
+                        let span = Span::new(start, end);
+                        return Some(Token::new(TokenKind::FStringExprEnd, span));
+                    }
+                    *d -= 1;
+                }
+                TokenKind::RBrace
+            }
             '[' => TokenKind::LBracket,
             ']' => TokenKind::RBracket,
             ',' => TokenKind::Comma,
@@ -621,6 +841,7 @@ impl<'a> Lexer<'a> {
                 }
             }
             ';' => TokenKind::Semi,
+            '?' => TokenKind::Question,
 
             // Multi-character operators
             '-' => {
@@ -682,6 +903,9 @@ impl<'a> Lexer<'a> {
                 if self.peek() == Some('|') {
                     self.advance();
                     TokenKind::OrOr
+                } else if self.peek() == Some('>') {
+                    self.advance();
+                    TokenKind::Pipe2
                 } else {
                     TokenKind::Pipe
                 }

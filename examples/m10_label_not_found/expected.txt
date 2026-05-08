@@ -1,0 +1,5 @@
+error: no enclosing loop with label `'inner`
+  --> input:5:11
+   |
+ 5 |     break 'inner
+   |           ^^^^^^

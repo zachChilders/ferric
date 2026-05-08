@@ -1,0 +1,15 @@
+error: unknown argument name `other_var`
+  --> input:9:7
+   |
+ 9 | greet(other_var)
+   |       ^^^^^^^^^
+error: missing required argument `name`
+  --> input:9:1
+   |
+ 9 | greet(other_var)
+   | ^^^^^^^^^^^^^^^^
+error: expected 1 argument(s), found 0
+  --> input:9:1
+   |
+ 9 | greet(other_var)
+   | ^^^^^^^^^^^^^^^^

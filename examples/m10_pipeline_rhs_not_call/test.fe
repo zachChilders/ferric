@@ -1,0 +1,4 @@
+// Pipeline operator (M10 Task 3) — error: RHS must be a call expression.
+// `1 |> 2` is invalid — the RHS is a literal, not a call.
+let x = 1 |> 2
+println(s: int_to_str(n: x))

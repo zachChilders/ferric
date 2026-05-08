@@ -1,0 +1,6 @@
+error: unterminated f-string literal
+  --> input:1:9
+  |
+1 | let x = f"unterminated
+  |         ^^^^^^^^^^^^^^ starts here
+  = help: an f-string must be closed with a matching `"`; `{{`/`}}` produce literal braces

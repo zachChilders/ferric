@@ -1,0 +1,3 @@
+let x = 5
+let y = 10
+println(s: f"outer {f"inner {x}"} {y}")

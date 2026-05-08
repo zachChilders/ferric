@@ -1,0 +1,12 @@
+// M10 Task 4: `must` panics with the provided message on `None`.
+
+fn lookup(present: Bool) -> Option<Int> {
+    if present {
+        Option::Some(1)
+    } else {
+        Option::None
+    }
+}
+
+let v = lookup(present: false) must "expected a value but got None"
+println(s: int_to_str(n: v))

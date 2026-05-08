@@ -1,0 +1,15 @@
+// M10 Task 4: `must` without an explicit message — success path on
+// `Result<T, E>`. A bare `must` uses a generic panic message but here the
+// operand is `Ok(_)`, so the message is never reached.
+
+fn parse_pos(s: Str) -> Result<Int, Str> {
+    let n = str_parse_int(s: s)
+    if n < 0 {
+        Result::Err("negative")
+    } else {
+        Result::Ok(n)
+    }
+}
+
+let n = parse_pos(s: "100") must
+println(s: int_to_str(n: n + 1))

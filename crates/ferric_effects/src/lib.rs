@@ -354,6 +354,26 @@ impl Analyzer {
             }
             Expr::Cast(c) => self.walk_expr(&c.expr),
             Expr::AsyncBlock(b) => self.walk_expr(&b.block),
+            // M10 Task 1 scaffolding: parser does not emit these yet (Tasks
+            // 2-4 wire them up). Walk children defensively.
+            Expr::FString(e) => {
+                for seg in &e.segments {
+                    if let ferric_common::FStringSegmentKind::Expr(inner) = &seg.kind {
+                        self.walk_expr(inner);
+                    }
+                }
+            }
+            Expr::Pipeline(e) => {
+                self.walk_expr(&e.lhs);
+                self.walk_expr(&e.rhs);
+            }
+            Expr::Propagate(e) => self.walk_expr(&e.operand),
+            Expr::Must(e) => {
+                self.walk_expr(&e.operand);
+                if let Some(m) = &e.message {
+                    self.walk_expr(m);
+                }
+            }
         }
     }
 

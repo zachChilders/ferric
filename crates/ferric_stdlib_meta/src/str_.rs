@@ -25,6 +25,33 @@ fn sig_str_parse_int() -> (Vec<Ty>, Ty) {
 fn sig_str_split() -> (Vec<Ty>, Ty) {
     (vec![Ty::Str, Ty::Str], Ty::Array(Box::new(Ty::Str)))
 }
+fn sig_str_to_upper() -> (Vec<Ty>, Ty) {
+    (vec![Ty::Str], Ty::Str)
+}
+fn sig_str_to_lower() -> (Vec<Ty>, Ty) {
+    (vec![Ty::Str], Ty::Str)
+}
+fn sig_str_ends_with() -> (Vec<Ty>, Ty) {
+    (vec![Ty::Str, Ty::Str], Ty::Bool)
+}
+fn sig_str_is_empty() -> (Vec<Ty>, Ty) {
+    (vec![Ty::Str], Ty::Bool)
+}
+fn sig_str_replace() -> (Vec<Ty>, Ty) {
+    (vec![Ty::Str, Ty::Str, Ty::Str], Ty::Str)
+}
+fn sig_str_lines() -> (Vec<Ty>, Ty) {
+    (vec![Ty::Str], Ty::Array(Box::new(Ty::Str)))
+}
+fn sig_str_chars() -> (Vec<Ty>, Ty) {
+    (vec![Ty::Str], Ty::Array(Box::new(Ty::Str)))
+}
+fn sig_str_slice() -> (Vec<Ty>, Ty) {
+    (vec![Ty::Str, Ty::Int, Ty::Int], Ty::Str)
+}
+fn sig_str_parse_float() -> (Vec<Ty>, Ty) {
+    (vec![Ty::Str], Ty::Float)
+}
 
 pub const STR_FNS: &[FunctionMeta] = &[
     FunctionMeta {
@@ -36,8 +63,8 @@ pub const STR_FNS: &[FunctionMeta] = &[
     FunctionMeta {
         name: "str_slice",
         params: &["s", "from", "to"],
-        signature: Signature::Unknown,
-        display: "fn(...)",
+        signature: Signature::Mono(sig_str_slice),
+        display: "fn(s: Str, from: Int, to: Int) -> Str",
     },
     FunctionMeta {
         name: "str_contains",
@@ -54,8 +81,8 @@ pub const STR_FNS: &[FunctionMeta] = &[
     FunctionMeta {
         name: "str_ends_with",
         params: &["s", "suffix"],
-        signature: Signature::Unknown,
-        display: "fn(...)",
+        signature: Signature::Mono(sig_str_ends_with),
+        display: "fn(s: Str, suffix: Str) -> Bool",
     },
     FunctionMeta {
         name: "str_find",
@@ -84,14 +111,14 @@ pub const STR_FNS: &[FunctionMeta] = &[
     FunctionMeta {
         name: "str_lines",
         params: &["s"],
-        signature: Signature::Unknown,
-        display: "fn(...)",
+        signature: Signature::Mono(sig_str_lines),
+        display: "fn(s: Str) -> [Str]",
     },
     FunctionMeta {
         name: "str_chars",
         params: &["s"],
-        signature: Signature::Unknown,
-        display: "fn(...)",
+        signature: Signature::Mono(sig_str_chars),
+        display: "fn(s: Str) -> [Str]",
     },
     FunctionMeta {
         name: "str_trim",
@@ -120,14 +147,14 @@ pub const STR_FNS: &[FunctionMeta] = &[
     FunctionMeta {
         name: "str_to_upper",
         params: &["s"],
-        signature: Signature::Unknown,
-        display: "fn(...)",
+        signature: Signature::Mono(sig_str_to_upper),
+        display: "fn(s: Str) -> Str",
     },
     FunctionMeta {
         name: "str_to_lower",
         params: &["s"],
-        signature: Signature::Unknown,
-        display: "fn(...)",
+        signature: Signature::Mono(sig_str_to_lower),
+        display: "fn(s: Str) -> Str",
     },
     FunctionMeta {
         name: "str_to_title",
@@ -156,8 +183,8 @@ pub const STR_FNS: &[FunctionMeta] = &[
     FunctionMeta {
         name: "str_replace",
         params: &["s", "from", "to"],
-        signature: Signature::Unknown,
-        display: "fn(...)",
+        signature: Signature::Mono(sig_str_replace),
+        display: "fn(s: Str, from: Str, to: Str) -> Str",
     },
     FunctionMeta {
         name: "str_replace_first",
@@ -192,8 +219,8 @@ pub const STR_FNS: &[FunctionMeta] = &[
     FunctionMeta {
         name: "str_parse_float",
         params: &["s"],
-        signature: Signature::Unknown,
-        display: "fn(...)",
+        signature: Signature::Mono(sig_str_parse_float),
+        display: "fn(s: Str) -> Float",
     },
     FunctionMeta {
         name: "str_parse_bool",
@@ -228,8 +255,8 @@ pub const STR_FNS: &[FunctionMeta] = &[
     FunctionMeta {
         name: "str_is_empty",
         params: &["s"],
-        signature: Signature::Unknown,
-        display: "fn(...)",
+        signature: Signature::Mono(sig_str_is_empty),
+        display: "fn(s: Str) -> Bool",
     },
     FunctionMeta {
         name: "str_is_ascii",

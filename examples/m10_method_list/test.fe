@@ -1,0 +1,21 @@
+// M10 Task 6 Part B: method syntax on lists.
+
+let xs: [Int] = [1, 2, 3, 4, 5]
+
+// .reverse() then .len() → 5
+let r = xs.reverse()
+println(s: int_to_str(n: r.len()))
+
+// .append(item: 99) then .len() → 6
+let appended = xs.append(item: 99)
+println(s: int_to_str(n: appended.len()))
+
+// .take(n: 2) returns [1, 2] → .len() == 2
+let taken = xs.take(n: 2)
+println(s: int_to_str(n: taken.len()))
+
+// .is_empty()
+println(s: bool_to_str(b: xs.is_empty()))
+
+// .contains(item: 3)
+println(s: bool_to_str(b: xs.contains(item: 3)))

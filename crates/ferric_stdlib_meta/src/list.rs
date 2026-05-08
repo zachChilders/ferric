@@ -21,6 +21,141 @@ fn sig_array_len(g: &mut dyn TyVarGen) -> TypeScheme {
     }
 }
 
+/// `list_len(l: [T]) -> Int`. Mirrors `array_len`.
+fn sig_list_len(g: &mut dyn TyVarGen) -> TypeScheme {
+    let t = g.fresh();
+    TypeScheme {
+        forall: vec![t],
+        ty: Ty::Fn {
+            params: vec![Ty::Array(Box::new(Ty::Var(t)))],
+            ret: Box::new(Ty::Int),
+        },
+    }
+}
+
+/// `list_is_empty(l: [T]) -> Bool`.
+fn sig_list_is_empty(g: &mut dyn TyVarGen) -> TypeScheme {
+    let t = g.fresh();
+    TypeScheme {
+        forall: vec![t],
+        ty: Ty::Fn {
+            params: vec![Ty::Array(Box::new(Ty::Var(t)))],
+            ret: Box::new(Ty::Bool),
+        },
+    }
+}
+
+/// `list_first(l: [T]) -> Option<T>`.
+fn sig_list_first(g: &mut dyn TyVarGen) -> TypeScheme {
+    let t = g.fresh();
+    TypeScheme {
+        forall: vec![t],
+        ty: Ty::Fn {
+            params: vec![Ty::Array(Box::new(Ty::Var(t)))],
+            ret: Box::new(Ty::Option(Box::new(Ty::Var(t)))),
+        },
+    }
+}
+
+/// `list_last(l: [T]) -> Option<T>`.
+fn sig_list_last(g: &mut dyn TyVarGen) -> TypeScheme {
+    let t = g.fresh();
+    TypeScheme {
+        forall: vec![t],
+        ty: Ty::Fn {
+            params: vec![Ty::Array(Box::new(Ty::Var(t)))],
+            ret: Box::new(Ty::Option(Box::new(Ty::Var(t)))),
+        },
+    }
+}
+
+/// `list_reverse(l: [T]) -> [T]`.
+fn sig_list_reverse(g: &mut dyn TyVarGen) -> TypeScheme {
+    let t = g.fresh();
+    TypeScheme {
+        forall: vec![t],
+        ty: Ty::Fn {
+            params: vec![Ty::Array(Box::new(Ty::Var(t)))],
+            ret: Box::new(Ty::Array(Box::new(Ty::Var(t)))),
+        },
+    }
+}
+
+/// `list_take(l: [T], n: Int) -> [T]`.
+fn sig_list_take(g: &mut dyn TyVarGen) -> TypeScheme {
+    let t = g.fresh();
+    TypeScheme {
+        forall: vec![t],
+        ty: Ty::Fn {
+            params: vec![Ty::Array(Box::new(Ty::Var(t))), Ty::Int],
+            ret: Box::new(Ty::Array(Box::new(Ty::Var(t)))),
+        },
+    }
+}
+
+/// `list_drop(l: [T], n: Int) -> [T]`.
+fn sig_list_drop(g: &mut dyn TyVarGen) -> TypeScheme {
+    let t = g.fresh();
+    TypeScheme {
+        forall: vec![t],
+        ty: Ty::Fn {
+            params: vec![Ty::Array(Box::new(Ty::Var(t))), Ty::Int],
+            ret: Box::new(Ty::Array(Box::new(Ty::Var(t)))),
+        },
+    }
+}
+
+/// `list_append(l: [T], item: T) -> [T]`.
+fn sig_list_append(g: &mut dyn TyVarGen) -> TypeScheme {
+    let t = g.fresh();
+    TypeScheme {
+        forall: vec![t],
+        ty: Ty::Fn {
+            params: vec![Ty::Array(Box::new(Ty::Var(t))), Ty::Var(t)],
+            ret: Box::new(Ty::Array(Box::new(Ty::Var(t)))),
+        },
+    }
+}
+
+/// `list_concat(a: [T], b: [T]) -> [T]`.
+fn sig_list_concat(g: &mut dyn TyVarGen) -> TypeScheme {
+    let t = g.fresh();
+    TypeScheme {
+        forall: vec![t],
+        ty: Ty::Fn {
+            params: vec![
+                Ty::Array(Box::new(Ty::Var(t))),
+                Ty::Array(Box::new(Ty::Var(t))),
+            ],
+            ret: Box::new(Ty::Array(Box::new(Ty::Var(t)))),
+        },
+    }
+}
+
+/// `list_contains(l: [T], item: T) -> Bool`.
+fn sig_list_contains(g: &mut dyn TyVarGen) -> TypeScheme {
+    let t = g.fresh();
+    TypeScheme {
+        forall: vec![t],
+        ty: Ty::Fn {
+            params: vec![Ty::Array(Box::new(Ty::Var(t))), Ty::Var(t)],
+            ret: Box::new(Ty::Bool),
+        },
+    }
+}
+
+/// `list_slice(l: [T], from: Int, to: Int) -> [T]`.
+fn sig_list_slice(g: &mut dyn TyVarGen) -> TypeScheme {
+    let t = g.fresh();
+    TypeScheme {
+        forall: vec![t],
+        ty: Ty::Fn {
+            params: vec![Ty::Array(Box::new(Ty::Var(t))), Ty::Int, Ty::Int],
+            ret: Box::new(Ty::Array(Box::new(Ty::Var(t)))),
+        },
+    }
+}
+
 pub const LIST_FNS: &[FunctionMeta] = &[
     FunctionMeta {
         name: "list_new",
@@ -55,14 +190,14 @@ pub const LIST_FNS: &[FunctionMeta] = &[
     FunctionMeta {
         name: "list_len",
         params: &["l"],
-        signature: Signature::Unknown,
-        display: "fn(...)",
+        signature: Signature::Poly(sig_list_len),
+        display: "fn(l: [T]) -> Int",
     },
     FunctionMeta {
         name: "list_is_empty",
         params: &["l"],
-        signature: Signature::Unknown,
-        display: "fn(...)",
+        signature: Signature::Poly(sig_list_is_empty),
+        display: "fn(l: [T]) -> Bool",
     },
     FunctionMeta {
         name: "list_get",
@@ -73,26 +208,26 @@ pub const LIST_FNS: &[FunctionMeta] = &[
     FunctionMeta {
         name: "list_first",
         params: &["l"],
-        signature: Signature::Unknown,
-        display: "fn(...)",
+        signature: Signature::Poly(sig_list_first),
+        display: "fn(l: [T]) -> Option<T>",
     },
     FunctionMeta {
         name: "list_last",
         params: &["l"],
-        signature: Signature::Unknown,
-        display: "fn(...)",
+        signature: Signature::Poly(sig_list_last),
+        display: "fn(l: [T]) -> Option<T>",
     },
     FunctionMeta {
         name: "list_slice",
         params: &["l", "from", "to"],
-        signature: Signature::Unknown,
-        display: "fn(...)",
+        signature: Signature::Poly(sig_list_slice),
+        display: "fn(l: [T], from: Int, to: Int) -> [T]",
     },
     FunctionMeta {
         name: "list_contains",
         params: &["l", "item"],
-        signature: Signature::Unknown,
-        display: "fn(...)",
+        signature: Signature::Poly(sig_list_contains),
+        display: "fn(l: [T], item: T) -> Bool",
     },
     FunctionMeta {
         name: "list_find",
@@ -193,14 +328,14 @@ pub const LIST_FNS: &[FunctionMeta] = &[
     FunctionMeta {
         name: "list_take",
         params: &["l", "n"],
-        signature: Signature::Unknown,
-        display: "fn(...)",
+        signature: Signature::Poly(sig_list_take),
+        display: "fn(l: [T], n: Int) -> [T]",
     },
     FunctionMeta {
         name: "list_drop",
         params: &["l", "n"],
-        signature: Signature::Unknown,
-        display: "fn(...)",
+        signature: Signature::Poly(sig_list_drop),
+        display: "fn(l: [T], n: Int) -> [T]",
     },
     FunctionMeta {
         name: "list_take_while",
@@ -271,8 +406,8 @@ pub const LIST_FNS: &[FunctionMeta] = &[
     FunctionMeta {
         name: "list_concat",
         params: &["a", "b"],
-        signature: Signature::Unknown,
-        display: "fn(...)",
+        signature: Signature::Poly(sig_list_concat),
+        display: "fn(a: [T], b: [T]) -> [T]",
     },
     FunctionMeta {
         name: "list_prepend",
@@ -283,8 +418,8 @@ pub const LIST_FNS: &[FunctionMeta] = &[
     FunctionMeta {
         name: "list_append",
         params: &["l", "item"],
-        signature: Signature::Unknown,
-        display: "fn(...)",
+        signature: Signature::Poly(sig_list_append),
+        display: "fn(l: [T], item: T) -> [T]",
     },
     FunctionMeta {
         name: "list_insert",
@@ -301,8 +436,8 @@ pub const LIST_FNS: &[FunctionMeta] = &[
     FunctionMeta {
         name: "list_reverse",
         params: &["l"],
-        signature: Signature::Unknown,
-        display: "fn(...)",
+        signature: Signature::Poly(sig_list_reverse),
+        display: "fn(l: [T]) -> [T]",
     },
     FunctionMeta {
         name: "list_unique",

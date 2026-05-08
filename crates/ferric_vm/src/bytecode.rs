@@ -691,6 +691,17 @@ impl BytecodeVM {
                     };
                     eprintln!("warning: require failed: {display}");
                 }
+                Op::MustFail => {
+                    // M10 Task 4: distinct from RequireFail so diagnostics
+                    // can render "unwrap failed: ..." instead of "require
+                    // failed: ..." — the user did not write `require`.
+                    let msg = self.pop_str()?;
+                    let message = if msg.is_empty() { None } else { Some(msg) };
+                    return Err(RuntimeError::MustError {
+                        span: dummy_span(),
+                        message,
+                    });
+                }
 
                 // ---------------- M4: structs / enums / tuples ------------
                 Op::MakeStruct(n) => {

@@ -26,10 +26,10 @@
 use std::collections::HashMap;
 
 use ferric_common::{
-    BinOp, Chunk, Constant, DefId, EffectTags, Expr, HandleExpr, HandlerClause, HandlerEntry,
-    HandlerTable, ImplMethod, Interner, Item, Literal, MatchArm, NamedArg, NodeId, Op, Param,
-    ParseResult, Pattern, PerformExpr, Program, RequireMode, RequireStmt, ResolveResult,
-    ResumeExpr, ShellPart, Stmt, Symbol, Ty, TypeResult, UnOp,
+    BinOp, Chunk, Constant, DefId, EffectTags, Expr, FStringSegmentKind, HandleExpr, HandlerClause,
+    HandlerEntry, HandlerTable, ImplMethod, Interner, Item, LetPattern, Literal, MatchArm,
+    NamedArg, NodeId, Op, Param, ParseResult, Pattern, PerformExpr, Program, RequireMode,
+    RequireStmt, ResolveResult, ResumeExpr, ShellPart, Stmt, Symbol, Ty, TypeResult, UnOp,
 };
 
 use ferric_common::SHELL_EXEC_NATIVE;
@@ -37,6 +37,10 @@ use ferric_common::SHELL_EXEC_NATIVE;
 /// Name of the stdlib native used to coerce `Int` interpolations into `Str`
 /// inside a shell command. Also registered by `ferric_stdlib::register_stdlib`.
 const INT_TO_STR_NATIVE: &str = "int_to_str";
+/// `float_to_str(n: Float) -> Str` — used for f-string interpolation of floats.
+const FLOAT_TO_STR_NATIVE: &str = "float_to_str";
+/// `bool_to_str(b: Bool) -> Str` — used for f-string interpolation of bools.
+const BOOL_TO_STR_NATIVE: &str = "bool_to_str";
 
 /// Compiles an AST to a bytecode `Program`.
 ///
@@ -120,6 +124,11 @@ struct LoopContext {
     start_offset: usize,
     /// Patch addresses for break jumps; resolved at loop end.
     break_jumps: Vec<usize>,
+    /// M10 Task 5: optional label associated with this loop. `Some` for
+    /// `'name: while|loop|for ...`, `None` otherwise. `break 'name` and
+    /// `continue 'name` walk this stack from innermost to outermost
+    /// matching the label.
+    label: Option<Symbol>,
 }
 
 impl<'a> Compiler<'a> {
@@ -338,10 +347,45 @@ impl<'a> Compiler<'a> {
 
     fn compile_stmt(&mut self, stmt: &Stmt) {
         match stmt {
-            Stmt::Let { name, init, .. } => {
+            Stmt::Let { pattern, init, .. } => {
                 self.compile_expr(init);
-                let slot = self.bind_local(*name);
-                self.emit(Op::StoreSlot(slot));
+                // M10 Task 5: tuple destructuring lowers to a temp slot for
+                // the RHS plus one `LoadSlot + GetTupleField + StoreSlot`
+                // sequence per binding. Struct destructuring is the same
+                // shape using `GetField` keyed by the field's index in the
+                // declared struct layout.
+                match pattern {
+                    LetPattern::Ident(name) => {
+                        let slot = self.bind_local(*name);
+                        self.emit(Op::StoreSlot(slot));
+                    }
+                    LetPattern::Tuple(idents) => {
+                        let tmp = self.bind_anon_slot();
+                        self.emit(Op::StoreSlot(tmp));
+                        for (i, name) in idents.iter().enumerate() {
+                            self.emit(Op::LoadSlot(tmp));
+                            let idx = u8::try_from(i)
+                                .expect("too many tuple elements in destructuring let");
+                            self.emit(Op::GetTupleField(idx));
+                            let bind_slot = self.bind_local(*name);
+                            self.emit(Op::StoreSlot(bind_slot));
+                        }
+                    }
+                    LetPattern::Struct {
+                        name: sname,
+                        fields,
+                    } => {
+                        let tmp = self.bind_anon_slot();
+                        self.emit(Op::StoreSlot(tmp));
+                        for fname in fields {
+                            self.emit(Op::LoadSlot(tmp));
+                            let idx = self.field_index(*sname, *fname).unwrap_or(0);
+                            self.emit(Op::GetField(idx));
+                            let bind_slot = self.bind_local(*fname);
+                            self.emit(Op::StoreSlot(bind_slot));
+                        }
+                    }
+                }
             }
             Stmt::Assign { target, value, .. } => {
                 self.compile_expr(value);
@@ -360,8 +404,12 @@ impl<'a> Compiler<'a> {
             }
             Stmt::Require(req) => self.compile_require(req),
             Stmt::For {
-                var, iter, body, ..
-            } => self.compile_for(*var, iter, body),
+                var,
+                iter,
+                body,
+                label,
+                ..
+            } => self.compile_for(*var, iter, body, label.as_ref().map(|l| l.name)),
         }
     }
 
@@ -376,7 +424,7 @@ impl<'a> Compiler<'a> {
     ///     body; pop
     ///     __i = __i + 1
     /// ```
-    fn compile_for(&mut self, var: Symbol, iter: &Expr, body: &Expr) {
+    fn compile_for(&mut self, var: Symbol, iter: &Expr, body: &Expr, label: Option<Symbol>) {
         // Fresh scope for the loop's locals.
         self.push_scope();
 
@@ -404,6 +452,7 @@ impl<'a> Compiler<'a> {
         self.loop_stack.push(LoopContext {
             start_offset: loop_start,
             break_jumps: Vec::new(),
+            label,
         });
 
         // Bind `var` in a body scope so each iteration sees a fresh binding.
@@ -569,13 +618,16 @@ impl<'a> Compiler<'a> {
                 }
                 self.emit(Op::Return);
             }
-            Expr::While { cond, body, .. } => {
+            Expr::While {
+                cond, body, label, ..
+            } => {
                 let loop_start = self.current_offset();
                 self.compile_expr(cond);
                 let exit_jump = self.emit_jump(Op::JumpIfFalse(0));
                 self.loop_stack.push(LoopContext {
                     start_offset: loop_start,
                     break_jumps: Vec::new(),
+                    label: label.as_ref().map(|l| l.name),
                 });
                 self.compile_expr(body);
                 self.emit(Op::Pop);
@@ -587,11 +639,12 @@ impl<'a> Compiler<'a> {
                 }
                 self.emit(Op::Unit);
             }
-            Expr::Loop { body, .. } => {
+            Expr::Loop { body, label, .. } => {
                 let loop_start = self.current_offset();
                 self.loop_stack.push(LoopContext {
                     start_offset: loop_start,
                     break_jumps: Vec::new(),
+                    label: label.as_ref().map(|l| l.name),
                 });
                 self.compile_expr(body);
                 self.emit(Op::Pop);
@@ -602,14 +655,34 @@ impl<'a> Compiler<'a> {
                 }
                 self.emit(Op::Unit);
             }
-            Expr::Break { .. } => {
+            // M10 Task 5: labeled break/continue. Find the target frame by
+            // walking the loop stack from innermost outward looking for the
+            // matching label; unlabeled break/continue use the innermost
+            // frame as before. Resolver guarantees the label exists.
+            Expr::Break { label, .. } => {
                 let addr = self.emit_jump(Op::Jump(0));
-                if let Some(ctx) = self.loop_stack.last_mut() {
-                    ctx.break_jumps.push(addr);
+                let target_idx = match label {
+                    None => self.loop_stack.len().checked_sub(1),
+                    Some(lab) => self
+                        .loop_stack
+                        .iter()
+                        .rposition(|c| c.label == Some(lab.name)),
+                };
+                if let Some(idx) = target_idx {
+                    self.loop_stack[idx].break_jumps.push(addr);
                 }
             }
-            Expr::Continue { .. } => {
-                let target = self.loop_stack.last().map(|c| c.start_offset).unwrap_or(0);
+            Expr::Continue { label, .. } => {
+                let target = match label {
+                    None => self.loop_stack.last().map(|c| c.start_offset),
+                    Some(lab) => self
+                        .loop_stack
+                        .iter()
+                        .rev()
+                        .find(|c| c.label == Some(lab.name))
+                        .map(|c| c.start_offset),
+                }
+                .unwrap_or(0);
                 self.emit_backward_jump(target);
             }
             Expr::Closure {
@@ -721,6 +794,30 @@ impl<'a> Compiler<'a> {
             // M9: `resume k with value` — push the continuation handle
             // and the resume value, then emit `Op::Resume`.
             Expr::Resume(r) => self.compile_resume(r),
+            // M10 Task 2: f-string interpolation. Lowers to a sequence of
+            // string pushes followed by `Op::Concat` per segment. Each
+            // interpolated expression is coerced to `Str` via the matching
+            // `*_to_str` native (Str passes through unchanged). Type checker
+            // already validated each operand is Str/Int/Float/Bool.
+            Expr::FString(e) => self.compile_fstring(&e.segments),
+            // M10 Task 3: `lhs |> rhs(args)` is desugared to a Call by the
+            // resolver before the compiler runs, so this arm is unreachable
+            // in well-formed input. Keep the arm so the match stays
+            // exhaustive.
+            Expr::Pipeline(_) => {
+                unreachable!(
+                    "Expr::Pipeline should have been desugared to a Call by the \
+                     resolver before the compiler runs"
+                );
+            }
+            // M10 Task 4: postfix `?` propagation. Lowers to a match-shaped
+            // sequence that early-returns the failure variant or unpacks the
+            // inner `T` on success.
+            Expr::Propagate(p) => self.compile_propagate(p),
+            // M10 Task 4: postfix `must` unwrap. Lowers to a match-shaped
+            // sequence that calls `Op::RequireFail` on the failure variant
+            // or unpacks the inner `T` on success.
+            Expr::Must(m) => self.compile_must(m),
         }
     }
 
@@ -990,9 +1087,14 @@ impl<'a> Compiler<'a> {
         self.emit(Op::Resume);
     }
 
-    /// Compiles a method call by looking up the resolved impl-method DefId
-    /// (recorded by the type checker) and lowering to a regular function
-    /// call where the receiver is the first argument.
+    /// Compiles a method call by looking up the resolved dispatch the type
+    /// checker recorded and lowering to a regular function call where the
+    /// receiver is the first argument.
+    ///
+    /// M10 (Task 6 Part B) added a parallel `stdlib_method_dispatch` map:
+    /// when present, the method desugars to a native call (e.g. `s.len()` →
+    /// `str_len(s)`). User-defined trait impls take the existing
+    /// `method_dispatch` path.
     fn compile_method_call(
         &mut self,
         receiver: &Expr,
@@ -1000,6 +1102,24 @@ impl<'a> Compiler<'a> {
         id: NodeId,
         _span: ferric_common::Span,
     ) {
+        // M10 Task 6 Part B: stdlib method dispatch (e.g. `s.to_upper()` →
+        // `str_to_upper(s)`). Native fns live in the `NativeRegistry`; we
+        // emit the call exactly the same way an `Expr::Call` against a bare
+        // `Variable` referencing the native would.
+        if let Some(stdlib_sym) = self.types.stdlib_method_dispatch.get(&id).copied() {
+            // Args left-to-right: receiver first, then the user-supplied args.
+            self.compile_expr(receiver);
+            for arg in args {
+                self.compile_expr(&arg.value);
+            }
+            // Push the native callable last (Op::Call pops it first).
+            let cidx = self.add_constant(Constant::NativeFn(stdlib_sym));
+            self.emit(Op::LoadConst(cidx));
+            let argc = u8::try_from(args.len() + 1).expect("method call argc exceeds u8");
+            self.emit(Op::Call(argc));
+            return;
+        }
+
         // Push the receiver as the first argument.
         self.compile_expr(receiver);
         for arg in args {
@@ -1226,6 +1346,129 @@ impl<'a> Compiler<'a> {
                 self.emit(Op::Pop);
                 let idx = self.add_constant(Constant::Bool(true));
                 self.emit(Op::LoadConst(idx));
+            }
+        }
+    }
+
+    /// M10 Task 4: lowers `expr?` to a match-shaped early-return.
+    ///
+    /// Stack discipline: the value left on the stack at the end of this
+    /// sequence is the inner `T` of the operand's `Option<T>` / `Result<T, E>`.
+    /// On the failure path (`None` / `Err(_)`), `Op::Return` re-emits the
+    /// original failure variant from the current call frame — the operand
+    /// already has the right shape, so we just route it back unchanged.
+    ///
+    /// Sequence (success variant index = 0 for both Option::Some and
+    /// Result::Ok):
+    ///   compile(operand)
+    ///   Dup                     ;; keep one copy for unpack/return
+    ///   MatchVariant(0)         ;; pushes Bool: is success?
+    ///   JumpIfFalse fail        ;; on false, jump to failure block
+    ///   UnpackVariant           ;; success path: extract inner value(s)
+    ///   Jump end
+    /// fail:
+    ///   Return                  ;; re-return the original failure variant
+    /// end:
+    fn compile_propagate(&mut self, p: &ferric_common::PropagateExpr) {
+        // Push the operand. Then Dup so we have two copies — one to test,
+        // one to either unpack on success or `Return` on failure.
+        self.compile_expr(&p.operand);
+        self.emit(Op::Dup);
+        // Variant 0 is the success case for both built-in fallible types
+        // (Option::Some and Result::Ok are registered first by
+        // `ferric_stdlib_meta::builtin_enums`). The type checker has
+        // already verified the operand is Option<T> or Result<T, E>.
+        self.emit(Op::MatchVariant(0));
+        let fail_jump = self.emit_jump(Op::JumpIfFalse(0));
+        // Success path: dup gave us a second copy, unpack it.
+        self.emit(Op::UnpackVariant);
+        let end_jump = self.emit_jump(Op::Jump(0));
+        // Failure path: the operand value is on the stack; re-return it
+        // verbatim from the enclosing function. The type checker has
+        // verified the function's return type is compatible.
+        self.patch_jump(fail_jump);
+        self.emit(Op::Return);
+        self.patch_jump(end_jump);
+    }
+
+    /// M10 Task 4: lowers `expr must` / `expr must <msg>` to a match-shaped
+    /// unwrap that panics on the failure variant via `Op::MustFail`.
+    ///
+    /// Sequence (success variant index = 0):
+    ///   compile(operand)
+    ///   Dup
+    ///   MatchVariant(0)
+    ///   JumpIfFalse fail
+    ///   UnpackVariant
+    ///   Jump end
+    /// fail:
+    ///   Pop                     ;; discard the duplicate failure variant
+    ///   <push message string>   ;; either the user expr or empty (= generic)
+    ///   MustFail                ;; raises RuntimeError::MustError
+    /// end:
+    fn compile_must(&mut self, m: &ferric_common::MustExpr) {
+        self.compile_expr(&m.operand);
+        self.emit(Op::Dup);
+        self.emit(Op::MatchVariant(0));
+        let fail_jump = self.emit_jump(Op::JumpIfFalse(0));
+        self.emit(Op::UnpackVariant);
+        let end_jump = self.emit_jump(Op::Jump(0));
+        // Failure path: discard the duplicated variant, push the panic
+        // message, and emit `MustFail` to halt with that message. An empty
+        // string activates the diagnostic's "unwrap failed" generic.
+        self.patch_jump(fail_jump);
+        self.emit(Op::Pop);
+        match &m.message {
+            Some(msg) => self.compile_expr(msg),
+            None => {
+                let idx = self.add_constant(Constant::Str(String::new()));
+                self.emit(Op::LoadConst(idx));
+            }
+        }
+        self.emit(Op::MustFail);
+        self.patch_jump(end_jump);
+    }
+
+    /// Lowers `f"..."` to a stream of `Str` pushes joined by `Op::Concat`.
+    /// Each interpolated expression is wrapped in the appropriate
+    /// `int_to_str` / `float_to_str` / `bool_to_str` native call so the
+    /// stack always carries `Str` values into the concat. Empty f-strings
+    /// (`f""`) push a single empty constant.
+    fn compile_fstring(&mut self, segments: &[ferric_common::FStringSegment]) {
+        if segments.is_empty() {
+            let idx = self.add_constant(Constant::Str(String::new()));
+            self.emit(Op::LoadConst(idx));
+            return;
+        }
+        let mut pushed = 0usize;
+        for seg in segments {
+            match &seg.kind {
+                FStringSegmentKind::Lit(s) => {
+                    let idx = self.add_constant(Constant::Str(s.clone()));
+                    self.emit(Op::LoadConst(idx));
+                }
+                FStringSegmentKind::Expr(expr) => {
+                    self.compile_expr(expr);
+                    let ty = self
+                        .types
+                        .node_types
+                        .get(&expr.id())
+                        .cloned()
+                        .unwrap_or(Ty::Str);
+                    match ty {
+                        Ty::Str => {}
+                        Ty::Int => self.emit_native_call(INT_TO_STR_NATIVE, 1),
+                        Ty::Float => self.emit_native_call(FLOAT_TO_STR_NATIVE, 1),
+                        Ty::Bool => self.emit_native_call(BOOL_TO_STR_NATIVE, 1),
+                        // Type checker should have rejected anything else;
+                        // fall through and let the runtime catch it.
+                        _ => {}
+                    }
+                }
+            }
+            pushed += 1;
+            if pushed >= 2 {
+                self.emit(Op::Concat);
             }
         }
     }

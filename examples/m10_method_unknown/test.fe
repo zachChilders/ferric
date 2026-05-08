@@ -1,0 +1,5 @@
+// M10 Task 6 Part B: an unknown method on a known type produces
+// `ResolveError::UnknownMethod` (after defaulting / late dispatch).
+
+let n: Int = 42
+n.does_not_exist()

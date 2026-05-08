@@ -1,0 +1,16 @@
+// M10 Task 4: `must` with an explicit message — success path.
+//
+// On `Some(_)` / `Ok(_)` `must` extracts the inner value. The message
+// string is never evaluated unless the operand is the failure variant,
+// so this fixture exercises the success path only.
+
+fn lookup(present: Bool) -> Option<Int> {
+    if present {
+        Option::Some(7)
+    } else {
+        Option::None
+    }
+}
+
+let n = lookup(present: true) must "value should be present"
+println(s: int_to_str(n: n * 6))

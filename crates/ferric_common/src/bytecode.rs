@@ -117,6 +117,11 @@ pub enum Op {
     // as "no message supplied" (matches the TreeWalker's `Option<String>`).
     RequireFail,
     RequireWarn,
+    /// M10 Task 4: failure path of `expr must <msg>`. Pops a message `Str`
+    /// from the stack and raises `RuntimeError::MustError`. Distinct from
+    /// `RequireFail` so the diagnostic renderer can differentiate "require
+    /// failed" from "unwrap failed" — the user did not write `require`.
+    MustFail,
 
     // ---------------- M4: structs / enums / tuples / patterns ----------------
     /// Pop `n` values from the stack and push a struct value with those fields

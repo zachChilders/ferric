@@ -1,0 +1,9 @@
+// M10 Task 6 Part A: implicit named args reject names that don't match a
+// parameter — exit 1 with a `ResolveError::UnknownArg` diagnostic.
+
+fn greet(name: Str) -> Unit {
+    println(s: "Hello, " + name)
+}
+
+let other_var = "world"
+greet(other_var)

@@ -1,0 +1,10 @@
+// Pipeline operator (M10 Task 3) — multi-line continuations.
+// `|>` at the start of each continuation line; whitespace handling.
+let xs = [10, 20, 30, 40, 50]
+
+let total = xs
+    |> list_drop(n: 2)
+    |> list_reverse()
+    |> list_sum()
+
+println(s: int_to_str(n: total))

@@ -113,6 +113,12 @@ pub struct ResolveResult {
     pub struct_fields: HashMap<DefId, Vec<(Symbol, crate::TypeAnnotation)>>,
     /// Map from enum DefId → ordered list of variants.
     pub enum_variants: HashMap<DefId, Vec<(Symbol, Vec<crate::TypeAnnotation>)>>,
+    /// Map from each `type` alias name to its raw inner annotation. The
+    /// inferencer uses this to construct `Ty::Alias(name, inner)` at every
+    /// alias use site. M10 (Task 6 Part C). Aliases are opaque-only — the
+    /// alias and inner type do not unify directly; `as` casts bridge them.
+    #[serde(default)]
+    pub type_aliases: HashMap<Symbol, crate::TypeAnnotation>,
     /// Map from each impl-method NodeId to the DefId allocated for it.
     pub method_def_ids: HashMap<NodeId, DefId>,
     /// Map from each impl-method NodeId to its declared parameter list.
@@ -149,6 +155,7 @@ impl ResolveResult {
             type_defs: HashMap::new(),
             struct_fields: HashMap::new(),
             enum_variants: HashMap::new(),
+            type_aliases: HashMap::new(),
             method_def_ids: HashMap::new(),
             method_params: HashMap::new(),
             captures: HashMap::new(),
@@ -207,6 +214,13 @@ pub struct TypeResult {
     /// For each `MethodCall` NodeId, the `DefId` of the impl method to invoke.
     /// The compiler reads this to lower a method call to a regular function call.
     pub method_dispatch: HashMap<NodeId, DefId>,
+    /// For each `MethodCall` NodeId resolved to a stdlib method, the `Symbol`
+    /// of the corresponding stdlib function name (e.g. `str_len` for
+    /// `s.len()`). The compiler reads this to lower the method call into a
+    /// regular call against the named native. Distinct from `method_dispatch`,
+    /// which carries user-defined impl-method dispatches. M10 (Task 6 Part B).
+    #[serde(default)]
+    pub stdlib_method_dispatch: HashMap<NodeId, Symbol>,
     /// For each call-argument expression that was implicitly coerced via the
     /// `To<T>` trait, the `DefId` of the `to` impl method to invoke. The
     /// compiler reads this to insert a one-hop coercion call before passing
@@ -216,6 +230,13 @@ pub struct TypeResult {
     pub coercions: HashMap<NodeId, DefId>,
     /// Any errors encountered during type checking
     pub errors: Vec<TypeError>,
+    /// Resolve-stage errors that the inferencer detected because they require
+    /// type information to diagnose. M10 Task 4 uses this for
+    /// `ResolveError::PropagateNonFallible` / `ResolveError::MustNonFallible`.
+    /// Main wires these into the final error report alongside the resolver's
+    /// own errors.
+    #[serde(default)]
+    pub resolve_errors: Vec<ResolveError>,
 }
 
 impl TypeResult {
@@ -224,14 +245,17 @@ impl TypeResult {
         Self {
             node_types,
             method_dispatch: HashMap::new(),
+            stdlib_method_dispatch: HashMap::new(),
             coercions: HashMap::new(),
             errors,
+            resolve_errors: Vec::new(),
         }
     }
 
-    /// Returns true if there were any errors during type checking.
+    /// Returns true if there were any errors during type checking, including
+    /// `resolve_errors` discovered by the type-checker (M10 Task 4).
     pub fn has_errors(&self) -> bool {
-        !self.errors.is_empty()
+        !self.errors.is_empty() || !self.resolve_errors.is_empty()
     }
 }
 

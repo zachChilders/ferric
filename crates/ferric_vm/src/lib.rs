@@ -282,6 +282,14 @@ pub enum RuntimeError {
         span: Span,
         message: Option<String>,
     },
+    /// M10 Task 4: an `expr must` unwrap failed because the operand was the
+    /// failure variant (`None` / `Err(_)`). Distinct from `RequireError` so
+    /// the renderer can produce "unwrap failed" — the user did not write
+    /// `require`.
+    MustError {
+        span: Span,
+        message: Option<String>,
+    },
     /// Array index outside `[0, len)`.
     IndexOutOfBounds {
         index: i64,

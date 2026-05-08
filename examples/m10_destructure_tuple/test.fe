@@ -1,0 +1,10 @@
+// M10 Task 5: tuple destructuring `let (a, b, c) = ...` binds the tuple's
+// elements directly into local variables.
+
+let (a, b) = (3, 4)
+println(s: int_to_str(n: a))
+println(s: int_to_str(n: b))
+println(s: int_to_str(n: a + b))
+
+let (x, y, z) = (10, 20, 30)
+println(s: int_to_str(n: x + y + z))

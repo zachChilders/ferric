@@ -1,0 +1,9 @@
+// Pipeline operator (M10 Task 3) — multi-step chain.
+// data |> list_reverse() |> list_take(n: 3) |> list_sum()
+//   desugars to
+// list_sum(l: list_take(l: list_reverse(l: data), n: 3))
+let result = [1, 2, 3, 4, 5]
+    |> list_reverse()
+    |> list_take(n: 3)
+    |> list_sum()
+println(s: int_to_str(n: result))
